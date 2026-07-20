@@ -131,6 +131,28 @@ function contentLength(response: Response): number | null {
   return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : null;
 }
 
+function rateLimitResetDelay(response: Response, now: number): number | null {
+  const raw = response.headers.get("x-ratelimit-reset");
+  if (raw === null || raw.trim() === "") {
+    return null;
+  }
+  const epochSeconds = Number(raw);
+  if (!Number.isFinite(epochSeconds) || epochSeconds < 0) {
+    return null;
+  }
+  return Math.max(0, Math.ceil(epochSeconds * 1_000 - now));
+}
+
+function retryableResponse(response: Response): boolean {
+  if (RETRYABLE_STATUSES.has(response.status)) {
+    return true;
+  }
+  return (
+    response.status === 403 &&
+    (response.headers.has("retry-after") || response.headers.get("x-ratelimit-remaining") === "0")
+  );
+}
+
 async function readBoundedBody(response: Response, maxBytes: number): Promise<Uint8Array> {
   const declaredLength = contentLength(response);
   if (declaredLength !== null && declaredLength > maxBytes) {
@@ -302,7 +324,10 @@ export class BoundedHttpTransport {
         ]);
 
         if (!response.ok) {
-          const retryAfterMs = parseRetryAfter(response.headers.get("retry-after"), this.now());
+          const now = this.now();
+          const retryAfterMs =
+            parseRetryAfter(response.headers.get("retry-after"), now) ??
+            rateLimitResetDelay(response, now);
           const error = new RegistryHttpError(
             `Registry returned HTTP ${response.status}`,
             response.status,
@@ -310,7 +335,7 @@ export class BoundedHttpTransport {
           );
           await cancelResponse(response);
 
-          if (!RETRYABLE_STATUSES.has(response.status) || attempt + 1 >= this.maxAttempts) {
+          if (!retryableResponse(response) || attempt + 1 >= this.maxAttempts) {
             throw error;
           }
 
