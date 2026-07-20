@@ -2,7 +2,7 @@
 
 Aisle is a public Agent Skills marketplace for discovering existing skills, assembling them into a stack, and installing that stack with one command.
 
-The project is in its foundation phase. Catalog ingestion, curated packages, and the installer will land in later changes. Aisle does not author, generate, or modify skills. See [the public catalog policy](docs/architecture/public-catalog-policy.md).
+The project is in its foundation phase. Catalog ingestion, curated packages, and the installer UI will land in later changes. The isolated install planner already turns server-resolved eligible selections into deterministic argv operations and shell-safe commands; see [its architecture contract](docs/architecture/install-plan-command-generation.md). Aisle does not author, generate, or modify skills. See [the public catalog policy](docs/architecture/public-catalog-policy.md).
 
 ## Development
 
