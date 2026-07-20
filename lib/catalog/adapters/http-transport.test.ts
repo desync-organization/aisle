@@ -65,6 +65,30 @@ describe("BoundedHttpTransport", () => {
     expect(parseRetryAfter("invalid", 0)).toBeNull();
   });
 
+  it("retries a GitHub-style rate-limited 403 at its reset time", async () => {
+    const sleep = vi.fn(async () => undefined);
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({}, 403, {
+          "x-ratelimit-remaining": "0",
+          "x-ratelimit-reset": "12",
+        }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ ok: true }));
+    const transport = new BoundedHttpTransport({
+      baseUrl: "https://api.example.test/",
+      fetch: fetchMock,
+      sleep,
+      now: () => 10_000,
+      maxAttempts: 2,
+    });
+
+    await transport.getJson("search/code", z.object({ ok: z.literal(true) }));
+
+    expect(sleep).toHaveBeenCalledWith(2_000);
+  });
+
   it("aborts a timed-out attempt", async () => {
     let observedSignal: AbortSignal | undefined;
     const fetchMock = vi.fn<typeof fetch>((_input, init) => {
