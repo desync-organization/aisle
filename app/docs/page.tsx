@@ -2,11 +2,13 @@ import { ArrowUpRight, BookOpenCheck, ShieldCheck } from "lucide-react";
 import type { Metadata } from "next";
 
 import { RoutePlaceholder } from "@/components/route-placeholder";
+import { createPageMetadata } from "@/lib/seo";
 
-export const metadata: Metadata = {
+export const metadata: Metadata = createPageMetadata({
   title: "Documentation",
   description: "How Aisle discovers, presents, and installs public Agent Skills.",
-};
+  path: "/docs",
+});
 
 export default function DocsPage() {
   return (

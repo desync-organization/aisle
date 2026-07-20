@@ -5,11 +5,13 @@ import { SiteFooter } from "@/components/site-footer";
 import { SiteHeader } from "@/components/site-header";
 import { Badge } from "@/components/ui/badge";
 import { ButtonLink } from "@/components/ui/button";
+import { createPageMetadata } from "@/lib/seo";
 
-export const metadata: Metadata = {
+export const metadata: Metadata = createPageMetadata({
   title: "Public catalog policy",
   description: "Aisle’s public-source, provenance, licensing, lifecycle, and trust commitments.",
-};
+  path: "/docs/public-catalog-policy",
+});
 
 const decisions = [
   {

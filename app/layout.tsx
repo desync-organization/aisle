@@ -5,15 +5,37 @@ import "@fontsource-variable/jetbrains-mono";
 import "@fontsource-variable/manrope";
 import "./globals.css";
 
+import { siteDescription, siteOrigin } from "@/lib/seo";
+
 export const metadata: Metadata = {
-  metadataBase: new URL(process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000"),
+  metadataBase: siteOrigin,
   title: {
     default: "Aisle — Build your agent stack",
     template: "%s · Aisle",
   },
-  description:
-    "Discover public Agent Skills, compose a trusted stack, and install it with one command.",
+  description: siteDescription,
   applicationName: "Aisle",
+  alternates: { canonical: "/" },
+  category: "developer tools",
+  creator: "Aisle",
+  publisher: "Aisle",
+  keywords: ["Agent Skills", "AI agents", "skill marketplace", "developer tools"],
+  openGraph: {
+    type: "website",
+    siteName: "Aisle",
+    title: "Aisle — Build your agent stack",
+    description: siteDescription,
+    url: "/",
+  },
+  twitter: {
+    card: "summary",
+    title: "Aisle — Build your agent stack",
+    description: siteDescription,
+  },
+  robots: {
+    index: true,
+    follow: true,
+  },
 };
 
 export const viewport: Viewport = {
