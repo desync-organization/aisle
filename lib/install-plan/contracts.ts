@@ -193,6 +193,13 @@ export const resolvedGithubSkillSchema = z.strictObject({
       .string()
       .regex(/^sha256:[0-9a-f]{64}$/, "must be a sha256 content digest"),
   }),
+  installer: z.strictObject({
+    selector: skillNameSchema,
+    selectorVerifiedUnique: z.boolean(),
+    verifiedAtCommitSha: z
+      .string()
+      .regex(/^[0-9a-f]{40}$/, "must be a lowercase Git commit SHA"),
+  }),
 });
 
 export const installPlanOptionsSchema = z.strictObject({
@@ -226,6 +233,8 @@ export const installPlanErrorCodeSchema = z.enum([
   "QUARANTINED",
   "VALIDATION_REQUIRED",
   "UNLICENSED",
+  "SELECTOR_NOT_UNIQUE",
+  "SELECTOR_EVIDENCE_MISMATCH",
   "INCOMPATIBLE_AGENT",
   "UNSUPPORTED_GLOBAL_SCOPE",
   "DUPLICATE_SELECTION",
