@@ -104,10 +104,15 @@ export function normalizeGitHubSkillIdentity(input: {
 }): GitHubSkillIdentity {
   const owner = validateOwner(input.owner);
   const repository = validateRepository(input.repository);
-  const normalizedPath = validateRelativePath(input.path);
+  const normalizedPath =
+    !input.pathIncludesSkillFile && input.path.trim() === "."
+      ? "."
+      : validateRelativePath(input.path);
   const skillFilePath = input.pathIncludesSkillFile
     ? normalizedPath
-    : `${normalizedPath}/SKILL.md`;
+    : normalizedPath === "."
+      ? "SKILL.md"
+      : `${normalizedPath}/SKILL.md`;
 
   if (!skillFilePath.endsWith("/SKILL.md") && skillFilePath !== "SKILL.md") {
     throw new RegistryContractError("Registry skill path must identify a SKILL.md file");
