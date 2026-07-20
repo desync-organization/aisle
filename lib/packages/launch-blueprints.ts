@@ -1234,4 +1234,3 @@ export const launchPackageBlueprints: ReadonlyArray<PackageBlueprint> = Object.f
 export function getLaunchPackageBlueprint(slug: string): PackageBlueprint | undefined {
   return launchPackageBlueprints.find((blueprint) => blueprint.slug === slug);
 }
-
