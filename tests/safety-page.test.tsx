@@ -26,6 +26,15 @@ describe("safety and trust guidance", () => {
     expect(screen.getByText(/public does not mean safe/i)).toBeInTheDocument();
     expect(screen.getByText(/this is not a security audit/i)).toBeInTheDocument();
     expect(screen.getByText(/not a guarantee of safety/i)).toBeInTheDocument();
+
+    const officialRow = screen.getByText("Official", { selector: ".trust-label" }).closest("tr");
+    const unreviewedRow = screen.getByText("Unreviewed", { selector: ".trust-label" }).closest("tr");
+    const warningRow = screen.getByText("Warning", { selector: ".trust-label" }).closest("tr");
+
+    expect(officialRow).toHaveTextContent(/not sufficient on its own/i);
+    expect(unreviewedRow).toHaveTextContent(/blocked until baseline validation passes/i);
+    expect(unreviewedRow).toHaveTextContent(/discoverable and provenance-visible/i);
+    expect(warningRow).toHaveTextContent(/requires acknowledgement/i);
   });
 
   it("has no automated accessibility violations in its initial state", async () => {

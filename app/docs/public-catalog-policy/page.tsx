@@ -28,7 +28,7 @@ const decisions = [
   },
   {
     title: "Public is not safe",
-    body: "Trust findings belong to an exact revision. Unreviewed, warning, failed, and quarantined states remain distinct.",
+    body: "Trust findings belong to an exact revision. Unreviewed stays visible but not selectable; Warning requires acknowledgement; Failed and Quarantined remain blocked.",
   },
   {
     title: "Licenses stay attached",

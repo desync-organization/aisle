@@ -31,7 +31,7 @@ const trustLabels = [
     icon: BadgeCheck,
     tone: "identity",
     meaning: "The publisher identity was verified as the organization responsible for the referenced product. This is not a security audit.",
-    gate: "Allowed unless another check blocks it",
+    gate: "Not sufficient on its own",
   },
   {
     label: "Audited / no known findings",
@@ -51,8 +51,8 @@ const trustLabels = [
     label: "Unreviewed",
     icon: CircleHelp,
     tone: "neutral",
-    meaning: "No current audit is available for this exact revision. An older revision’s result does not carry forward.",
-    gate: "Allowed with a visible warning",
+    meaning: "No current Aisle assessment is available for this exact revision. It remains discoverable and provenance-visible, but an older result does not carry forward.",
+    gate: "Blocked until baseline validation passes",
   },
   {
     label: "Failed",

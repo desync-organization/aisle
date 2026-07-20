@@ -15,7 +15,7 @@ describe("static discovery metadata", () => {
 
   it("exposes a public robots policy and sitemap", () => {
     expect(robots()).toMatchObject({
-      rules: { userAgent: "*", allow: "/" },
+      rules: { userAgent: "*", allow: "/", disallow: ["/api/", "/stack"] },
       sitemap: "http://localhost:3000/sitemap.xml",
     });
   });
@@ -27,5 +27,6 @@ describe("static discovery metadata", () => {
     expect(urls).toContain("http://localhost:3000/coverage");
     expect(urls.some((url) => /\/skills\/[^/]+$/.test(url))).toBe(false);
     expect(urls.some((url) => /\/packages\/[^/]+$/.test(url))).toBe(false);
+    expect(urls.some((url) => url.endsWith("/stack"))).toBe(false);
   });
 });
