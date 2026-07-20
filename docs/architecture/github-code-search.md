@@ -32,12 +32,12 @@ For a selected result with a commit-shaped ref, the optional resolver:
 1. rechecks that the repository is currently public;
 2. resolves the separately observed Git commit object;
 3. walks each Git tree non-recursively, with response, timeout, and path-depth
-   bounds; and
+   bounds (tree metadata has a separate hard 8 MiB ceiling); and
 4. accepts the commit only when the final `SKILL.md` blob exactly matches the
    search-result blob SHA.
 
 The resolver never calls a contents or blob endpoint and never fetches or stores
-skill instructions.
+skill instructions. An oversized tree fails closed as `tree_oversize`.
 
 Primary contracts:
 

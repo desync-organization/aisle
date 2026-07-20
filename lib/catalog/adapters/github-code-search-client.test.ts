@@ -372,6 +372,39 @@ describe("GitHubCodeSearchClient", () => {
     });
   });
 
+  it("fails closed when a tree exceeds its independent metadata cap", async () => {
+    const cancel = vi.fn(async () => undefined);
+    const fetchMock = vi.fn<typeof fetch>(async (input) => {
+      const path = new URL(String(input)).pathname;
+      if (path === "/search/code") return jsonResponse(searchEnvelope());
+      if (path === "/repos/fixture-owner/fixture-repo") {
+        return jsonResponse({
+          id: 7,
+          name: "fixture-repo",
+          full_name: "fixture-owner/fixture-repo",
+          private: false,
+          visibility: "public",
+          html_url: "https://github.com/fixture-owner/fixture-repo",
+          owner: { login: "fixture-owner" },
+        });
+      }
+      if (path.includes("/git/commits/")) {
+        return jsonResponse({ sha: COMMIT_SHA, tree: { sha: ROOT_TREE_SHA } });
+      }
+      return new Response(new ReadableStream<Uint8Array>({ cancel }), {
+        headers: { "content-length": "129" },
+      });
+    });
+    const search = client(fetchMock, { maxTreeBytes: 128 });
+    const page = await search.search("react", 1, 1);
+
+    await expect(search.resolveExactCommit(page.results[0]!)).resolves.toEqual({
+      resolved: false,
+      reason: "tree_oversize",
+    });
+    expect(cancel).toHaveBeenCalledOnce();
+  });
+
   it("streams within the configured response cap and cancels oversized search JSON", async () => {
     const cancel = vi.fn(async () => undefined);
     const search = client(

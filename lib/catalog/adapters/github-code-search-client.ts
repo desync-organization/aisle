@@ -14,11 +14,13 @@ import {
 import {
   BoundedHttpTransport,
   type BoundedHttpTransportOptions,
+  RegistryBodyTooLargeError,
   RegistryContractError,
   RegistryHttpError,
 } from "./http-transport";
 
 const DEFAULT_MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
+const DEFAULT_MAX_TREE_BYTES = 8 * 1024 * 1024;
 const MAX_RESOLUTION_PATH_DEPTH = 32;
 const SHA_1_PATTERN = /^[a-f\d]{40}$/i;
 const TOKEN_CONTROL_PATTERN = /[\u0000-\u001f\u007f]/;
@@ -149,6 +151,7 @@ export type GitHubExactCommitResolution =
         | "path_missing"
         | "path_type_mismatch"
         | "tree_truncated"
+        | "tree_oversize"
         | "blob_mismatch";
     };
 
@@ -158,6 +161,7 @@ export interface GitHubCodeSearchClientOptions
   fetch?: typeof fetch;
   tokenProvider?: TokenProvider;
   maxResponseBytes?: number;
+  maxTreeBytes?: number;
 }
 
 async function defaultTokenProvider(): Promise<string | undefined> {
@@ -173,6 +177,14 @@ function boundedResponseBytes(value: number | undefined): number {
   const chosen = Math.min(value ?? DEFAULT_MAX_RESPONSE_BYTES, DEFAULT_MAX_RESPONSE_BYTES);
   if (!Number.isSafeInteger(chosen) || chosen <= 0) {
     throw new RangeError("GitHub response byte limit must be a positive integer");
+  }
+  return chosen;
+}
+
+function boundedTreeBytes(value: number | undefined): number {
+  const chosen = Math.min(value ?? DEFAULT_MAX_TREE_BYTES, DEFAULT_MAX_TREE_BYTES);
+  if (!Number.isSafeInteger(chosen) || chosen <= 0) {
+    throw new RangeError("GitHub tree byte limit must be a positive integer");
   }
   return chosen;
 }
@@ -337,6 +349,7 @@ export class GitHubCodeSearchClient {
   private readonly fetchImplementation: typeof fetch;
   private readonly tokenProvider: TokenProvider;
   private readonly maxResponseBytes: number;
+  private readonly maxTreeBytes: number;
   private readonly transportOptions: Omit<
     BoundedHttpTransportOptions,
     "baseUrl" | "fetch" | "maxJsonBytes"
@@ -348,12 +361,14 @@ export class GitHubCodeSearchClient {
       fetch: fetchImplementation,
       tokenProvider,
       maxResponseBytes,
+      maxTreeBytes,
       ...transportOptions
     } = options;
     this.baseUrl = baseUrl ?? "https://api.github.com/";
     this.fetchImplementation = fetchImplementation ?? fetch;
     this.tokenProvider = tokenProvider ?? defaultTokenProvider;
     this.maxResponseBytes = boundedResponseBytes(maxResponseBytes);
+    this.maxTreeBytes = boundedTreeBytes(maxTreeBytes);
     this.transportOptions = transportOptions;
   }
 
@@ -501,11 +516,14 @@ export class GitHubCodeSearchClient {
         tree = await transport.getJson(
           `${repositoryPath}/git/trees/${treeSha}`,
           gitTreeSchema,
-          this.maxResponseBytes,
+          this.maxTreeBytes,
         );
       } catch (error) {
         if (error instanceof RegistryHttpError && error.status === 404) {
           return { resolved: false, reason: "path_missing" };
+        }
+        if (error instanceof RegistryBodyTooLargeError) {
+          return { resolved: false, reason: "tree_oversize" };
         }
         this.rethrowAuthentication(error);
       }
