@@ -2,7 +2,7 @@
 
 Aisle is a public Agent Skills marketplace for discovering existing skills, assembling them into a stack, and installing that stack with one command.
 
-Aisle indexes public upstream skills with immutable source references, revision-scoped validation, and explicit source-coverage state. It does not author, generate, rewrite, or fork skills. See [the public catalog policy](docs/architecture/public-catalog-policy.md).
+Aisle indexes public upstream skills with immutable source references, revision-scoped validation, and explicit source-coverage state. Its isolated install planner turns server-resolved eligible selections into deterministic argv operations and shell-safe commands; see [its architecture contract](docs/architecture/install-plan-command-generation.md). Aisle does not author, generate, rewrite, modify, or fork skills. See [the public catalog policy](docs/architecture/public-catalog-policy.md).
 
 ## Development
 
