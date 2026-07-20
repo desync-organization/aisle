@@ -15,6 +15,20 @@
       "when": 1784579680974,
       "tag": "0001_skills-sh-hydration-cache",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1784580794574,
+      "tag": "0002_source-normalization",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1784583420443,
+      "tag": "0003_soft_bucky",
+      "breakpoints": true
     }
   ]
 }

@@ -1,5 +1,6 @@
 import { sql } from "drizzle-orm";
 import {
+  foreignKey,
   index,
   integer,
   primaryKey,
@@ -68,6 +69,8 @@ export const syncRuns = sqliteTable(
     retryCount: integer("retry_count").notNull().default(0),
     nextRetryAt: integer("next_retry_at", { mode: "timestamp_ms" }),
     failure: text("failure"),
+    leaseToken: text("lease_token"),
+    leaseExpiresAt: integer("lease_expires_at", { mode: "timestamp_ms" }),
     completeCrawl: integer("complete_crawl", { mode: "boolean" }).notNull().default(false),
     checkpointJson: text("checkpoint_json", { mode: "json" })
       .$type<Record<string, unknown>>()
@@ -77,6 +80,9 @@ export const syncRuns = sqliteTable(
   (table) => [
     index("sync_runs_source_started_idx").on(table.sourceId, table.startedAt),
     index("sync_runs_status_idx").on(table.status),
+    uniqueIndex("sync_runs_one_running_per_source_uidx")
+      .on(table.sourceId)
+      .where(sql`${table.status} = 'running'`),
   ],
 );
 
@@ -154,6 +160,10 @@ export const skillRevisions = sqliteTable(
     contentHash: text("content_hash").notNull(),
     upstreamHash: text("upstream_hash"),
     installUrl: text("install_url").notNull(),
+    installSpecJson: text("install_spec_json", { mode: "json" })
+      .$type<Record<string, unknown>>()
+      .notNull()
+      .default(sql`'{}'`),
     license: text("license").notNull().default("unknown"),
     metadataJson: text("metadata_json", { mode: "json" }).$type<Record<string, unknown>>(),
     isCurrent: integer("is_current", { mode: "boolean" }).notNull().default(false),
@@ -162,11 +172,27 @@ export const skillRevisions = sqliteTable(
   },
   (table) => [
     uniqueIndex("skill_revisions_skill_ref_uidx").on(table.skillId, table.immutableRef),
+    uniqueIndex("skill_revisions_id_skill_uidx").on(table.id, table.skillId),
     index("skill_revisions_content_hash_idx").on(table.contentHash),
     uniqueIndex("skill_revisions_one_current_uidx")
       .on(table.skillId)
       .where(sql`${table.isCurrent} = 1`),
   ],
+);
+
+export const skillDuplicates = sqliteTable(
+  "skill_duplicates",
+  {
+    skillId: text("skill_id")
+      .primaryKey()
+      .references(() => skills.id, { onDelete: "cascade" }),
+    duplicateOfSkillId: text("duplicate_of_skill_id")
+      .notNull()
+      .references(() => skills.id, { onDelete: "cascade" }),
+    contentHash: text("content_hash").notNull(),
+    detectedAt: integer("detected_at", { mode: "timestamp_ms" }).notNull(),
+  },
+  (table) => [index("skill_duplicates_canonical_idx").on(table.duplicateOfSkillId)],
 );
 
 export const sourceListings = sqliteTable(
@@ -260,6 +286,8 @@ export const trustAssessments = sqliteTable(
       .references(() => skillRevisions.id, { onDelete: "cascade" }),
     scanner: text("scanner").notNull(),
     scannerVersion: text("scanner_version").notNull(),
+    immutableRef: text("immutable_ref").notNull().default(""),
+    contentHash: text("content_hash").notNull().default(""),
     state: text("state", { enum: trustStates }).notNull(),
     quarantineReason: text("quarantine_reason"),
     scannedAt: integer("scanned_at", { mode: "timestamp_ms" }).notNull(),
@@ -333,6 +361,11 @@ export const packageMembers = sqliteTable(
   (table) => [
     primaryKey({ columns: [table.packageVersionId, table.skillId] }),
     uniqueIndex("package_members_position_uidx").on(table.packageVersionId, table.position),
+    foreignKey({
+      columns: [table.revisionId, table.skillId],
+      foreignColumns: [skillRevisions.id, skillRevisions.skillId],
+      name: "package_members_revision_skill_fk",
+    }).onDelete("restrict"),
   ],
 );
 
@@ -346,6 +379,7 @@ export const schema = {
   repositories,
   skillAliases,
   skillCategories,
+  skillDuplicates,
   skillRevisions,
   skills,
   sourceListings,

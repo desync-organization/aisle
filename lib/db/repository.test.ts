@@ -94,6 +94,7 @@ describe("catalog database and repository", () => {
       skillPath: "skills/catalog-fixture",
       upstreamName: "catalog-fixture",
       upstreamDescription: "Inert database fixture used only by repository tests.",
+      license: "MIT",
       lifecycle: "current",
       public: true,
       internal: false,
@@ -138,6 +139,16 @@ describe("catalog database and repository", () => {
       rawJson: { fixture: true },
       firstSeenAt: now,
       lastSeenAt: now,
+    });
+    await connection.db.insert(trustAssessments).values({
+      id: "assessment_fixture_baseline",
+      revisionId,
+      scanner: "fixture-baseline-scanner",
+      scannerVersion: "1.0.0",
+      immutableRef: "0000000000000000000000000000000000000000",
+      contentHash: "0".repeat(64),
+      state: "pass",
+      scannedAt: now,
     });
 
     const [frontend] = await connection.db
@@ -208,6 +219,72 @@ describe("catalog database and repository", () => {
         position: 0,
       }),
     ]);
+
+    await repository.recordObservedAudits({
+      listingId: "listing_fixture_public",
+      upstreamContentHash: "0".repeat(64),
+      audits: [
+        {
+          provider: "Fixture upstream",
+          providerSlug: "fixture-upstream",
+          status: "fail",
+          summary: "First inert observation failed.",
+          auditedAt: "2026-07-20T10:00:00.000Z",
+          raw: {},
+        },
+      ],
+    });
+    expect(await repository.search()).toEqual([]);
+    expect(await repository.resolvePackage("fixture-stack")).toEqual([]);
+
+    await repository.recordObservedAudits({
+      listingId: "listing_fixture_public",
+      upstreamContentHash: "0".repeat(64),
+      audits: [
+        {
+          provider: "Fixture upstream",
+          providerSlug: "fixture-upstream",
+          status: "pass",
+          summary: "Later inert observation passed.",
+          auditedAt: "2026-07-20T11:00:00.000Z",
+          raw: {},
+        },
+      ],
+    });
+    expect(await repository.search()).toHaveLength(1);
+    expect(await repository.resolvePackage("fixture-stack")).toHaveLength(1);
+
+    await repository.recordObservedAudits({
+      listingId: "listing_fixture_public",
+      upstreamContentHash: "0".repeat(64),
+      audits: [
+        {
+          provider: "Fixture upstream",
+          providerSlug: "fixture-upstream",
+          status: "fail",
+          summary: "Newest inert observation failed.",
+          auditedAt: "2026-07-20T12:00:00.000Z",
+          raw: {},
+        },
+      ],
+    });
+    expect(await repository.search()).toEqual([]);
+    expect(await repository.resolvePackage("fixture-stack")).toEqual([]);
+
+    await repository.recordObservedAudits({
+      listingId: "listing_fixture_public",
+      upstreamContentHash: "0".repeat(64),
+      audits: [
+        {
+          provider: "Fixture upstream",
+          providerSlug: "fixture-upstream",
+          status: "pass",
+          summary: "Final inert observation passed before local blocking test.",
+          auditedAt: "2026-07-20T13:00:00.000Z",
+          raw: {},
+        },
+      ],
+    });
 
     await connection.db.insert(trustAssessments).values([
       {
