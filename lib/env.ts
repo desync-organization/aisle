@@ -12,7 +12,7 @@ const serverEnvironmentSchema = z.object({
   DATABASE_URL: z.string().min(1).default("file:./data/aisle.db"),
   DATABASE_AUTH_TOKEN: z.string().min(1).optional(),
   CATALOG_SYNC_TOKEN: optionalSecret,
-  SKILLS_SH_TOKEN: z.string().min(1).optional(),
+  SKILLS_SH_OIDC_TOKEN: z.string().min(1).optional(),
 });
 
 const publicEnvironmentSchema = z.object({
@@ -24,7 +24,7 @@ export const serverEnvironment = serverEnvironmentSchema.parse({
   DATABASE_URL: process.env.DATABASE_URL,
   DATABASE_AUTH_TOKEN: process.env.DATABASE_AUTH_TOKEN,
   CATALOG_SYNC_TOKEN: process.env.CATALOG_SYNC_TOKEN,
-  SKILLS_SH_TOKEN: process.env.SKILLS_SH_TOKEN,
+  SKILLS_SH_OIDC_TOKEN: process.env.SKILLS_SH_OIDC_TOKEN,
 });
 
 export const publicEnvironment = publicEnvironmentSchema.parse({
