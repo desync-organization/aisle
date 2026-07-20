@@ -49,7 +49,7 @@ export function SiteHeader() {
         </nav>
         <div className="site-header__actions">
           <SearchDialog>
-            <Button className="search-trigger" variant="secondary">
+            <Button aria-label="Search catalog" className="search-trigger" variant="secondary">
               <Search aria-hidden="true" size={16} />
               <span>Search</span>
               <kbd>/</kbd>

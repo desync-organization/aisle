@@ -16,7 +16,7 @@ export default function DocsPage() {
       title="Know exactly what the marketplace promises."
     >
       <div className="doc-links">
-        <a href="/docs/architecture/public-catalog-policy.md">
+        <a href="/docs/public-catalog-policy">
           <ShieldCheck aria-hidden="true" size={18} />
           <span>
             <strong>Public catalog policy</strong>

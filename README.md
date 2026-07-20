@@ -37,6 +37,8 @@ npm run build
 - `lib/` — environment and future catalog boundaries
 - `docs/architecture/` — product invariants and architecture decisions
 
+The shared colors, type, interaction states, and component accessibility contracts are documented in [the visual-system guide](docs/design-system.md).
+
 ## Catalog invariant
 
 Only already-public upstream Agent Skills may become installable. Packages will contain references to immutable upstream revisions, never copied or synthesized skill content.
