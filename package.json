@@ -14,7 +14,8 @@
     "check": "npm run lint && npm run typecheck && npm test",
     "db:migrate": "tsx scripts/db-migrate.ts",
     "db:seed": "tsx scripts/db-seed.ts",
-    "db:setup": "npm run db:migrate && npm run db:seed"
+    "db:setup": "npm run db:migrate && npm run db:seed",
+    "catalog:sync": "tsx scripts/catalog-sync.ts"
   },
   "engines": {
     "node": ">=20.9.0"

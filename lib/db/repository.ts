@@ -15,6 +15,7 @@ import {
 
 import type { CatalogDatabase } from "./client";
 import {
+  auditRecords,
   catalogSources,
   categories,
   packageMembers,
@@ -190,7 +191,11 @@ export class CatalogRepository {
       .orderBy(asc(skills.lifecycle));
 
     const category = await this.db
-      .select({ key: categories.slug, name: categories.name, count: sql<number>`count(*)` })
+      .select({
+        key: categories.slug,
+        name: categories.name,
+        count: sql<number>`count(${skills.id})`,
+      })
       .from(categories)
       .leftJoin(skillCategories, eq(skillCategories.categoryId, categories.id))
       .leftJoin(
@@ -211,7 +216,11 @@ export class CatalogRepository {
   async resolvePackage(slug: string, version?: number) {
     const selectedVersion = version
       ? eq(packageVersions.version, version)
-      : undefined;
+      : sql`${packageVersions.version} = (
+          select max(latest.version)
+          from package_versions latest
+          where latest.package_id = ${packages.id}
+        )`;
     return this.db
       .select({
         packageId: packages.id,
@@ -351,27 +360,33 @@ export class CatalogRepository {
     sourceId: string;
     sourceTotal: number;
     recordCount: number;
+    partialFailures?: string[];
   }): Promise<void> {
     const now = new Date();
+    const failure = input.partialFailures?.length
+      ? `${input.partialFailures.length} hydration/audit operation(s) failed: ${input.partialFailures
+          .slice(0, 3)
+          .join("; ")}`
+      : null;
     await this.db.transaction(async (transaction) => {
       await transaction
         .update(syncRuns)
         .set({
-          status: "succeeded",
+          status: failure ? "partial" : "succeeded",
           finishedAt: now,
           sourceTotal: input.sourceTotal,
           completeCrawl: true,
-          failure: null,
+          failure,
           nextRetryAt: null,
         })
         .where(eq(syncRuns.id, input.runId));
       await transaction
         .update(catalogSources)
         .set({
-          coverageState: "current",
+          coverageState: failure ? "partial" : "current",
           lastSuccessfulSyncAt: now,
           recordCount: input.recordCount,
-          lastError: null,
+          lastError: failure,
           updatedAt: now,
         })
         .where(eq(catalogSources.id, input.sourceId));
@@ -419,11 +434,22 @@ export class CatalogRepository {
     installs: number;
     duplicateIndicator?: boolean;
     raw: Record<string, unknown>;
-  }): Promise<{ id: string; previousHash: string | null; skillId: string | null }> {
+  }): Promise<{
+    id: string;
+    previousHash: string | null;
+    skillId: string | null;
+    detailEtag: string | null;
+    detailLastModified: string | null;
+  }> {
     const now = new Date();
     const id = stableId("listing", `${input.sourceId}:${input.upstreamId}`);
     const [previous] = await this.db
-      .select({ sourceHash: sourceListings.sourceHash, skillId: sourceListings.skillId })
+      .select({
+        sourceHash: sourceListings.sourceHash,
+        skillId: sourceListings.skillId,
+        detailEtag: sourceListings.detailEtag,
+        detailLastModified: sourceListings.detailLastModified,
+      })
       .from(sourceListings)
       .where(and(eq(sourceListings.sourceId, input.sourceId), eq(sourceListings.upstreamId, input.upstreamId)))
       .limit(1);
@@ -436,7 +462,7 @@ export class CatalogRepository {
         upstreamId: input.upstreamId,
         sourceType: input.sourceType,
         installUrl: input.installUrl ?? null,
-        sourceHash: input.sourceHash ?? null,
+        sourceHash: input.sourceHash ?? previous?.sourceHash ?? null,
         installs: input.installs,
         duplicateIndicator: input.duplicateIndicator ?? false,
         status: previous?.skillId ? "current" : "unresolved",
@@ -450,7 +476,7 @@ export class CatalogRepository {
         set: {
           sourceType: input.sourceType,
           installUrl: input.installUrl ?? null,
-          sourceHash: input.sourceHash ?? null,
+          sourceHash: input.sourceHash ?? previous?.sourceHash ?? null,
           installs: input.installs,
           duplicateIndicator: input.duplicateIndicator ?? false,
           rawJson: input.raw,
@@ -464,6 +490,85 @@ export class CatalogRepository {
       id,
       previousHash: previous?.sourceHash ?? null,
       skillId: previous?.skillId ?? null,
+      detailEtag: previous?.detailEtag ?? null,
+      detailLastModified: previous?.detailLastModified ?? null,
     };
+  }
+
+  async updateSourceListingHydration(input: {
+    listingId: string;
+    hash: string | null;
+    etag: string | null;
+    lastModified: string | null;
+    hydratedAt?: Date;
+  }): Promise<void> {
+    await this.db
+      .update(sourceListings)
+      .set({
+        sourceHash: input.hash,
+        detailEtag: input.etag,
+        detailLastModified: input.lastModified,
+        hydratedAt: input.hydratedAt ?? new Date(),
+      })
+      .where(eq(sourceListings.id, input.listingId));
+  }
+
+  async recordObservedAudits(input: {
+    listingId: string;
+    upstreamContentHash: string | null;
+    audits: Array<{
+      provider: string;
+      providerSlug: string;
+      status: "pass" | "warn" | "fail";
+      summary: string;
+      riskLevel?: string;
+      auditedAt?: string;
+      raw: Record<string, unknown>;
+    }>;
+    observedAt?: Date;
+  }): Promise<void> {
+    const observedAt = input.observedAt ?? new Date();
+    for (const audit of input.audits) {
+      const auditTime = audit.auditedAt ? new Date(audit.auditedAt) : observedAt;
+      const id = stableId(
+        "audit",
+        `${input.listingId}:${audit.providerSlug}:${auditTime.toISOString()}`,
+      );
+      await this.db
+        .insert(auditRecords)
+        .values({
+          id,
+          revisionId: null,
+          sourceListingId: input.listingId,
+          scope: "observation",
+          provider: audit.provider,
+          providerSlug: audit.providerSlug,
+          status: audit.status,
+          summary: audit.summary,
+          riskLevel: audit.riskLevel ?? null,
+          upstreamContentHash: input.upstreamContentHash,
+          scannerVersion: null,
+          observedAt: auditTime,
+          rawJson: audit.raw,
+        })
+        .onConflictDoUpdate({
+          target: auditRecords.id,
+          set: {
+            status: audit.status,
+            summary: audit.summary,
+            riskLevel: audit.riskLevel ?? null,
+            upstreamContentHash: input.upstreamContentHash,
+            rawJson: audit.raw,
+          },
+        });
+    }
+  }
+
+  async countSourceListings(sourceId: string): Promise<number> {
+    const [row] = await this.db
+      .select({ count: sql<number>`count(*)` })
+      .from(sourceListings)
+      .where(eq(sourceListings.sourceId, sourceId));
+    return row?.count ?? 0;
   }
 }

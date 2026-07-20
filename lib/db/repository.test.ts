@@ -1,5 +1,9 @@
 // @vitest-environment node
 
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { eq, sql } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
@@ -23,17 +27,19 @@ import { seedCatalog, sourceDescriptorSeed, taxonomySeed } from "./seed";
 describe("catalog database and repository", () => {
   let connection: CatalogDatabaseConnection;
   let repository: CatalogRepository;
+  let temporaryDirectory: string;
 
   beforeEach(async () => {
+    temporaryDirectory = mkdtempSync(join(tmpdir(), "aisle-catalog-test-"));
     connection = createCatalogDatabase({
-      url: "file::memory:",
+      url: `file:${join(temporaryDirectory, "catalog.db").replaceAll("\\", "/")}`,
     });
     await migrateCatalogDatabase(connection.client);
     repository = new CatalogRepository(connection.db);
   });
 
   afterEach(() => {
-    connection.client.close();
+    connection?.client.close();
   });
 
   it("applies migrations and deterministic seeds idempotently", async () => {
@@ -160,8 +166,21 @@ describe("catalog database and repository", () => {
       publishedAt: now,
       createdAt: now,
     });
+    await connection.db.insert(packageVersions).values({
+      id: "package_version_fixture_v2",
+      packageId: "package_fixture",
+      version: 2,
+      publishedAt: now,
+      createdAt: now,
+    });
     await connection.db.insert(packageMembers).values({
       packageVersionId: "package_version_fixture",
+      skillId,
+      revisionId,
+      position: 0,
+    });
+    await connection.db.insert(packageMembers).values({
+      packageVersionId: "package_version_fixture_v2",
       skillId,
       revisionId,
       position: 0,
@@ -179,9 +198,11 @@ describe("catalog database and repository", () => {
       }),
     ]);
     expect(facets.category.find((facet) => facet.key === "frontend")?.count).toBe(1);
+    expect(facets.category.find((facet) => facet.key === "backend")?.count).toBe(0);
     expect(resolvedPackage).toEqual([
       expect.objectContaining({
         slug: "fixture-stack",
+        version: 2,
         skillId,
         revisionId,
         position: 0,
