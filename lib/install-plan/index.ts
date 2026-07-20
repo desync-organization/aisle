@@ -16,8 +16,11 @@ export type InstallPlan = InstallPlanCore &
     semantics: Readonly<{
       atomic: false;
       processLevelFailFast: true;
+      failFastBoundary: "process-exit-status-only";
       runtimeCompletenessVerified: false;
-      upstreamRevisionEnforced: false;
+      sourceRevisionEnforced: false;
+      partialInstallPossible: true;
+      agentFailureMayExitZero: true;
     }>;
     warnings: readonly string[];
   }>;
@@ -43,8 +46,11 @@ export function createInstallPlan(input: unknown): InstallPlan {
     semantics: {
       atomic: false,
       processLevelFailFast: true,
+      failFastBoundary: "process-exit-status-only",
       runtimeCompletenessVerified: false,
-      upstreamRevisionEnforced: false,
+      sourceRevisionEnforced: false,
+      partialInstallPossible: true,
+      agentFailureMayExitZero: true,
     },
     warnings,
   } as const;

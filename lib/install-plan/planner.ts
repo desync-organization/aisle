@@ -23,6 +23,9 @@ export type InstallStepSelection = Readonly<{
   normalizedName: string;
   observedCommitSha: string;
   contentDigest: string;
+  installerSelector: string;
+  selectorVerifiedUnique: true;
+  selectorVerifiedAtCommitSha: string;
 }>;
 
 export type InstallExecutionStep = Readonly<{
@@ -137,6 +140,23 @@ function assertEligible(
       "UNLICENSED",
       "Every install selection must have verified license evidence.",
       field("license"),
+    );
+  }
+  if (!skill.installer.selectorVerifiedUnique) {
+    throw new InstallPlanError(
+      "SELECTOR_NOT_UNIQUE",
+      "The CLI skill selector must be unique within its repository at the scanned revision.",
+      field("installer.selectorVerifiedUnique"),
+    );
+  }
+  if (
+    skill.installer.selector !== skill.name ||
+    skill.installer.verifiedAtCommitSha !== skill.observed.commitSha
+  ) {
+    throw new InstallPlanError(
+      "SELECTOR_EVIDENCE_MISMATCH",
+      "Installer selector evidence must match the selected name and observed revision.",
+      field("installer"),
     );
   }
 
@@ -296,6 +316,9 @@ export function resolveInstallPlanCore(input: unknown): InstallPlanCore {
           normalizedName: selection.normalizedName,
           observedCommitSha: selection.observed.commitSha,
           contentDigest: selection.observed.contentDigest,
+          installerSelector: selection.installer.selector,
+          selectorVerifiedUnique: true,
+          selectorVerifiedAtCommitSha: selection.installer.verifiedAtCommitSha,
         })),
       };
     });
