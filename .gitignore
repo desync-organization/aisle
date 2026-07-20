@@ -8,6 +8,9 @@
 # production
 /build
 
+# local catalog database
+/data/*.db*
+
 # testing
 /coverage
 
