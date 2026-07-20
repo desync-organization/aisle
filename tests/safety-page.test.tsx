@@ -1,0 +1,39 @@
+import axe from "axe-core";
+import { render, screen } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
+
+import SafetyPage from "@/app/safety/page";
+
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ push: vi.fn() }),
+}));
+
+describe("safety and trust guidance", () => {
+  it("defines every trust label without calling a reviewed skill safe", () => {
+    render(<SafetyPage />);
+
+    for (const label of [
+      "Official",
+      "Audited / no known findings",
+      "Warning",
+      "Unreviewed",
+      "Failed",
+      "Quarantined",
+    ]) {
+      expect(screen.getAllByText(label).length).toBeGreaterThan(0);
+    }
+
+    expect(screen.getByText(/public does not mean safe/i)).toBeInTheDocument();
+    expect(screen.getByText(/this is not a security audit/i)).toBeInTheDocument();
+    expect(screen.getByText(/not a guarantee of safety/i)).toBeInTheDocument();
+  });
+
+  it("has no automated accessibility violations in its initial state", async () => {
+    const { container } = render(<SafetyPage />);
+    const results = await axe.run(container, {
+      rules: { "color-contrast": { enabled: false } },
+    });
+
+    expect(results.violations).toEqual([]);
+  });
+});
