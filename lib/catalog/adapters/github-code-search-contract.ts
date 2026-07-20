@@ -110,9 +110,7 @@ export function composeGitHubCodeSearchQuery(
     );
   }
   if ((page - 1) * perPage >= GITHUB_CODE_SEARCH_RESULT_CAP) {
-    throw new RangeError(
-      `GitHub Code Search cannot page beyond its ${GITHUB_CODE_SEARCH_RESULT_CAP}-result cap`,
-    );
+    throw new RangeError("GitHub Code Search cannot page beyond its 1,000-result cap");
   }
 
   const githubQuery = `${normalized} filename:SKILL.md is:public`;
