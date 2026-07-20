@@ -1,4 +1,4 @@
-import { ArrowLeft, CheckCircle2 } from "lucide-react";
+import { ArrowLeft, ArrowRight, CheckCircle2 } from "lucide-react";
 import type { Metadata } from "next";
 
 import { SiteFooter } from "@/components/site-footer";
@@ -66,9 +66,43 @@ export default function PublicCatalogPolicyPage() {
             Aisle will report all eligible entries discoverable from each configured enumerable source at its displayed last-successful-sync time, plus clearly labeled federated or on-demand results. It will never claim to contain every skill on the internet.
           </p>
         </aside>
-        <ButtonLink href="/docs" variant="secondary">
-          <ArrowLeft aria-hidden="true" size={16} /> Back to documentation
-        </ButtonLink>
+        <section aria-labelledby="attribution-heading" className="policy-attribution">
+          <div>
+            <span className="eyebrow">Source attribution</span>
+            <h2 id="attribution-heading">Three kinds of context, never blended.</h2>
+          </div>
+          <div className="policy-attribution__grid">
+            <article>
+              <span>UPSTREAM</span>
+              <h3>Publisher material</h3>
+              <p>Name, description, files, revision, and license stay linked to the original public source.</p>
+            </article>
+            <article>
+              <span>AISLE / EDITORIAL</span>
+              <h3>Marketplace structure</h3>
+              <p>Categories, package copy, ordering, and duplicate relationships are labeled as Aisle context.</p>
+            </article>
+            <article>
+              <span>AISLE / FINDING</span>
+              <h3>Revision review</h3>
+              <p>Trust labels and scanner findings identify who produced them and the exact revision reviewed.</p>
+            </article>
+          </div>
+        </section>
+        <aside className="policy-license-note">
+          <strong>Unknown means unknown.</strong>
+          <p>
+            A missing license is displayed as unknown, never inferred to be permissive. Public access alone does not grant redistribution rights or permission to modify upstream work.
+          </p>
+        </aside>
+        <div className="policy-page__actions">
+          <ButtonLink href="/docs" variant="secondary">
+            <ArrowLeft aria-hidden="true" size={16} /> Back to documentation
+          </ButtonLink>
+          <ButtonLink href="/coverage">
+            See the coverage contract <ArrowRight aria-hidden="true" size={16} />
+          </ButtonLink>
+        </div>
       </main>
       <SiteFooter />
     </div>
