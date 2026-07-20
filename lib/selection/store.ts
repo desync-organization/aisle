@@ -227,6 +227,12 @@ export function createSelectionStore(
     return sortAndDedupeCatalogSkillIds(parsed.data);
   }
 
+  function isMutationResult(
+    value: readonly CatalogSkillId[] | SelectionMutationResult,
+  ): value is SelectionMutationResult {
+    return !Array.isArray(value);
+  }
+
   function currentIds(): readonly CatalogSkillId[] {
     hydrate();
     return snapshot.ids;
@@ -253,7 +259,7 @@ export function createSelectionStore(
 
     addMany(ids) {
       const parsed = parseIds(ids);
-      if (!Array.isArray(parsed)) return parsed;
+      if (isMutationResult(parsed)) return parsed;
 
       const current = currentIds();
       const next = sortAndDedupeCatalogSkillIds([...current, ...parsed]);
@@ -279,7 +285,7 @@ export function createSelectionStore(
 
     replace(ids) {
       const parsed = parseIds(ids);
-      if (!Array.isArray(parsed)) return parsed;
+      if (isMutationResult(parsed)) return parsed;
 
       const current = currentIds();
       const changed =
