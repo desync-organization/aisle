@@ -9,7 +9,7 @@ The project is in its foundation phase. Catalog ingestion, curated packages, and
 Requirements:
 
 - Node.js 20.9 or newer
-- npm 11
+- npm 11.16 (the version declared by `packageManager` and used in CI)
 
 ```powershell
 npm install
