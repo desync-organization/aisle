@@ -38,6 +38,45 @@ export const sourceDescriptorSeed = [
     upstreamIdentifier: "/.well-known/agent-skills/index.json (legacy fallback: /.well-known/skills/index.json)",
     termsUrl: null,
   },
+  {
+    id: "skillmd",
+    name: "SkillMD",
+    baseUrl: "https://skillmd.com",
+    mode: "federated" as const,
+    upstreamIdentifier: "SkillMD public registry",
+    termsUrl: "https://skillmd.com",
+    enabled: false,
+    initialCoverageState: "not-configured",
+    knownExclusions: [
+      "No provider-approved enumerable HTTP catalog contract is configured; Aisle does not scrape the website or MCP transport.",
+    ],
+  },
+  {
+    id: "skillsmp",
+    name: "SkillsMP",
+    baseUrl: "https://skillsmp.com/api/v1/skills/search",
+    mode: "federated" as const,
+    upstreamIdentifier: "SkillsMP documented search API",
+    termsUrl: "https://skillsmp.com/docs/api",
+    enabled: false,
+    initialCoverageState: "not-configured",
+    knownExclusions: [
+      "The documented API requires a search query and rejects wildcard enumeration, so only future labeled federated searches are eligible.",
+    ],
+  },
+  {
+    id: "clawhub",
+    name: "ClawHub",
+    baseUrl: "https://clawhub.ai/api/v1/skills",
+    mode: "full" as const,
+    upstreamIdentifier: "ClawHub public skills HTTP API",
+    termsUrl: "https://docs.openclaw.ai/clawhub/http-api",
+    enabled: true,
+    initialCoverageState: "not-synced",
+    knownExclusions: [
+      "ClawHub withholds private, hidden, and moderation-blocked skills from the public API.",
+    ],
+  },
 ] as const;
 
 export async function seedCatalog(repository: CatalogRepository): Promise<void> {

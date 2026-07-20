@@ -1,4 +1,9 @@
+import { createHash } from "node:crypto";
+
 import type { CatalogRepository } from "../../db/repository";
+import { CatalogSyncLeaseLostError } from "../../db/repository";
+import { startSyncLeaseHeartbeat } from "../lease-heartbeat";
+import type { CatalogIngestionService } from "../ingestion";
 import {
   SkillsShAuthenticationError,
   SkillsShClient,
@@ -10,6 +15,9 @@ export interface SkillsShSyncOptions {
   sourceId?: string;
   perPage?: number;
   detailConcurrency?: number;
+  leaseDurationMs?: number;
+  heartbeatIntervalMs?: number;
+  ingestion?: CatalogIngestionService;
 }
 
 export interface SkillsShSyncResult {
@@ -45,9 +53,13 @@ async function mapWithConcurrency<T, R>(
     }
   }
 
-  await Promise.all(
+  const settled = await Promise.allSettled(
     Array.from({ length: Math.min(concurrency, Math.max(values.length, 1)) }, () => worker()),
   );
+  const rejected = settled.find(
+    (result): result is PromiseRejectedResult => result.status === "rejected",
+  );
+  if (rejected) throw rejected.reason;
   return results;
 }
 
@@ -55,6 +67,9 @@ export class SkillsShSync {
   private readonly sourceId: string;
   private readonly perPage: number;
   private readonly detailConcurrency: number;
+  private readonly leaseDurationMs: number;
+  private readonly heartbeatIntervalMs: number;
+  private readonly ingestion?: CatalogIngestionService;
 
   constructor(
     private readonly repository: CatalogRepository,
@@ -64,19 +79,27 @@ export class SkillsShSync {
     this.sourceId = options.sourceId ?? "skills-sh";
     this.perPage = Math.min(Math.max(options.perPage ?? 500, 1), 500);
     this.detailConcurrency = Math.min(Math.max(options.detailConcurrency ?? 8, 1), 32);
+    this.leaseDurationMs = Math.max(options.leaseDurationMs ?? 300_000, 100);
+    this.heartbeatIntervalMs = Math.min(
+      Math.max(options.heartbeatIntervalMs ?? 30_000, 10),
+      Math.max(Math.floor(this.leaseDurationMs / 2), 10),
+    );
+    this.ingestion = options.ingestion;
   }
 
   async run(): Promise<SkillsShSyncResult> {
-    const incomplete = await this.repository.latestIncompleteRun(this.sourceId);
-    const resumed = Boolean(incomplete);
-    const run = await this.repository.createSyncRun(
-      this.sourceId,
-      incomplete ? { runId: incomplete.id, nextPage: incomplete.nextPage } : undefined,
-    );
-    let pageNumber = incomplete?.nextPage ?? run.nextPage;
-    let pageCount = incomplete?.pageCount ?? 0;
-    let processed = incomplete?.processedCount ?? 0;
-    let sourceTotal = incomplete?.sourceTotal ?? null;
+    const run = await this.repository.acquireSyncRun(this.sourceId, this.leaseDurationMs);
+    const heartbeat = startSyncLeaseHeartbeat(this.repository, {
+      runId: run.id,
+      leaseToken: run.leaseToken,
+      leaseDurationMs: this.leaseDurationMs,
+      intervalMs: this.heartbeatIntervalMs,
+    });
+    const resumed = run.resumed;
+    let pageNumber = run.nextPage;
+    let pageCount = run.pageCount;
+    let processed = run.processedCount;
+    let sourceTotal = run.sourceTotal;
     const failures: string[] = [];
 
     try {
@@ -103,17 +126,24 @@ export class SkillsShSync {
           },
         );
         failures.push(...pageFailures.filter((failure): failure is string => failure !== null));
+        if (pageFailures.some((failure) => failure !== null)) {
+          throw new Error(
+            `skills.sh page ${response.data.pagination.page} was not fully durable; the page will be replayed`,
+          );
+        }
 
         pageCount += 1;
         processed += response.data.data.length;
         pageNumber = response.data.pagination.page + 1;
         await this.repository.checkpointSyncRun({
           runId: run.id,
+          leaseToken: run.leaseToken,
           nextPage: pageNumber,
           pageCount,
           processedCount: processed,
           sourceTotal,
           cursor: response.data.pagination.hasMore ? `page:${pageNumber}` : null,
+          leaseDurationMs: this.leaseDurationMs,
         });
 
         if (!response.data.pagination.hasMore) {
@@ -122,12 +152,16 @@ export class SkillsShSync {
       }
 
       const recordCount = await this.repository.countSourceListings(this.sourceId);
+      await heartbeat.stop();
+      await this.repository.renewSyncLease(run.id, run.leaseToken, this.leaseDurationMs);
       await this.repository.finishSyncRun({
         runId: run.id,
+        leaseToken: run.leaseToken,
         sourceId: this.sourceId,
         sourceTotal: sourceTotal ?? recordCount,
         recordCount,
         partialFailures: failures,
+        completeCrawl: true,
       });
       return {
         status: failures.length ? "partial" : "current",
@@ -139,16 +173,20 @@ export class SkillsShSync {
         resumed,
       };
     } catch (error) {
+      await heartbeat.stop().catch(() => undefined);
       const authenticationFailure = error instanceof SkillsShAuthenticationError;
       const retryAfterMs = error instanceof SkillsShHttpError ? error.retryAfterMs : null;
-      await this.repository.failSyncRun({
-        runId: run.id,
-        sourceId: this.sourceId,
-        message: errorMessage(error),
-        retryCount: error instanceof SkillsShHttpError ? 1 : 0,
-        nextRetryAt: retryAfterMs === null ? null : new Date(Date.now() + retryAfterMs),
-        authMissing: authenticationFailure,
-      });
+      if (!(error instanceof CatalogSyncLeaseLostError)) {
+        await this.repository.failSyncRun({
+          runId: run.id,
+          leaseToken: run.leaseToken,
+          sourceId: this.sourceId,
+          message: errorMessage(error),
+          retryCount: error instanceof SkillsShHttpError ? 1 : 0,
+          nextRetryAt: retryAfterMs === null ? null : new Date(Date.now() + retryAfterMs),
+          authMissing: authenticationFailure,
+        });
+      }
       return {
         status: authenticationFailure ? "credentials-required" : "partial",
         runId: run.id,
@@ -175,36 +213,122 @@ export class SkillsShSync {
       raw: listing,
     });
 
-    if (listingHash && stored.previousHash === listingHash) {
-      return;
-    }
-
-    const detail = await this.client.detail(listing.id, {
-      etag: stored.detailEtag,
-      lastModified: stored.detailLastModified,
-    });
-    if (detail.notModified) {
-      await this.repository.updateSourceListingHydration({
-        listingId: stored.id,
-        hash: stored.previousHash,
-        etag: detail.etag ?? stored.detailEtag,
-        lastModified: detail.lastModified ?? stored.detailLastModified,
+    let observedContentHash = listingHash ?? stored.previousHash;
+    if (!listingHash || stored.previousHash !== listingHash || (this.ingestion && !stored.skillId)) {
+      const hashChanged = Boolean(listingHash && stored.previousHash !== listingHash);
+      const mayUseValidators = !hashChanged && !(this.ingestion && !stored.skillId);
+      const detail = await this.client.detail(listing.id, {
+        etag: mayUseValidators ? stored.detailEtag : null,
+        lastModified: mayUseValidators ? stored.detailLastModified : null,
       });
-      return;
-    }
-    if (detail.data.id !== listing.id) {
-      throw new Error(`skills.sh detail id ${detail.data.id} did not match ${listing.id}`);
-    }
-
-    await this.repository.updateSourceListingHydration({
-      listingId: stored.id,
-      hash: detail.data.hash,
-      etag: detail.etag,
-      lastModified: detail.lastModified,
-    });
-
-    if (!detail.data.hash || stored.previousHash === detail.data.hash) {
-      return;
+      if (detail.notModified) {
+        if (hashChanged) {
+          throw new Error("skills.sh returned 304 after the listing hash changed");
+        }
+        await this.repository.updateSourceListingHydration({
+          listingId: stored.id,
+          hash: stored.previousHash,
+          etag: detail.etag ?? stored.detailEtag,
+          lastModified: detail.lastModified ?? stored.detailLastModified,
+        });
+      } else {
+        if (detail.data.id !== listing.id) {
+          throw new Error(`skills.sh detail id ${detail.data.id} did not match ${listing.id}`);
+        }
+        observedContentHash = detail.data.hash;
+        await this.repository.updateSourceListingHydration({
+          listingId: stored.id,
+          hash: detail.data.hash,
+          etag: detail.etag,
+          lastModified: detail.lastModified,
+        });
+        if (this.ingestion) {
+          const sourceUrl =
+            listing.installUrl ??
+            (listing.sourceType.toLowerCase() === "github"
+              ? `https://github.com/${listing.source}`
+              : "https://skills.sh");
+          const skillPath = listing.id.startsWith(`${listing.source}/`)
+            ? listing.id.slice(listing.source.length + 1)
+            : listing.slug;
+          const textFiles = (detail.data.files ?? []).map((file) => ({
+            path: file.path,
+            contents: file.contents,
+            sha256: createHash("sha256").update(file.contents).digest("hex"),
+          }));
+          const manifest = textFiles.find(
+            (file) => file.path === "SKILL.md" || file.path.endsWith("/SKILL.md"),
+          );
+          const github = /^https:\/\/github\.com\/([^/]+)\/([^/#?]+)/i.exec(sourceUrl);
+          await this.ingestion.persist(this.sourceId, runId, {
+            sourceRecordId: listing.id,
+            provider: "skills-sh",
+            sourceType: listing.sourceType,
+            sourceUrl,
+            skillPath,
+            upstreamName: listing.name,
+            upstreamDescription: null,
+            compatibility: null,
+            license: null,
+            installUrl: listing.url,
+            installSpec: detail.data.hash
+              ? {
+                  kind: "registry",
+                  registry: "skills.sh",
+                  identifier: listing.id,
+                  version: detail.data.hash,
+                }
+              : null,
+            immutableRef: detail.data.hash,
+            contentHash: detail.data.hash,
+            public: true,
+            internal: false,
+            aliases: [listing.slug, listing.id],
+            repository: github
+              ? {
+                  provider: "github",
+                  url: `https://github.com/${github[1]}/${github[2]}`,
+                  owner: github[1]!,
+                  name: github[2]!,
+                  visibility: "public",
+                  defaultBranch: null,
+                }
+              : null,
+            artifact: manifest
+              ? {
+                  type: "skill-md",
+                  contents: manifest.contents,
+                  complete: detail.data.files !== null,
+                  textFiles,
+                  files: textFiles.map((file) => ({
+                    path: file.path,
+                    type: "file",
+                    size: new TextEncoder().encode(file.contents).byteLength,
+                    sha: file.sha256,
+                  })),
+                }
+              : null,
+            raw: {
+              listing: {
+                id: listing.id,
+                slug: listing.slug,
+                name: listing.name,
+                source: listing.source,
+                sourceType: listing.sourceType,
+                installs: listing.installs,
+                url: listing.url,
+              },
+              detail: {
+                id: detail.data.id,
+                slug: detail.data.slug,
+                source: detail.data.source,
+                hash: detail.data.hash,
+                fileInventory: textFiles.map(({ path, sha256 }) => ({ path, sha256 })),
+              },
+            },
+          }, { installs: listing.installs });
+        }
+      }
     }
 
     const audit = await this.client.audit(listing.id);
@@ -216,7 +340,9 @@ export class SkillsShSync {
     }
     await this.repository.recordObservedAudits({
       listingId: stored.id,
-      upstreamContentHash: detail.data.hash,
+      // skills.sh audits do not identify a revision. This hash is only the
+      // content observed alongside the audit request, never an exact scan scope.
+      upstreamContentHash: observedContentHash,
       audits: audit.data.audits.map((entry) => ({
         provider: entry.provider,
         providerSlug: entry.slug,

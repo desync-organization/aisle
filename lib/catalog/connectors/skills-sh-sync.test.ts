@@ -12,6 +12,8 @@ import { migrateCatalogDatabase } from "../../db/migrate";
 import { CatalogRepository } from "../../db/repository";
 import { auditRecords, sourceListings, syncRuns } from "../../db/schema";
 import { seedCatalog } from "../../db/seed";
+import { CatalogIngestionService } from "../ingestion";
+import { createAgentSkillValidator } from "../security";
 import { SkillsShClient } from "./skills-sh-client";
 import { SkillsShSync } from "./skills-sh-sync";
 
@@ -237,5 +239,216 @@ describe("SkillsShSync", () => {
       state: "credentials-required",
       error: "Expired fixture token",
     });
+  });
+
+  it("replays a final page when one record was not durably hydrated", async () => {
+    let failDetail = true;
+    let listingRequests = 0;
+    const fetchMock = vi.fn<typeof fetch>(async (input) => {
+      const url = requestUrl(input);
+      if (url.pathname.endsWith("/api/v1/skills")) {
+        listingRequests += 1;
+        return json({
+          data: [listing(0)],
+          pagination: { page: 0, perPage: 1, total: 1, hasMore: false },
+        });
+      }
+      if (url.pathname.includes("/skills/audit/")) {
+        return json({
+          id: "fixture-org/fixture-repo/fixture-skill-0",
+          source: "fixture-org/fixture-repo",
+          slug: "fixture-skill-0",
+          audits: [],
+        });
+      }
+      if (failDetail) {
+        failDetail = false;
+        return json({ message: "inert detail outage" }, 503);
+      }
+      return json({
+        id: "fixture-org/fixture-repo/fixture-skill-0",
+        source: "fixture-org/fixture-repo",
+        slug: "fixture-skill-0",
+        installs: 1,
+        hash: "a".repeat(64),
+        files: null,
+      });
+    });
+    const sync = new SkillsShSync(
+      repository,
+      new SkillsShClient({
+        fetch: fetchMock,
+        tokenProvider: async () => "fixture-token",
+        maxAttempts: 1,
+      }),
+      { perPage: 1 },
+    );
+    const first = await sync.run();
+    const second = await sync.run();
+    expect(first).toMatchObject({ status: "partial", pages: 0, processed: 0 });
+    expect(second).toMatchObject({
+      status: "current",
+      runId: first.runId,
+      resumed: true,
+      pages: 1,
+      processed: 1,
+    });
+    expect(listingRequests).toBe(2);
+  });
+
+  it("turns a real-shaped skills.sh detail into a validated canonical revision", async () => {
+    const manifest = `---
+name: fixture-skill-0
+description: Inert skills.sh canonical integration fixture.
+license: MIT
+---
+
+# Fixture
+`;
+    const fetchMock = vi.fn<typeof fetch>(async (input) => {
+      const url = requestUrl(input);
+      if (url.pathname.endsWith("/api/v1/skills")) {
+        return json({
+          data: [listing(0)],
+          pagination: { page: 0, perPage: 1, total: 1, hasMore: false },
+        });
+      }
+      if (url.pathname.includes("/skills/audit/")) {
+        return json({
+          id: "fixture-org/fixture-repo/fixture-skill-0",
+          source: "fixture-org/fixture-repo",
+          slug: "fixture-skill-0",
+          audits: [],
+        });
+      }
+      return json({
+        id: "fixture-org/fixture-repo/fixture-skill-0",
+        source: "fixture-org/fixture-repo",
+        slug: "fixture-skill-0",
+        installs: 1,
+        hash: "b".repeat(64),
+        files: [{ path: "SKILL.md", contents: manifest }],
+      });
+    });
+    const ingestion = new CatalogIngestionService(repository, createAgentSkillValidator());
+    const result = await new SkillsShSync(
+      repository,
+      new SkillsShClient({
+        fetch: fetchMock,
+        tokenProvider: async () => "fixture-token",
+        maxAttempts: 1,
+      }),
+      { perPage: 1, ingestion },
+    ).run();
+    const selected = await repository.search();
+    const [storedListing] = await connection.db.select().from(sourceListings);
+
+    expect(result.status).toBe("current");
+    expect(selected).toEqual([
+      expect.objectContaining({
+        name: "fixture-skill-0",
+        immutableRef: "b".repeat(64),
+        contentHash: "b".repeat(64),
+        installs: 1,
+        installSpec: {
+          kind: "registry",
+          registry: "skills.sh",
+          identifier: "fixture-org/fixture-repo/fixture-skill-0",
+          version: "b".repeat(64),
+        },
+      }),
+    ]);
+    expect(storedListing?.skillId).toBe(selected[0]?.id);
+  });
+
+  it("never sends old validators after a listing hash changes or audits new hash against old bytes", async () => {
+    let run = 0;
+    let audits = 0;
+    let changedIfNoneMatch: string | null = null;
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      const url = requestUrl(input);
+      if (url.pathname.endsWith("/api/v1/skills")) {
+        return json({
+          data: [{ ...listing(0), hash: run === 0 ? "a".repeat(64) : "b".repeat(64) }],
+          pagination: { page: 0, perPage: 1, total: 1, hasMore: false },
+        });
+      }
+      if (url.pathname.includes("/skills/audit/")) {
+        audits += 1;
+        return json({
+          id: "fixture-org/fixture-repo/fixture-skill-0",
+          source: "fixture-org/fixture-repo",
+          slug: "fixture-skill-0",
+          audits: [],
+        });
+      }
+      if (run === 0) {
+        return json(
+          {
+            id: "fixture-org/fixture-repo/fixture-skill-0",
+            source: "fixture-org/fixture-repo",
+            slug: "fixture-skill-0",
+            installs: 1,
+            hash: "a".repeat(64),
+            files: null,
+          },
+          200,
+          { etag: '"old"' },
+        );
+      }
+      changedIfNoneMatch = new Headers(init?.headers).get("if-none-match");
+      return new Response(null, { status: 304 });
+    });
+    const sync = new SkillsShSync(
+      repository,
+      new SkillsShClient({
+        fetch: fetchMock,
+        tokenProvider: async () => "fixture-token",
+        maxAttempts: 1,
+      }),
+      { perPage: 1 },
+    );
+    expect((await sync.run()).status).toBe("current");
+    run = 1;
+    expect((await sync.run()).status).toBe("partial");
+    expect(changedIfNoneMatch).toBeNull();
+    expect(audits).toBe(1);
+  });
+
+  it("settles sibling hydration workers before finalizing an authentication failure", async () => {
+    let siblingSettled = false;
+    const fetchMock = vi.fn<typeof fetch>(async (input) => {
+      const url = requestUrl(input);
+      if (url.pathname.endsWith("/api/v1/skills")) {
+        return json({
+          data: [listing(0), listing(1)],
+          pagination: { page: 0, perPage: 2, total: 2, hasMore: false },
+        });
+      }
+      if (url.pathname.includes("fixture-skill-0")) {
+        return json({ message: "expired" }, 401);
+      }
+      await new Promise((resolve) => setTimeout(resolve, 40));
+      siblingSettled = true;
+      return json({
+        id: "fixture-org/fixture-repo/fixture-skill-1",
+        source: "fixture-org/fixture-repo",
+        slug: "fixture-skill-1",
+        installs: 1,
+        hash: "c".repeat(64),
+        files: null,
+      });
+    });
+    const result = await new SkillsShSync(
+      repository,
+      new SkillsShClient({
+        fetch: fetchMock,
+        tokenProvider: async () => "fixture-token",
+        maxAttempts: 1,
+      }),
+      { perPage: 2, detailConcurrency: 2 },
+    ).run();
+    expect(result.status).toBe("credentials-required");
+    expect(siblingSettled).toBe(true);
   });
 });

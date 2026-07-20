@@ -1,6 +1,8 @@
 import { getVercelOidcToken } from "@vercel/oidc";
 import { z } from "zod";
 
+import { readBoundedResponse, requestTimeout } from "../http-safety";
+
 const v1SkillSchema = z
   .object({
     id: z.string().min(1),
@@ -122,6 +124,7 @@ export interface SkillsShClientOptions {
   maxAttempts?: number;
   backoffBaseMs?: number;
   maxRetryDelayMs?: number;
+  maxResponseBytes?: number;
 }
 
 async function defaultTokenProvider(): Promise<string | undefined> {
@@ -168,6 +171,7 @@ export class SkillsShClient {
   private readonly maxAttempts: number;
   private readonly backoffBaseMs: number;
   private readonly maxRetryDelayMs: number;
+  private readonly maxResponseBytes: number;
 
   constructor(options: SkillsShClientOptions = {}) {
     this.baseUrl = (options.baseUrl ?? "https://skills.sh/api/v1").replace(/\/$/, "");
@@ -178,6 +182,7 @@ export class SkillsShClient {
     this.maxAttempts = Math.max(options.maxAttempts ?? 4, 1);
     this.backoffBaseMs = Math.max(options.backoffBaseMs ?? 250, 1);
     this.maxRetryDelayMs = Math.max(options.maxRetryDelayMs ?? 60_000, 1);
+    this.maxResponseBytes = Math.max(options.maxResponseBytes ?? 8_388_608, 1_024);
   }
 
   async listSkills(page: number, perPage = 500): Promise<SkillsShFetchResult<SkillsShListResponse>> {
@@ -256,7 +261,11 @@ export class SkillsShClient {
 
       let response: Response;
       try {
-        response = await this.fetchImplementation(`${this.baseUrl}${path}`, { headers });
+        response = await this.fetchImplementation(`${this.baseUrl}${path}`, {
+          headers,
+          redirect: "manual",
+          signal: requestTimeout(),
+        });
       } catch (error) {
         lastError = error;
         if (attempt + 1 >= this.maxAttempts) {
@@ -274,9 +283,22 @@ export class SkillsShClient {
       if (response.status === 304) {
         return { notModified: true, data: null, ...metadata };
       }
+      if (response.status >= 300 && response.status < 400) {
+        await response.body?.cancel();
+        throw new SkillsShHttpError("skills.sh redirects are not followed", response.status, null);
+      }
 
       if (!response.ok) {
-        const body = errorResponseSchema.safeParse(await response.json().catch(() => ({})));
+        const errorBytes = await readBoundedResponse(response, 16_384).catch(
+          () => new Uint8Array(),
+        );
+        let errorJson: unknown = {};
+        try {
+          errorJson = JSON.parse(new TextDecoder().decode(errorBytes));
+        } catch {
+          errorJson = {};
+        }
+        const body = errorResponseSchema.safeParse(errorJson);
         const message = body.success
           ? body.data.message || body.data.error || `skills.sh returned HTTP ${response.status}`
           : `skills.sh returned HTTP ${response.status}`;
@@ -296,7 +318,8 @@ export class SkillsShClient {
 
       let json: unknown;
       try {
-        json = await response.json();
+        const bytes = await readBoundedResponse(response, this.maxResponseBytes);
+        json = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
       } catch (error) {
         throw new SkillsShContractError("skills.sh returned invalid JSON", error);
       }
