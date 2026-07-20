@@ -5,7 +5,7 @@ export const SKILLMD_MAX_RAW_BYTES = 200 * 1024;
 const DEFAULT_BASE_URL = "https://api.skillmd.com";
 const DEFAULT_JSON_MAX_BYTES = 2 * 1024 * 1024;
 const DEFAULT_ERROR_MAX_BYTES = 64 * 1024;
-const RETRYABLE_STATUSES = new Set([429, 502, 503, 504]);
+const RETRYABLE_STATUSES = new Set([408, 429, 500, 502, 503, 504]);
 
 const skillMdListItemWireSchema = z
   .object({
@@ -107,6 +107,7 @@ export interface SkillMdSkillMetadata {
   commit_sha: string | null;
   last_synced_at?: string | null;
   category?: string | null;
+  /** Provider display metadata only. Never pass this value to a shell. */
   install_snippet: string | null;
   raw_url?: string | null;
   bundle_url?: string | null;

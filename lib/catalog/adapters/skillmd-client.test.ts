@@ -121,6 +121,38 @@ describe("SkillMdClient", () => {
     expect(sleep).toHaveBeenCalledExactlyOnceWith(1_500);
   });
 
+  it("retries a transient 500 but does not retry a permanent 4xx", async () => {
+    const sleep = vi.fn(async () => undefined);
+    const transientFetch = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(jsonResponse({ message: "Temporary failure" }, 500))
+      .mockResolvedValueOnce(jsonResponse(listPage([], 100, 0)));
+    const transientClient = new SkillMdClient({
+      baseUrl: "https://registry.example",
+      fetch: transientFetch,
+      sleep,
+      random: () => 0,
+      maxAttempts: 2,
+    });
+
+    await transientClient.listSkills();
+
+    const permanentFetch = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(jsonResponse({ message: "Invalid request" }, 422));
+    const permanentClient = new SkillMdClient({
+      baseUrl: "https://registry.example",
+      fetch: permanentFetch,
+      sleep,
+      random: () => 0,
+      maxAttempts: 3,
+    });
+
+    await expect(permanentClient.listSkills()).rejects.toMatchObject({ status: 422 });
+    expect(transientFetch).toHaveBeenCalledTimes(2);
+    expect(permanentFetch).toHaveBeenCalledTimes(1);
+  });
+
   it("cancels an oversized raw stream without retaining the full body", async () => {
     const cancel = vi.fn();
     const stream = new ReadableStream<Uint8Array>({
