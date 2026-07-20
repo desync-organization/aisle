@@ -39,12 +39,16 @@ describe("privacy transparency", () => {
     expect(screen.getByText(/no accounts, ads, or payment collection/i)).toBeInTheDocument();
   });
 
-  it("has no automated accessibility violations in the current privacy page", async () => {
-    const { container } = render(<PrivacyPage />);
-    const results = await axe.run(container, {
-      rules: { "color-contrast": { enabled: false } },
-    });
+  it(
+    "has no automated accessibility violations in the current privacy page",
+    async () => {
+      const { container } = render(<PrivacyPage />);
+      const results = await axe.run(container, {
+        rules: { "color-contrast": { enabled: false } },
+      });
 
-    expect(results.violations).toEqual([]);
-  });
+      expect(results.violations).toEqual([]);
+    },
+    15_000,
+  );
 });

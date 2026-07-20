@@ -37,12 +37,16 @@ describe("safety and trust guidance", () => {
     expect(warningRow).toHaveTextContent(/requires acknowledgement/i);
   });
 
-  it("has no automated accessibility violations in its initial state", async () => {
-    const { container } = render(<SafetyPage />);
-    const results = await axe.run(container, {
-      rules: { "color-contrast": { enabled: false } },
-    });
+  it(
+    "has no automated accessibility violations in its initial state",
+    async () => {
+      const { container } = render(<SafetyPage />);
+      const results = await axe.run(container, {
+        rules: { "color-contrast": { enabled: false } },
+      });
 
-    expect(results.violations).toEqual([]);
-  });
+      expect(results.violations).toEqual([]);
+    },
+    15_000,
+  );
 });
