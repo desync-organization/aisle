@@ -153,6 +153,39 @@ describe("SkillMdClient", () => {
     expect(permanentFetch).toHaveBeenCalledTimes(1);
   });
 
+  it("rejects a list response that changes the requested page size", async () => {
+    const client = new SkillMdClient({
+      baseUrl: "https://registry.example",
+      fetch: vi.fn<typeof fetch>().mockResolvedValue(jsonResponse(listPage([], 50, 0))),
+      maxAttempts: 1,
+    });
+
+    await expect(client.listSkills({ limit: 100, offset: 0 })).rejects.toThrow(
+      /returned limit 50 while limit 100 was requested/,
+    );
+  });
+
+  it("fails redirects closed without fetching the Location target", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(null, {
+        status: 302,
+        headers: { location: "https://attacker.invalid/redirected" },
+      }),
+    );
+    const client = new SkillMdClient({
+      baseUrl: "https://registry.example",
+      fetch: fetchMock,
+      maxAttempts: 3,
+    });
+
+    await expect(client.listSkills()).rejects.toMatchObject({ status: 302 });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      "https://registry.example/v1/skills?limit=100&offset=0",
+    );
+    expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({ redirect: "manual" });
+  });
+
   it("cancels an oversized raw stream without retaining the full body", async () => {
     const cancel = vi.fn();
     const stream = new ReadableStream<Uint8Array>({

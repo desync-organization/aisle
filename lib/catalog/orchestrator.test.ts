@@ -8,13 +8,17 @@ import { join } from "node:path";
 import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import {
+  computeArtifactContentHash,
+  createTextArtifactInventory,
+} from "./artifact-fingerprint";
 import { createCatalogDatabase, type CatalogDatabaseConnection } from "../db/client";
 import { migrateCatalogDatabase } from "../db/migrate";
 import {
   CatalogRepository,
   CatalogSyncLeaseConflictError,
 } from "../db/repository";
-import { catalogSources, skills, sourceListings } from "../db/schema";
+import { catalogSources, skills, sourceListings, syncRuns } from "../db/schema";
 import { seedCatalog } from "../db/seed";
 import type { DiscoveryValidationResult } from "./ingestion";
 import { CatalogSyncOrchestrator } from "./orchestrator";
@@ -38,7 +42,10 @@ license: MIT
 function candidate(source = "orchestrator-fixture"): DiscoveredSkillRecord {
   const sourceUrl = `https://github.com/example/${source}`;
   const immutableRef = createHash("sha1").update(source).digest("hex");
-  const manifestHash = createHash("sha256").update(SKILL).digest("hex");
+  const contents = `${SKILL}\n<!-- ${source} -->\n`;
+  const manifestHash = createHash("sha256").update(contents).digest("hex");
+  const textFiles = [{ path: "SKILL.md", contents, sha256: manifestHash }];
+  const files = createTextArtifactInventory(textFiles);
   return {
     sourceRecordId: `${source}:fixture-safe`,
     provider: "github",
@@ -52,17 +59,18 @@ function candidate(source = "orchestrator-fixture"): DiscoveredSkillRecord {
     installUrl: `${sourceUrl}/tree/${immutableRef}/fixture-safe`,
     installSpec: { kind: "source", sourceUrl, immutableRef, skillPath: "fixture-safe" },
     immutableRef,
-    contentHash: createHash("sha256").update(`tree:${source}`).digest("hex"),
+    contentHash: computeArtifactContentHash(files),
+    upstreamHash: immutableRef,
     public: true,
     internal: false,
     aliases: [],
     repository: null,
     artifact: {
       type: "skill-md",
-      contents: SKILL,
+      contents,
       complete: true,
-      textFiles: [{ path: "SKILL.md", contents: SKILL, sha256: manifestHash }],
-      files: [{ path: "SKILL.md", type: "file", mode: "100644" }],
+      textFiles,
+      files,
     },
     raw: {},
   };
@@ -146,6 +154,94 @@ describe("CatalogSyncOrchestrator", () => {
     });
   });
 
+  it("keeps zero-page and prematurely exhausted connectors partial", async () => {
+    const zero = new FixtureConnector("zero-fixture", async function* () {
+      return;
+    });
+    const premature = new FixtureConnector("premature-fixture", async function* () {
+      yield {
+        records: [candidate("premature")],
+        nextCursor: "next",
+        hasMore: true,
+        reportedTotal: 2,
+        completeSnapshot: false,
+      };
+    });
+    const orchestrator = new CatalogSyncOrchestrator(repository, {
+      validateRecord: createAgentSkillValidator(),
+    });
+    await expect(orchestrator.syncConnector(zero)).resolves.toMatchObject({
+      status: "partial",
+      processed: 0,
+    });
+    await expect(orchestrator.syncConnector(premature)).resolves.toMatchObject({
+      status: "partial",
+      processed: 1,
+    });
+    const coverage = await repository.coverage();
+    expect(coverage.find((entry) => entry.sourceId === "zero-fixture")).toMatchObject({
+      state: "partial",
+      lastSuccessfulSyncAt: null,
+    });
+    expect(coverage.find((entry) => entry.sourceId === "premature-fixture")).toMatchObject({
+      state: "partial",
+      recordCount: 1,
+      lastSuccessfulSyncAt: null,
+    });
+  });
+
+  it("starts a new snapshot after terminal partial coverage so omissions accrue misses", async () => {
+    const partial = new FixtureConnector("terminal-partial-fixture", async function* () {
+      yield {
+        records: [candidate("terminal-partial")],
+        nextCursor: null,
+        hasMore: false,
+        reportedTotal: 1,
+        completeSnapshot: false,
+        degraded: true,
+      };
+    });
+    const complete = new FixtureConnector(
+      "terminal-partial-fixture",
+      () => onePage([]),
+    );
+    const orchestrator = new CatalogSyncOrchestrator(repository, {
+      validateRecord: createAgentSkillValidator(),
+      unavailableAfterCompleteMisses: 2,
+    });
+    expect((await orchestrator.syncConnector(partial)).status).toBe("partial");
+    expect((await orchestrator.syncConnector(complete)).status).toBe("current");
+    const runs = await connection.db.select().from(syncRuns);
+    expect(new Set(runs.map((run) => run.id)).size).toBe(2);
+    const [listing] = await connection.db.select().from(sourceListings);
+    expect(listing).toMatchObject({ status: "stale", missedCompleteCrawls: 1 });
+  });
+
+  it("does not age missing records from an impossible reported-total terminal page", async () => {
+    const sourceId = "impossible-total-fixture";
+    const populated = new FixtureConnector(sourceId, () => onePage([candidate("total-proof")]));
+    const impossible = new FixtureConnector(sourceId, async function* () {
+      yield {
+        records: [],
+        nextCursor: null,
+        hasMore: false,
+        reportedTotal: 1,
+        completeSnapshot: true,
+      };
+    });
+    const orchestrator = new CatalogSyncOrchestrator(repository, {
+      validateRecord: createAgentSkillValidator(),
+      unavailableAfterCompleteMisses: 1,
+    });
+    expect((await orchestrator.syncConnector(populated)).status).toBe("current");
+    const result = await orchestrator.syncConnector(impossible);
+    const [listing] = await connection.db.select().from(sourceListings);
+
+    expect(result).toMatchObject({ status: "partial", processed: 0 });
+    expect(result.failures.join(" ")).toMatch(/reported total 1/);
+    expect(listing).toMatchObject({ status: "current", missedCompleteCrawls: 0 });
+  });
+
   it("dead-letters permanent malformed candidates and checkpoints later pages", async () => {
     const connector = new FixtureConnector("malformed-fixture", async function* () {
       yield {
@@ -169,6 +265,29 @@ describe("CatalogSyncOrchestrator", () => {
     expect(result).toMatchObject({ status: "partial", processed: 1 });
     expect(result.exclusions.some((entry) => entry.includes("Rejected malformed"))).toBe(true);
     expect(await connection.db.select().from(skills)).toHaveLength(1);
+  });
+
+  it("invalidates a formerly selectable identity when a later record is malformed", async () => {
+    const sourceId = "malformed-reappearance-fixture";
+    const valid = new FixtureConnector(sourceId, () => onePage([candidate("formerly-valid")]));
+    const malformed = new FixtureConnector(sourceId, () =>
+      onePage([
+        {
+          sourceRecordId: "formerly-valid:fixture-safe",
+          public: false,
+          internal: true,
+        },
+      ]),
+    );
+    const orchestrator = new CatalogSyncOrchestrator(repository, {
+      validateRecord: createAgentSkillValidator(),
+    });
+    expect((await orchestrator.syncConnector(valid)).status).toBe("current");
+    expect(await repository.search()).toHaveLength(1);
+    expect((await orchestrator.syncConnector(malformed)).status).toBe("partial");
+    expect(await repository.search()).toEqual([]);
+    const [listing] = await connection.db.select().from(sourceListings);
+    expect(listing).toMatchObject({ status: "unresolved", skillId: null });
   });
 
   it("replays transient validation failures without advancing the page checkpoint", async () => {
@@ -199,6 +318,44 @@ describe("CatalogSyncOrchestrator", () => {
     const second = await orchestrator.syncConnector(connector);
     expect(first).toMatchObject({ status: "partial", processed: 0 });
     expect(second).toMatchObject({ status: "current", processed: 1 });
+  });
+
+  it("resumes a no-total snapshot without treating processed fallback as an upstream total", async () => {
+    const connector = new FixtureConnector("no-total-resume-fixture", async function* (context) {
+      if (context.cursor === null) {
+        yield {
+          records: [candidate("no-total-first")],
+          nextCursor: "next",
+          hasMore: true,
+          reportedTotal: null,
+          completeSnapshot: false,
+        };
+        throw new Error("Inert interruption after the first no-total page");
+      }
+      yield {
+        records: [candidate("no-total-second")],
+        nextCursor: null,
+        hasMore: false,
+        reportedTotal: null,
+        completeSnapshot: true,
+      };
+    });
+    const orchestrator = new CatalogSyncOrchestrator(repository, {
+      validateRecord: createAgentSkillValidator(),
+    });
+
+    const first = await orchestrator.syncConnector(connector);
+    const second = await orchestrator.syncConnector(connector);
+    const [run] = await connection.db.select().from(syncRuns);
+
+    expect(first).toMatchObject({ status: "partial", processed: 1 });
+    expect(second).toMatchObject({ status: "current", processed: 2 });
+    expect(run).toMatchObject({
+      status: "succeeded",
+      sourceTotal: 2,
+      processedCount: 2,
+      checkpointJson: expect.objectContaining({ reportedTotalKnown: false }),
+    });
   });
 
   it("heartbeats through a slow page so a concurrent worker cannot steal the lease", async () => {

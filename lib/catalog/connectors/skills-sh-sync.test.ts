@@ -10,8 +10,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createCatalogDatabase, type CatalogDatabaseConnection } from "../../db/client";
 import { migrateCatalogDatabase } from "../../db/migrate";
 import { CatalogRepository } from "../../db/repository";
-import { auditRecords, sourceListings, syncRuns } from "../../db/schema";
+import { auditRecords, skillRevisions, sourceListings, syncRuns } from "../../db/schema";
 import { seedCatalog } from "../../db/seed";
+import {
+  computeArtifactContentHash,
+  createTextArtifactInventory,
+} from "../artifact-fingerprint";
 import { CatalogIngestionService } from "../ingestion";
 import { createAgentSkillValidator } from "../security";
 import { SkillsShClient } from "./skills-sh-client";
@@ -68,7 +72,7 @@ describe("SkillsShSync", () => {
       if (url.pathname.endsWith("/api/v1/skills")) {
         const page = Number(url.searchParams.get("page"));
         return json({
-          data: [listing(page)],
+          data: [{ ...listing(page), hash: `sha256-fixture-org/fixture-repo/fixture-skill-${page}` }],
           pagination: { page, perPage: 1, total: 3, hasMore: page < 2 },
         });
       }
@@ -131,7 +135,7 @@ describe("SkillsShSync", () => {
     });
     expect(second).toMatchObject({ status: "current", pages: 3, processed: 3, resumed: false });
     expect(listingCount?.count).toBe(3);
-    expect(conditionalRequests).toHaveLength(3);
+    expect(conditionalRequests).toHaveLength(0);
     expect(audits).toHaveLength(3);
     expect(audits.every((audit) => audit.scope === "observation" && audit.revisionId === null)).toBe(
       true,
@@ -196,6 +200,76 @@ describe("SkillsShSync", () => {
     });
     expect(run).toMatchObject({ status: "succeeded", nextPage: 2, completeCrawl: true });
     expect(await repository.countSourceListings("skills-sh")).toBe(2);
+  });
+
+  it.each([
+    {
+      label: "short terminal page",
+      pages: [{ data: [], pagination: { page: 0, perPage: 1, total: 1, hasMore: false } }],
+      error: /terminal page ended at 0 of 1/,
+    },
+    {
+      label: "duplicate ids across pages",
+      pages: [
+        { data: [listing(0)], pagination: { page: 0, perPage: 1, total: 2, hasMore: true } },
+        { data: [listing(0)], pagination: { page: 1, perPage: 1, total: 2, hasMore: false } },
+      ],
+      error: /duplicate listing id/,
+    },
+    {
+      label: "reported-total drift",
+      pages: [
+        { data: [listing(0)], pagination: { page: 0, perPage: 1, total: 2, hasMore: true } },
+        { data: [listing(1)], pagination: { page: 1, perPage: 1, total: 3, hasMore: false } },
+      ],
+      error: /total drifted/,
+    },
+    {
+      label: "hasMore after total",
+      pages: [
+        { data: [listing(0)], pagination: { page: 0, perPage: 1, total: 1, hasMore: true } },
+      ],
+      error: /claimed more pages after reaching/,
+    },
+    {
+      label: "echoed page-size mismatch",
+      pages: [{ data: [], pagination: { page: 0, perPage: 2, total: 0, hasMore: false } }],
+      error: /echoed perPage=2/,
+    },
+  ])("keeps an inconsistent skills.sh $label snapshot partial", async ({ pages, error }) => {
+    const fetchMock = vi.fn<typeof fetch>(async (input) => {
+      const url = requestUrl(input);
+      if (url.pathname.endsWith("/api/v1/skills")) {
+        const page = Number(url.searchParams.get("page"));
+        return json(pages[page] ?? pages.at(-1));
+      }
+      const id = url.pathname.split(/\/skills\/(?:audit\/)?/)[1]!;
+      if (url.pathname.includes("/skills/audit/")) {
+        return json({ id, source: "fixture-org/fixture-repo", slug: id.split("/").at(-1), audits: [] });
+      }
+      return json({
+        id,
+        source: "fixture-org/fixture-repo",
+        slug: id.split("/").at(-1),
+        installs: 1,
+        hash: `provider-${id}`,
+        files: null,
+      });
+    });
+    const result = await new SkillsShSync(
+      repository,
+      new SkillsShClient({
+        fetch: fetchMock,
+        tokenProvider: async () => "fixture-token",
+        maxAttempts: 1,
+      }),
+      { perPage: 1 },
+    ).run();
+
+    expect(result.status).toBe("partial");
+    expect(result.failures.join(" ")).toMatch(error);
+    expect((await repository.coverage()).find((entry) => entry.sourceId === "skills-sh")?.state)
+      .toBe("partial");
   });
 
   it("persists a credentials-required coverage state without throwing", async () => {
@@ -288,11 +362,11 @@ describe("SkillsShSync", () => {
     expect(first).toMatchObject({ status: "partial", pages: 0, processed: 0 });
     expect(second).toMatchObject({
       status: "current",
-      runId: first.runId,
-      resumed: true,
+      resumed: false,
       pages: 1,
       processed: 1,
     });
+    expect(second.runId).not.toBe(first.runId);
     expect(listingRequests).toBe(2);
   });
 
@@ -348,7 +422,9 @@ license: MIT
       expect.objectContaining({
         name: "fixture-skill-0",
         immutableRef: "b".repeat(64),
-        contentHash: "b".repeat(64),
+        contentHash: computeArtifactContentHash(
+          createTextArtifactInventory([{ path: "SKILL.md", contents: manifest }]),
+        ),
         installs: 1,
         installSpec: {
           kind: "registry",
@@ -413,6 +489,133 @@ license: MIT
     expect((await sync.run()).status).toBe("partial");
     expect(changedIfNoneMatch).toBeNull();
     expect(audits).toBe(1);
+  });
+
+  it.each([
+    ["changed", "b".repeat(64)],
+    ["removed", null],
+  ])("detaches the old revision when a listing hash is %s and hydration fails", async (_label, nextHash) => {
+    let run = 0;
+    const manifest = `---\nname: fixture-skill-0\ndescription: Inert changed-hash fixture.\nlicense: MIT\n---\n`;
+    const fetchMock = vi.fn<typeof fetch>(async (input) => {
+      const url = requestUrl(input);
+      if (url.pathname.endsWith("/api/v1/skills")) {
+        return json({
+          data: [
+            {
+              ...listing(0),
+              ...(run === 0
+                ? { hash: "a".repeat(64) }
+                : nextHash
+                  ? { hash: nextHash }
+                  : {}),
+            },
+          ],
+          pagination: { page: 0, perPage: 1, total: 1, hasMore: false },
+        });
+      }
+      if (url.pathname.includes("/skills/audit/")) {
+        return json({
+          id: "fixture-org/fixture-repo/fixture-skill-0",
+          source: "fixture-org/fixture-repo",
+          slug: "fixture-skill-0",
+          audits: [],
+        });
+      }
+      if (run > 0) return json({ message: "inert upstream outage" }, 503);
+      return json({
+        id: "fixture-org/fixture-repo/fixture-skill-0",
+        source: "fixture-org/fixture-repo",
+        slug: "fixture-skill-0",
+        installs: 1,
+        hash: "a".repeat(64),
+        files: [{ path: "SKILL.md", contents: manifest }],
+      });
+    });
+    const sync = new SkillsShSync(
+      repository,
+      new SkillsShClient({
+        fetch: fetchMock,
+        tokenProvider: async () => "fixture-token",
+        maxAttempts: 1,
+      }),
+      {
+        perPage: 1,
+        ingestion: new CatalogIngestionService(repository, createAgentSkillValidator()),
+      },
+    );
+    expect((await sync.run()).status).toBe("current");
+    run = 1;
+    expect((await sync.run()).status).toBe("partial");
+    expect(await repository.search()).toEqual([]);
+    const [stored] = await connection.db.select().from(sourceListings);
+    expect(stored).toMatchObject({
+      status: "unresolved",
+      skillId: null,
+      sourceHash: nextHash,
+    });
+    expect(await connection.db.select().from(skillRevisions)).toHaveLength(1);
+  });
+
+  it("does not reuse a provider revision hash for changed scanned bytes", async () => {
+    let changed = false;
+    const firstManifest = `---\nname: fixture-skill-0\ndescription: First inert bytes.\nlicense: MIT\n---\n`;
+    const secondManifest = firstManifest.replace("First inert bytes.", "Changed inert bytes.");
+    const fetchMock = vi.fn<typeof fetch>(async (input) => {
+      const url = requestUrl(input);
+      if (url.pathname.endsWith("/api/v1/skills")) {
+        return json({
+          data: [{ ...listing(0), hash: "a".repeat(64) }],
+          pagination: { page: 0, perPage: 1, total: 1, hasMore: false },
+        });
+      }
+      if (url.pathname.includes("/skills/audit/")) {
+        return json({
+          id: "fixture-org/fixture-repo/fixture-skill-0",
+          source: "fixture-org/fixture-repo",
+          slug: "fixture-skill-0",
+          audits: [],
+        });
+      }
+      return json({
+        id: "fixture-org/fixture-repo/fixture-skill-0",
+        source: "fixture-org/fixture-repo",
+        slug: "fixture-skill-0",
+        installs: 1,
+        hash: "a".repeat(64),
+        files: [{ path: "SKILL.md", contents: changed ? secondManifest : firstManifest }],
+      });
+    });
+    const sync = new SkillsShSync(
+      repository,
+      new SkillsShClient({
+        fetch: fetchMock,
+        tokenProvider: async () => "fixture-token",
+        maxAttempts: 1,
+      }),
+      {
+        perPage: 1,
+        ingestion: new CatalogIngestionService(repository, createAgentSkillValidator()),
+      },
+    );
+    expect((await sync.run()).status).toBe("current");
+    await repository.markSourceRecordUnresolved(
+      "skills-sh",
+      "fixture-org/fixture-repo/fixture-skill-0",
+      "a".repeat(64),
+    );
+    changed = true;
+    const second = await sync.run();
+    expect(second.status).toBe("partial");
+    expect(second.failures.join(" ")).toMatch(/changed content hash/);
+    expect(await repository.search()).toEqual([]);
+    const revisions = await connection.db.select().from(skillRevisions);
+    expect(revisions).toHaveLength(1);
+    expect(revisions[0]?.contentHash).toBe(
+      computeArtifactContentHash(
+        createTextArtifactInventory([{ path: "SKILL.md", contents: firstManifest }]),
+      ),
+    );
   });
 
   it("settles sibling hydration workers before finalizing an authentication failure", async () => {

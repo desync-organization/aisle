@@ -60,6 +60,8 @@ function detail(owner: string) {
 function clawHubFetch(options: {
   verificationHash?: string;
   fileBody?: string;
+  versionSkill?: { slug: string; displayName: string } | null;
+  duplicateVersionPath?: boolean;
 } = {}) {
   let listCalls = 0;
   return vi.fn<typeof fetch>(async (input) => {
@@ -92,21 +94,28 @@ function clawHubFetch(options: {
       return json({ moderation: null, security: { status: "clean" } });
     }
     if (url.pathname.endsWith("/versions/1.0.0")) {
+      const files = [
+        {
+          path: "SKILL.md",
+          size: Buffer.byteLength(SKILL),
+          sha256: FILE_HASH,
+          contentType: "text/markdown",
+        },
+      ];
+      if (options.duplicateVersionPath) {
+        files.push({ ...files[0]!, path: "./SKILL.md" });
+      }
       return json({
-        skill: { slug: "fixture-safe", displayName: "Fixture Safe" },
+        skill:
+          options.versionSkill === undefined
+            ? { slug: "fixture-safe", displayName: "Fixture Safe" }
+            : options.versionSkill,
         version: {
           version: "1.0.0",
           createdAt: 2,
           changelog: "",
           license: "MIT",
-          files: [
-            {
-              path: "SKILL.md",
-              size: Buffer.byteLength(SKILL),
-              sha256: FILE_HASH,
-              contentType: "text/markdown",
-            },
-          ],
+          files,
           security: { status: "clean" },
         },
       });
@@ -176,6 +185,13 @@ describe("ClawHubAdapter", () => {
           "pass",
       ),
     ).toBe(true);
+    const first = pages[1]?.records[0] as DiscoveredSkillRecord;
+    expect(first.contentHash).not.toBe(FINGERPRINT);
+    expect(first.raw).toMatchObject({ sourceFingerprint: FINGERPRINT });
+    expect(pages[1]?.records.map((record) => (record as DiscoveredSkillRecord).aliases)).toEqual([
+      ["@alpha/fixture-safe"],
+      ["@beta/fixture-safe"],
+    ]);
   });
 
   it("keeps exact-inventory mismatch and aggregate-byte overflow nonselectable", async () => {
@@ -238,5 +254,31 @@ describe("ClawHubAdapter", () => {
     });
     const [page] = await allPages(new ClawHubAdapter({ fetch: fetchMock }));
     expect(page).toMatchObject({ degraded: true, completeSnapshot: false, records: [] });
+  });
+
+  it("degrades null exact-version identities and duplicate normalized inventory paths", async () => {
+    for (const fetchMock of [
+      clawHubFetch({ versionSkill: null }),
+      clawHubFetch({ duplicateVersionPath: true }),
+    ]) {
+      const pages = await allPages(new ClawHubAdapter({ fetch: fetchMock }));
+      expect(pages[1]).toMatchObject({
+        degraded: true,
+        completeSnapshot: false,
+        records: [],
+      });
+    }
+  });
+
+  it("stops repeated cursors instead of enumerating forever", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () =>
+      json({ items: [], nextCursor: "loop" }),
+    );
+    const pages = await allPages(new ClawHubAdapter({ fetch: fetchMock }));
+    expect(pages).toHaveLength(2);
+    expect(pages[1]).toMatchObject({ degraded: true, hasMore: false, nextCursor: null });
+    expect(pages[1]?.exclusions).toEqual([
+      expect.stringContaining("repeated cursor"),
+    ]);
   });
 });

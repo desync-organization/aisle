@@ -45,7 +45,27 @@ export function normalizeSourceUrl(value: string): string {
 }
 
 export function normalizeSkillPath(value: string): string {
-  let path = value.trim().replaceAll("\\", "/").replace(/^\.\//, "");
+  if (/[\u0000-\u001f\u007f]/.test(value)) {
+    throw new CatalogNormalizationError("Skill paths must not contain control bytes");
+  }
+  let path = value.trim();
+  for (let depth = 0; depth < 4; depth += 1) {
+    let decoded: string;
+    try {
+      decoded = decodeURIComponent(path);
+    } catch {
+      throw new CatalogNormalizationError("Skill paths must use valid percent encoding");
+    }
+    if (decoded === path) break;
+    path = decoded;
+    if (depth === 3 && /%[0-9a-f]{2}/i.test(path)) {
+      throw new CatalogNormalizationError("Skill paths exceed the supported encoding depth");
+    }
+  }
+  if (/[%][0-9a-f]{2}|[\u0000-\u001f\u007f]/i.test(path)) {
+    throw new CatalogNormalizationError("Skill paths must not contain encoded or control bytes");
+  }
+  path = path.trim().replaceAll("\\", "/").replace(/^\.\//, "");
   path = path.replace(/\/+$/, "");
   if (path.toLowerCase().endsWith("/skill.md")) {
     path = path.slice(0, -"/SKILL.md".length);
@@ -81,7 +101,8 @@ export function stableCatalogId(namespace: string, value: string): string {
   return `${namespace}_${createHash("sha256").update(value).digest("hex").slice(0, 24)}`;
 }
 
-export interface NormalizedSkillRecord extends DiscoveredSkillRecord {
+export interface NormalizedSkillRecord extends Omit<DiscoveredSkillRecord, "upstreamHash"> {
+  upstreamHash: string | null;
   canonicalKey: string;
 }
 
@@ -92,6 +113,7 @@ export function normalizeDiscoveredSkill(record: DiscoveredSkillRecord): Normali
   const sourceUrl = normalizeSourceUrl(record.sourceUrl);
   const skillPath = normalizeSkillPath(record.skillPath);
   const contentHash = normalizeContentHash(record.contentHash);
+  const upstreamHash = record.upstreamHash?.trim() || null;
   const immutableRef = record.immutableRef?.trim() || null;
   const upstreamName = record.upstreamName?.trim() || null;
   const upstreamDescription = record.upstreamDescription?.trim() || null;
@@ -101,6 +123,7 @@ export function normalizeDiscoveredSkill(record: DiscoveredSkillRecord): Normali
     sourceUrl,
     skillPath,
     contentHash,
+    upstreamHash,
     immutableRef,
     upstreamName,
     upstreamDescription,

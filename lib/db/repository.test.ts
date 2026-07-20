@@ -120,8 +120,19 @@ describe("catalog database and repository", () => {
       skillId,
       immutableRef: "0000000000000000000000000000000000000000",
       contentHash: "0".repeat(64),
+      upstreamHash: "provider-revision-v1",
       installUrl:
         "https://github.com/example/public-skill-fixture/tree/0000000000000000000000000000000000000000/skills/catalog-fixture",
+      installSpecJson: {
+        kind: "source",
+        sourceUrl: "https://github.com/example/public-skill-fixture",
+        immutableRef: "0000000000000000000000000000000000000000",
+        skillPath: "skills/catalog-fixture",
+      },
+      license: "MIT",
+      metadataJson: {
+        licenseEvidence: { path: "SKILL.md", sha256: "0".repeat(64) },
+      },
       isCurrent: true,
       firstSeenAt: now,
       lastSeenAt: now,
@@ -133,7 +144,7 @@ describe("catalog database and repository", () => {
       skillId,
       sourceType: "github",
       installUrl: "https://github.com/example/public-skill-fixture",
-      sourceHash: "0".repeat(64),
+      sourceHash: "provider-revision-v1",
       installs: 42,
       status: "current",
       rawJson: { fixture: true },
@@ -222,7 +233,7 @@ describe("catalog database and repository", () => {
 
     await repository.recordObservedAudits({
       listingId: "listing_fixture_public",
-      upstreamContentHash: "0".repeat(64),
+      upstreamContentHash: "provider-revision-v1",
       audits: [
         {
           provider: "Fixture upstream",
@@ -239,7 +250,7 @@ describe("catalog database and repository", () => {
 
     await repository.recordObservedAudits({
       listingId: "listing_fixture_public",
-      upstreamContentHash: "0".repeat(64),
+      upstreamContentHash: "provider-revision-v1",
       audits: [
         {
           provider: "Fixture upstream",
@@ -256,7 +267,7 @@ describe("catalog database and repository", () => {
 
     await repository.recordObservedAudits({
       listingId: "listing_fixture_public",
-      upstreamContentHash: "0".repeat(64),
+      upstreamContentHash: "provider-revision-v1",
       audits: [
         {
           provider: "Fixture upstream",
@@ -273,7 +284,7 @@ describe("catalog database and repository", () => {
 
     await repository.recordObservedAudits({
       listingId: "listing_fixture_public",
-      upstreamContentHash: "0".repeat(64),
+      upstreamContentHash: "provider-revision-v1",
       audits: [
         {
           provider: "Fixture upstream",
@@ -292,6 +303,8 @@ describe("catalog database and repository", () => {
         revisionId,
         scanner: "fixture-pass-scanner",
         scannerVersion: "1.0.0",
+        immutableRef: "0000000000000000000000000000000000000000",
+        contentHash: "0".repeat(64),
         state: "pass",
         scannedAt: now,
       },
@@ -300,6 +313,8 @@ describe("catalog database and repository", () => {
         revisionId,
         scanner: "fixture-fail-scanner",
         scannerVersion: "1.0.0",
+        immutableRef: "0000000000000000000000000000000000000000",
+        contentHash: "0".repeat(64),
         state: "fail",
         quarantineReason: "Critical inert test finding.",
         scannedAt: now,

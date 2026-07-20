@@ -17,7 +17,13 @@ export interface ValidatedSkillMetadata {
   description: string;
   compatibility: string | null;
   license: string;
-  licenseEvidence?: { path: string; sha256: string; source: string } | null;
+  licenseEvidence?: {
+    path: string;
+    sha256: string;
+    source: string;
+    sourceUrl?: string;
+    immutableRef?: string;
+  } | null;
 }
 
 export interface TrustFindingInput {
@@ -90,7 +96,7 @@ export class CatalogIngestionService {
       await this.repository.markSourceRecordUnresolved(
         sourceId,
         decoded.sourceRecordId,
-        decoded.contentHash,
+        decoded.upstreamHash ?? decoded.contentHash,
       );
       throw error;
     }
@@ -101,7 +107,7 @@ export class CatalogIngestionService {
       upstreamId: normalized.sourceRecordId,
       sourceType: normalized.sourceType,
       installUrl: normalized.installUrl,
-      sourceHash: normalized.contentHash,
+      sourceHash: normalized.upstreamHash ?? normalized.contentHash,
       installs: options.installs ?? 0,
       preserveSourceHash: false,
       raw: normalized.raw,
@@ -110,12 +116,17 @@ export class CatalogIngestionService {
     if (
       !validation.valid ||
       !validation.metadata ||
+      !validation.trustAssessment ||
       !normalized.immutableRef ||
       !normalized.contentHash ||
+      !normalized.upstreamHash ||
       !normalized.installUrl ||
       !normalized.installSpec
     ) {
-      await this.repository.markListingUnresolved(listing.id, normalized.contentHash);
+      await this.repository.markListingUnresolved(
+        listing.id,
+        normalized.upstreamHash ?? normalized.contentHash,
+      );
       return {
         listingId: listing.id,
         skillId: null,
@@ -141,6 +152,7 @@ export class CatalogIngestionService {
       installSpec: normalized.installSpec,
       immutableRef: normalized.immutableRef,
       contentHash: normalized.contentHash,
+      upstreamHash: normalized.upstreamHash,
       aliases: normalized.aliases,
       listingId: listing.id,
       repository: normalized.repository,

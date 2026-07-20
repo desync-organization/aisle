@@ -4,6 +4,10 @@ import { isIP } from "node:net";
 
 import { z } from "zod";
 
+import {
+  computeArtifactContentHash,
+  normalizeArtifactFilePath,
+} from "../artifact-fingerprint";
 import { readBoundedResponse, requestTimeout } from "../http-safety";
 import type {
   CatalogSourceConnector,
@@ -55,6 +59,7 @@ export interface WellKnownAdapterOptions {
   maxArtifactBytes?: number;
   maxIndexBytes?: number;
   resolveHostname?: HostnameResolver;
+  unsafeAllowUnpinnedHostnameFetch?: boolean;
 }
 
 type HostnameResolver = (
@@ -113,14 +118,11 @@ function isNonPublicIp(address: string): boolean {
 }
 
 function assertSafeRelativeFile(path: string): string {
-  const normalized = path.replaceAll("\\", "/");
-  if (
-    normalized.startsWith("/") ||
-    normalized.split("/").some((segment) => !segment || segment === "." || segment === "..")
-  ) {
+  try {
+    return normalizeArtifactFilePath(path);
+  } catch {
     throw new Error("Legacy discovery file paths must be traversal-free relative paths");
   }
-  return normalized;
 }
 
 async function defaultResolver(hostname: string) {
@@ -135,6 +137,7 @@ export class WellKnownSkillsAdapter implements CatalogSourceConnector {
   private readonly maxArtifactBytes: number;
   private readonly maxIndexBytes: number;
   private readonly resolveHostname: HostnameResolver;
+  private readonly unsafeAllowUnpinnedHostnameFetch: boolean;
 
   constructor(options: WellKnownAdapterOptions) {
     this.origin = assertPublicHttpsOrigin(options.origin);
@@ -158,17 +161,32 @@ export class WellKnownSkillsAdapter implements CatalogSourceConnector {
     this.maxArtifactBytes = options.maxArtifactBytes ?? 1_048_576;
     this.maxIndexBytes = options.maxIndexBytes ?? 2_097_152;
     this.resolveHostname = options.resolveHostname ?? defaultResolver;
+    this.unsafeAllowUnpinnedHostnameFetch = options.unsafeAllowUnpinnedHostnameFetch ?? false;
     this.descriptor = {
       id: `well-known:${this.origin.hostname}`,
       name: `${this.origin.hostname} Agent Skills`,
       baseUrl: new URL(PRIMARY_PATH, this.origin).toString(),
       mode: "full" as const,
       upstreamIdentifier: `${this.origin.hostname}${PRIMARY_PATH}`,
+      enabled: this.unsafeAllowUnpinnedHostnameFetch,
+      initialCoverageState: this.unsafeAllowUnpinnedHostnameFetch
+        ? "not-synced"
+        : "not-configured",
+      knownExclusions: [
+        this.unsafeAllowUnpinnedHostnameFetch
+          ? "Unsafe override enabled: hostname-based fetches are DNS-preflighted but not IP-pinned against DNS rebinding."
+          : "Disabled: hostname-based fetches are not IP-pinned or egress-contained against DNS rebinding.",
+      ],
     };
   }
 
   async *enumerate(context: ConnectorContext): AsyncIterable<ConnectorPage> {
     void context;
+    if (!this.unsafeAllowUnpinnedHostnameFetch) {
+      throw new Error(
+        "Well-known discovery is disabled until fetches are IP-pinned or egress-contained",
+      );
+    }
     const { response, indexUrl, usedLegacyPath } = await this.fetchIndex();
     const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
     if (!contentType.includes("application/json")) {
@@ -215,6 +233,7 @@ export class WellKnownSkillsAdapter implements CatalogSourceConnector {
     let degraded = false;
 
     for (const entry of entries) {
+      try {
       if (!entry.url) {
         degraded = true;
         exclusions.push(`${entry.name}: legacy index did not identify a SKILL.md file.`);
@@ -274,7 +293,8 @@ export class WellKnownSkillsAdapter implements CatalogSourceConnector {
             }
           : null,
         immutableRef: entry.digest,
-        contentHash: entry.digest,
+        contentHash: null,
+        upstreamHash: entry.digest,
         public: true,
         internal: false,
         aliases: [entry.name],
@@ -320,18 +340,29 @@ export class WellKnownSkillsAdapter implements CatalogSourceConnector {
           continue;
         }
         try {
+          const contents = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+          const artifactPath = entry.legacyFiles ? legacyManifestPath! : "SKILL.md";
           artifact = {
             type: "skill-md",
-            contents: new TextDecoder("utf-8", { fatal: true }).decode(bytes),
+            contents,
             complete: !entry.legacyFiles || entry.legacyFiles.length === 1,
             textFiles: [
               {
-                path: entry.url,
-                contents: new TextDecoder("utf-8", { fatal: true }).decode(bytes),
+                path: artifactPath,
+                contents,
                 sha256: actualDigest,
               },
             ],
-            files: entry.legacyFiles?.map((path) => ({ path, type: "file" })),
+            files: (entry.legacyFiles ?? [artifactPath]).map((path) =>
+              path === artifactPath
+                ? {
+                    path,
+                    type: "file",
+                    size: bytes.byteLength,
+                    sha: actualDigest,
+                  }
+                : { path, type: "unverified" },
+            ),
           };
           if (!artifact.complete) {
             degraded = true;
@@ -370,7 +401,11 @@ export class WellKnownSkillsAdapter implements CatalogSourceConnector {
           version: resolvedContentHash,
         },
         immutableRef: resolvedContentHash,
-        contentHash: resolvedContentHash,
+        contentHash:
+          artifact?.type === "skill-md" && artifact.complete && artifact.files?.length
+            ? computeArtifactContentHash(artifact.files)
+            : null,
+        upstreamHash: resolvedContentHash,
         public: true,
         internal: false,
         aliases: [entry.name],
@@ -378,6 +413,12 @@ export class WellKnownSkillsAdapter implements CatalogSourceConnector {
         artifact,
         raw: { ...entry.raw, artifactUrl: artifactUrl.toString() },
       });
+      } catch (error) {
+        degraded = true;
+        exclusions.push(
+          `${entry.name}: artifact hydration failed (${error instanceof Error ? error.message : String(error)}).`,
+        );
+      }
     }
 
     yield {

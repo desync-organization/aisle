@@ -12,7 +12,6 @@ import {
 import { startSyncLeaseHeartbeat } from "./lease-heartbeat";
 import { CatalogNormalizationError } from "./normalization";
 import {
-  discoveredSkillRecordSchema,
   type CatalogSourceConnector,
   type ConnectorSyncResult,
 } from "./source-contract";
@@ -108,8 +107,17 @@ export class CatalogSyncOrchestrator {
     let cursor = run.cursor;
     let processed = run.processedCount;
     let pageCount = run.pageCount;
-    let reportedTotal = run.sourceTotal;
+    const checkpoint = run.checkpointJson as { reportedTotalKnown?: boolean };
+    let reportedTotalMode: "unset" | "reported" | "absent" =
+      checkpoint.reportedTotalKnown === true
+        ? "reported"
+        : checkpoint.reportedTotalKnown === false && run.resumed
+          ? "absent"
+          : "unset";
+    let reportedTotal = reportedTotalMode === "absent" ? null : run.sourceTotal;
     let completeSnapshot = false;
+    let sawPage = false;
+    let sawTerminalPage = false;
     let degraded = false;
     const failures: string[] = [];
     const exclusions = new Set<string>(connector.descriptor.knownExclusions ?? []);
@@ -117,6 +125,28 @@ export class CatalogSyncOrchestrator {
     try {
       for await (const page of connector.enumerate({ cursor })) {
         await heartbeat.assertActive();
+        const pageTotalMode = page.reportedTotal === null ? "absent" : "reported";
+        if (reportedTotalMode !== "unset" && reportedTotalMode !== pageTotalMode) {
+          throw new Error("Connector changed reported-total semantics during one snapshot");
+        }
+        if (
+          page.reportedTotal !== null &&
+          (!Number.isSafeInteger(page.reportedTotal) || page.reportedTotal < 0)
+        ) {
+          throw new Error("Connector reported an invalid total");
+        }
+        if (
+          page.reportedTotal !== null &&
+          reportedTotalMode === "reported" &&
+          reportedTotal !== null &&
+          page.reportedTotal !== reportedTotal
+        ) {
+          throw new Error(
+            `Connector reported-total drifted from ${reportedTotal} to ${page.reportedTotal}`,
+          );
+        }
+        reportedTotalMode = pageTotalMode;
+        sawPage = true;
         completeSnapshot = page.completeSnapshot;
         degraded ||= page.degraded ?? false;
         reportedTotal = page.reportedTotal ?? reportedTotal;
@@ -125,8 +155,7 @@ export class CatalogSyncOrchestrator {
         const transientFailures: string[] = [];
         for (const candidate of page.records) {
           try {
-            const decoded = discoveredSkillRecordSchema.parse(candidate);
-            await this.ingestion.persist(connector.descriptor.id, run.id, decoded);
+            await this.ingestion.persist(connector.descriptor.id, run.id, candidate);
             processed += 1;
           } catch (error) {
             if (error instanceof ZodError || error instanceof CatalogNormalizationError) {
@@ -155,15 +184,46 @@ export class CatalogSyncOrchestrator {
           processedCount: processed,
           sourceTotal: reportedTotal ?? processed,
           cursor,
+          reportedTotalKnown: reportedTotalMode === "reported",
           leaseDurationMs: this.leaseDurationMs,
         });
-        if (!page.hasMore) break;
+        if (!page.hasMore) {
+          sawTerminalPage = true;
+          break;
+        }
       }
 
       const recordCount = await this.repository.countSourceListings(connector.descriptor.id);
+      const seenCount = await this.repository.countListingsSeenInRun(
+        connector.descriptor.id,
+        run.id,
+      );
       await heartbeat.stop();
       await this.repository.renewSyncLease(run.id, run.leaseToken, this.leaseDurationMs);
-      const coverageFailures = degraded ? ["Connector reported contract-degraded coverage"] : [];
+      const coverageFailures: string[] = [];
+      if (degraded) coverageFailures.push("Connector reported contract-degraded coverage");
+      if (!sawPage) coverageFailures.push("Connector produced no pages");
+      else if (!sawTerminalPage) coverageFailures.push("Connector ended before a terminal page");
+      else if (!completeSnapshot) coverageFailures.push("Terminal page did not declare a complete snapshot");
+      if (seenCount !== processed) {
+        coverageFailures.push(
+          `Snapshot observed ${processed} records but persisted ${seenCount} distinct source identities`,
+        );
+      }
+      if (
+        reportedTotalMode === "reported" &&
+        (reportedTotal === null || processed !== reportedTotal || seenCount !== reportedTotal)
+      ) {
+        coverageFailures.push(
+          `Snapshot proved ${seenCount} distinct durable records and ${processed} observations for reported total ${reportedTotal ?? "unknown"}`,
+        );
+      }
+      const completeCrawl =
+        sawPage &&
+        sawTerminalPage &&
+        completeSnapshot &&
+        !degraded &&
+        coverageFailures.length === 0;
       await this.repository.finishSyncRun({
         runId: run.id,
         leaseToken: run.leaseToken,
@@ -172,13 +232,13 @@ export class CatalogSyncOrchestrator {
         recordCount,
         partialFailures: coverageFailures,
         exclusions: [...exclusions],
-        completeCrawl: completeSnapshot && !degraded,
+        completeCrawl,
         unavailableAfter: this.unavailableAfterCompleteMisses,
       });
 
       return {
         sourceId: connector.descriptor.id,
-        status: degraded ? "partial" : "current",
+        status: completeCrawl ? "current" : "partial",
         processed,
         failures: coverageFailures,
         exclusions: [...exclusions],

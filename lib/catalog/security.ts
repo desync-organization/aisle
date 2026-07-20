@@ -3,6 +3,10 @@ import { createHash } from "node:crypto";
 import { parseDocument } from "yaml";
 import { z } from "zod";
 
+import {
+  computeArtifactContentHash,
+  normalizeArtifactFilePath,
+} from "./artifact-fingerprint";
 import type {
   DiscoveryRecordValidator,
   DiscoveryValidationResult,
@@ -122,9 +126,15 @@ function resolveLicense(
   metadata: AgentSkillMetadata,
 ): {
   spdx: string;
-  evidence: { path: string; sha256: string; source: string } | null;
+  evidence: {
+    path: string;
+    sha256: string;
+    source: string;
+    sourceUrl?: string;
+    immutableRef?: string;
+  } | null;
 } {
-  const explicit = normalizeSpdx(record.license) ?? normalizeSpdx(metadata.license);
+  const explicit = normalizeSpdx(metadata.license);
   if (explicit) {
     const manifest = record.artifact?.textFiles?.find(
       (file) => file.path === "SKILL.md" || file.path.endsWith("/SKILL.md"),
@@ -134,7 +144,7 @@ function resolveLicense(
       evidence: {
         path: manifest?.path ?? "SKILL.md",
         sha256: manifest?.sha256 ?? "",
-        source: "explicit-spdx",
+        source: "frontmatter-spdx",
       },
     };
   }
@@ -154,6 +164,43 @@ function resolveLicense(
       return {
         spdx,
         evidence: { path: file.path, sha256: file.sha256, source: "license-text-fingerprint" },
+      };
+    }
+  }
+  const repositoryEvidence = record.repositoryLicenseEvidence;
+  if (
+    repositoryEvidence &&
+    record.repository?.provider.toLowerCase() === "github" &&
+    repositoryEvidence.immutableRef === record.immutableRef &&
+    repositoryEvidence.sourceUrl === record.repository.url &&
+    repositoryEvidence.sourceUrl === record.sourceUrl
+  ) {
+    let evidencePath: string | null = null;
+    try {
+      evidencePath = normalizeArtifactFilePath(repositoryEvidence.path);
+    } catch {
+      // Invalid external evidence is ignored and cannot make a revision selectable.
+    }
+    const digest = createHash("sha256").update(repositoryEvidence.contents).digest("hex");
+    const spdx = LICENSE_TEXT_HASHES.get(
+      normalizedLicenseTextHash(repositoryEvidence.contents),
+    );
+    if (
+      evidencePath &&
+      !evidencePath.includes("/") &&
+      /^(?:license|licence|copying)(?:\.[a-z0-9]+)?$/i.test(evidencePath) &&
+      digest === repositoryEvidence.sha256.toLowerCase() &&
+      spdx
+    ) {
+      return {
+        spdx,
+        evidence: {
+          path: evidencePath,
+          sha256: digest,
+          source: "repository-root-license-text",
+          sourceUrl: repositoryEvidence.sourceUrl,
+          immutableRef: repositoryEvidence.immutableRef,
+        },
       };
     }
   }
@@ -381,7 +428,44 @@ export function validateAgentSkillRecord(record: DiscoveredSkillRecord): Discove
       reason: "Frontmatter name must match the containing skill directory",
     };
   }
+  const artifactInventoryPaths = new Set<string>();
+  const verifiedInventory = new Map<
+    string,
+    { sha256: string; size: number; type: string }
+  >();
   for (const file of artifact.files ?? []) {
+    let normalizedPath: string | null = null;
+    try {
+      normalizedPath = normalizeArtifactFilePath(file.path);
+    } catch {
+      // Unsafe paths are retained as critical findings so the exact reason is explainable.
+    }
+    if (normalizedPath && artifactInventoryPaths.has(normalizedPath)) {
+      return {
+        valid: false,
+        metadata: null,
+        reason: `Artifact inventory contains duplicate path ${normalizedPath}`,
+      };
+    }
+    if (normalizedPath) artifactInventoryPaths.add(normalizedPath);
+    const sha256 = file.sha?.toLowerCase().replace(/^sha256:/, "") ?? "";
+    if (
+      normalizedPath &&
+      (!Number.isSafeInteger(file.size) || file.size! < 0 || !/^[a-f0-9]{64}$/.test(sha256))
+    ) {
+      return {
+        valid: false,
+        metadata: null,
+        reason: `Artifact inventory digest or size is unverified for ${normalizedPath}`,
+      };
+    }
+    if (normalizedPath) {
+      verifiedInventory.set(normalizedPath, {
+        sha256,
+        size: file.size!,
+        type: file.type.toLowerCase(),
+      });
+    }
     if (hasTraversal(file.path)) {
       findings.push(
         finding("TRAVERSAL_PATH", "critical", "Artifact inventory contains an unsafe path.", file.path),
@@ -423,6 +507,7 @@ export function validateAgentSkillRecord(record: DiscoveredSkillRecord): Discove
         },
       ];
   for (const file of scannedTextFiles) findings.push(...scanText(file.path, file.contents));
+  const scannedTextPaths = new Set<string>();
   for (const file of scannedTextFiles) {
     const digest = createHash("sha256").update(file.contents).digest("hex");
     if (!/^[a-f0-9]{64}$/i.test(file.sha256) || digest !== file.sha256.toLowerCase()) {
@@ -432,6 +517,63 @@ export function validateAgentSkillRecord(record: DiscoveredSkillRecord): Discove
         reason: `${file.path} did not match its advertised SHA-256`,
       };
     }
+    let normalizedPath: string;
+    try {
+      normalizedPath = normalizeArtifactFilePath(file.path);
+    } catch (error) {
+      return {
+        valid: false,
+        metadata: null,
+        reason: error instanceof Error ? error.message : String(error),
+      };
+    }
+    if (scannedTextPaths.has(normalizedPath)) {
+      return {
+        valid: false,
+        metadata: null,
+        reason: `Scanned text inventory contains duplicate path ${normalizedPath}`,
+      };
+    }
+    scannedTextPaths.add(normalizedPath);
+    const inventory = verifiedInventory.get(normalizedPath);
+    if (
+      !inventory ||
+      inventory.sha256 !== digest ||
+      inventory.size !== new TextEncoder().encode(file.contents).byteLength
+    ) {
+      return {
+        valid: false,
+        metadata: null,
+        reason: `${file.path} was not bound to the verified installed-file inventory`,
+      };
+    }
+    if (/\u0000|^\s*(?:MZ|\x7fELF|PK\u0003\u0004)/.test(file.contents)) {
+      findings.push(
+        finding(
+          "DISGUISED_BINARY",
+          "critical",
+          "A scanned text path contains a binary signature or NUL byte.",
+          file.path,
+        ),
+      );
+    }
+  }
+  let artifactFingerprint: string;
+  try {
+    artifactFingerprint = computeArtifactContentHash(artifact.files ?? []);
+  } catch (error) {
+    return {
+      valid: false,
+      metadata: null,
+      reason: error instanceof Error ? error.message : String(error),
+    };
+  }
+  if (artifactFingerprint !== record.contentHash?.toLowerCase().replace(/^sha256:/, "")) {
+    return {
+      valid: false,
+      metadata: null,
+      reason: "Content hash was not bound to the exact scanned artifact inventory",
+    };
   }
   const manifestText = scannedTextFiles.find(
     (file) => file.path === "SKILL.md" || file.path.endsWith("/SKILL.md"),

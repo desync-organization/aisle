@@ -369,11 +369,27 @@ export const packageMembers = sqliteTable(
   ],
 );
 
+export const packageMemberQuarantines = sqliteTable(
+  "package_member_quarantines",
+  {
+    id: text("id").primaryKey(),
+    packageVersionId: text("package_version_id").notNull(),
+    skillId: text("skill_id").notNull(),
+    revisionId: text("revision_id").notNull(),
+    position: integer("position").notNull(),
+    selectedByDefault: integer("selected_by_default", { mode: "boolean" }).notNull(),
+    reason: text("reason").notNull(),
+    quarantinedAt: integer("quarantined_at", { mode: "timestamp_ms" }).notNull(),
+  },
+  (table) => [index("package_member_quarantines_version_idx").on(table.packageVersionId)],
+);
+
 export const schema = {
   auditRecords,
   catalogSources,
   categories,
   packageMembers,
+  packageMemberQuarantines,
   packages,
   packageVersions,
   repositories,

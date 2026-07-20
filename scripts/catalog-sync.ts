@@ -1,6 +1,7 @@
 import { ClawHubAdapter } from "../lib/catalog/adapters/clawhub";
 import { GitHubPublicRepositoryAdapter } from "../lib/catalog/adapters/github-public";
 import { providerApprovedRegistryStubs } from "../lib/catalog/adapters/registry-stubs";
+import { SkillMdAdapter } from "../lib/catalog/adapters/skillmd";
 import { WellKnownSkillsAdapter } from "../lib/catalog/adapters/well-known";
 import { SkillsShClient } from "../lib/catalog/connectors/skills-sh-client";
 import { SkillsShSync } from "../lib/catalog/connectors/skills-sh-sync";
@@ -30,6 +31,7 @@ async function main(): Promise<void> {
     const ingestion = new CatalogIngestionService(repository, validator);
     const connectors: CatalogSourceConnector[] = [
       new ClawHubAdapter(),
+      new SkillMdAdapter({ githubToken: process.env.GITHUB_TOKEN }),
       ...providerApprovedRegistryStubs,
       ...configuredValues("AISLE_WELL_KNOWN_ORIGINS").map((origin, _index, origins) =>
         new WellKnownSkillsAdapter({ origin, adminApprovedOrigins: origins }),

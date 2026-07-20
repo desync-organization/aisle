@@ -22,19 +22,6 @@ class ProviderApprovedStub implements CatalogSourceConnector {
 
 export const providerApprovedRegistryStubs: CatalogSourceConnector[] = [
   new ProviderApprovedStub({
-    id: "skillmd",
-    name: "SkillMD",
-    baseUrl: "https://skillmd.com",
-    mode: "federated",
-    upstreamIdentifier: "SkillMD public registry",
-    termsUrl: "https://skillmd.com",
-    enabled: false,
-    initialCoverageState: "not-configured",
-    knownExclusions: [
-      "No provider-approved enumerable HTTP catalog contract is configured; Aisle does not scrape the website or MCP transport.",
-    ],
-  }),
-  new ProviderApprovedStub({
     id: "skillsmp",
     name: "SkillsMP",
     baseUrl: "https://skillsmp.com/api/v1/skills/search",

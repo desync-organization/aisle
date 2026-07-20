@@ -515,6 +515,11 @@ export class SkillMdClient {
         `SkillMD returned offset ${parsed.offset} while offset ${offset} was requested`,
       );
     }
+    if (parsed.limit !== limit) {
+      throw new SkillMdContractError(
+        `SkillMD returned limit ${parsed.limit} while limit ${limit} was requested`,
+      );
+    }
     if (parsed.items.length > parsed.limit) {
       throw new SkillMdContractError(
         `SkillMD returned ${parsed.items.length} items for a ${parsed.limit}-item page`,
@@ -604,8 +609,18 @@ export class SkillMdClient {
           method: "GET",
           headers: { accept },
           cache: "no-store",
+          redirect: "manual",
           signal: requestSignal.signal,
         });
+
+        if (response.status >= 300 && response.status < 400) {
+          await response.body?.cancel();
+          throw new SkillMdHttpError(
+            "SkillMD redirects are not followed",
+            response.status,
+            null,
+          );
+        }
 
         if (!response.ok) {
           let body = "";

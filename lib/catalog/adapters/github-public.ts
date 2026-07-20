@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 
 import { z } from "zod";
 
+import { computeArtifactContentHash } from "../artifact-fingerprint";
 import { readBoundedResponse, requestTimeout } from "../http-safety";
 import { normalizeSkillPath, normalizeSourceUrl } from "../normalization";
 import type {
@@ -43,6 +44,7 @@ export interface GitHubPublicRepositoryAdapterOptions {
   token?: string;
   maxManifestBytes?: number;
   maxTextTotalBytes?: number;
+  maxLicenseBytes?: number;
   maxAttempts?: number;
   sleep?: (milliseconds: number) => Promise<void>;
 }
@@ -66,17 +68,17 @@ function directoryForManifest(path: string): string {
   return normalizeSkillPath(segments.join("/") || ".");
 }
 
-function treeContentHash(
-  entries: z.infer<typeof treeEntrySchema>[],
-  skillPath: string,
-): string {
-  const prefix = skillPath === "." ? "" : `${skillPath}/`;
-  const inventory = entries
-    .filter((entry) => entry.path === skillPath || entry.path.startsWith(prefix))
-    .map((entry) => `${entry.path.slice(prefix.length)}\0${entry.type}\0${entry.mode}\0${entry.sha}`)
-    .sort()
-    .join("\n");
-  return createHash("sha256").update(inventory).digest("hex");
+function gitBlobSha(bytes: Uint8Array): string {
+  return createHash("sha1")
+    .update(`blob ${bytes.byteLength}\0`)
+    .update(bytes)
+    .digest("hex");
+}
+
+function isKnownBinary(path: string): boolean {
+  return /\.(?:png|jpe?g|gif|webp|avif|ico|pdf|zip|gz|tgz|7z|rar|woff2?|ttf|otf|mp[34]|wav|mov|avi|exe|dll|dylib|so|bin|class|jar)$/i.test(
+    path,
+  );
 }
 
 export class GitHubPublicRepositoryAdapter implements CatalogSourceConnector {
@@ -86,6 +88,7 @@ export class GitHubPublicRepositoryAdapter implements CatalogSourceConnector {
   private readonly token?: string;
   private readonly maxManifestBytes: number;
   private readonly maxTextTotalBytes: number;
+  private readonly maxLicenseBytes: number;
   private readonly maxAttempts: number;
   private readonly sleep: (milliseconds: number) => Promise<void>;
 
@@ -95,6 +98,7 @@ export class GitHubPublicRepositoryAdapter implements CatalogSourceConnector {
     this.token = options.token;
     this.maxManifestBytes = options.maxManifestBytes ?? 1_048_576;
     this.maxTextTotalBytes = options.maxTextTotalBytes ?? 2_097_152;
+    this.maxLicenseBytes = options.maxLicenseBytes ?? 262_144;
     this.maxAttempts = Math.max(options.maxAttempts ?? 3, 1);
     this.sleep =
       options.sleep ?? ((milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)));
@@ -131,6 +135,13 @@ export class GitHubPublicRepositoryAdapter implements CatalogSourceConnector {
       throw new Error("GitHub recursive tree was truncated; refusing to claim a complete repository import");
     }
 
+    const exclusions: string[] = [];
+    const repositoryLicenseEvidence = await this.loadRepositoryLicenseEvidence(
+      tree.tree,
+      commit.sha,
+      repository.html_url,
+      exclusions,
+    );
     const manifestEntries = tree.tree.filter(
       (entry) =>
         entry.type === "blob" &&
@@ -138,7 +149,6 @@ export class GitHubPublicRepositoryAdapter implements CatalogSourceConnector {
         (entry.path === "SKILL.md" || entry.path.endsWith("/SKILL.md")),
     );
     const records: DiscoveredSkillRecord[] = [];
-    const exclusions: string[] = [];
     let degraded = false;
 
     for (const manifest of manifestEntries) {
@@ -161,7 +171,8 @@ export class GitHubPublicRepositoryAdapter implements CatalogSourceConnector {
           skillPath,
         },
         immutableRef: commit.sha,
-        contentHash: treeContentHash(tree.tree, skillPath),
+        contentHash: null,
+        upstreamHash: commit.sha,
         public: true,
         internal: false,
         aliases: [],
@@ -189,9 +200,10 @@ export class GitHubPublicRepositoryAdapter implements CatalogSourceConnector {
         continue;
       }
       let contents: string;
+      let manifestBytes: Uint8Array;
       try {
-        const bytes = await readBoundedResponse(response, this.maxManifestBytes);
-        contents = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+        manifestBytes = await readBoundedResponse(response, this.maxManifestBytes);
+        contents = new TextDecoder("utf-8", { fatal: true }).decode(manifestBytes);
       } catch {
         degraded = true;
         exclusions.push(`${manifest.path}: manifest exceeds the size limit.`);
@@ -203,15 +215,18 @@ export class GitHubPublicRepositoryAdapter implements CatalogSourceConnector {
         (entry) => entry.path === skillPath || entry.path.startsWith(prefix),
       );
       const textFiles: Array<{ path: string; contents: string; sha256: string }> = [];
-      let totalBytes = new TextEncoder().encode(contents).byteLength;
+      const verifiedFiles = new Map<
+        string,
+        { path: string; type: string; mode: string; size: number; sha: string }
+      >();
+      let totalBytes = 0;
       let artifactComplete = true;
-      textFiles.push({
-        path: manifest.path,
-        contents,
-        sha256: createHash("sha256").update(contents).digest("hex"),
-      });
-      for (const entry of skillEntries) {
-        if (entry.path === manifest.path || entry.type !== "blob" || entry.mode === "120000") {
+      const fileEntries = skillEntries.filter((entry) => entry.type !== "tree");
+      for (const entry of fileEntries) {
+        const relativePath = entry.path.slice(prefix.length);
+        if (entry.type !== "blob" || entry.mode === "120000") {
+          artifactComplete = false;
+          degraded = true;
           continue;
         }
         if (
@@ -223,32 +238,67 @@ export class GitHubPublicRepositoryAdapter implements CatalogSourceConnector {
           degraded = true;
           continue;
         }
-        const supportUrl = `/repos/${this.coordinates.owner}/${this.coordinates.repository}/contents/${entry.path
-          .split("/")
-          .map(encodeURIComponent)
-          .join("/")}?ref=${encodeURIComponent(commit.sha)}`;
-        const supportResponse = await this.githubFetch(
-          supportUrl,
-          "application/vnd.github.raw+json",
-        );
-        if (!supportResponse.ok) {
-          await supportResponse.body?.cancel();
+        let bytes: Uint8Array;
+        if (entry.path === manifest.path) {
+          bytes = manifestBytes;
+        } else {
+          const supportUrl = `/repos/${this.coordinates.owner}/${this.coordinates.repository}/contents/${entry.path
+            .split("/")
+            .map(encodeURIComponent)
+            .join("/")}?ref=${encodeURIComponent(commit.sha)}`;
+          const supportResponse = await this.githubFetch(
+            supportUrl,
+            "application/vnd.github.raw+json",
+          );
+          if (!supportResponse.ok) {
+            await supportResponse.body?.cancel();
+            artifactComplete = false;
+            degraded = true;
+            continue;
+          }
+          bytes = await readBoundedResponse(supportResponse, this.maxManifestBytes);
+        }
+        totalBytes += bytes.byteLength;
+        if (
+          bytes.byteLength !== entry.size ||
+          !/^[a-f0-9]{40}$/i.test(entry.sha) ||
+          gitBlobSha(bytes) !== entry.sha.toLowerCase()
+        ) {
           artifactComplete = false;
           degraded = true;
           continue;
         }
-        const bytes = await readBoundedResponse(supportResponse, this.maxManifestBytes);
-        totalBytes += bytes.byteLength;
+        const sha256 = createHash("sha256").update(bytes).digest("hex");
+        let type = "file";
         try {
-          textFiles.push({
-            path: entry.path,
-            contents: new TextDecoder("utf-8", { fatal: true }).decode(bytes),
-            sha256: createHash("sha256").update(bytes).digest("hex"),
-          });
+          const decoded = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+          if (isKnownBinary(relativePath)) {
+            type = "binary";
+          } else {
+            textFiles.push({ path: relativePath, contents: decoded, sha256 });
+          }
         } catch {
-          // Binary assets remain represented by immutable inventory metadata.
+          type = "binary";
         }
+        verifiedFiles.set(relativePath, {
+          path: relativePath,
+          type,
+          mode: entry.mode,
+          size: bytes.byteLength,
+          sha: sha256,
+        });
       }
+      const artifactFiles = fileEntries.map((entry) => {
+        const relativePath = entry.path.slice(prefix.length);
+        return verifiedFiles.get(relativePath) ?? {
+          path: relativePath,
+          type: entry.type,
+          mode: entry.mode,
+          size: entry.size,
+        };
+      });
+      const manifestText = textFiles.find((file) => file.path === "SKILL.md");
+      if (!manifestText || manifestText.contents !== contents) artifactComplete = false;
 
       records.push({
         sourceRecordId: `${repository.full_name}:${skillPath}`,
@@ -268,7 +318,8 @@ export class GitHubPublicRepositoryAdapter implements CatalogSourceConnector {
           skillPath,
         },
         immutableRef: commit.sha,
-        contentHash: treeContentHash(tree.tree, skillPath),
+        contentHash: artifactComplete ? computeArtifactContentHash(artifactFiles) : null,
+        upstreamHash: commit.sha,
         public: true,
         internal: false,
         aliases: [],
@@ -280,18 +331,13 @@ export class GitHubPublicRepositoryAdapter implements CatalogSourceConnector {
           visibility: "public",
           defaultBranch: repository.default_branch,
         },
+        repositoryLicenseEvidence,
         artifact: {
           type: "skill-md",
           contents,
           complete: artifactComplete,
           textFiles,
-          files: skillEntries.map((entry) => ({
-            path: entry.path,
-            type: entry.type,
-            mode: entry.mode,
-            size: entry.size,
-            sha: entry.sha,
-          })),
+          files: artifactFiles,
         },
         raw: {
           repository: repository.full_name,
@@ -311,6 +357,69 @@ export class GitHubPublicRepositoryAdapter implements CatalogSourceConnector {
       degraded,
       exclusions,
     };
+  }
+
+  private async loadRepositoryLicenseEvidence(
+    entries: z.infer<typeof treeEntrySchema>[],
+    immutableRef: string,
+    sourceUrl: string,
+    exclusions: string[],
+  ): Promise<DiscoveredSkillRecord["repositoryLicenseEvidence"]> {
+    const candidates = entries.filter(
+      (entry) =>
+        !entry.path.includes("/") &&
+        /^(?:license|licence|copying)(?:\.[a-z0-9]+)?$/i.test(entry.path),
+    );
+    if (candidates.length === 0) return null;
+    if (candidates.length !== 1) {
+      exclusions.push("Repository-root license evidence was ambiguous; no license was inferred.");
+      return null;
+    }
+    const [entry] = candidates;
+    if (
+      !entry ||
+      entry.type !== "blob" ||
+      entry.mode === "120000" ||
+      entry.size === undefined ||
+      entry.size > this.maxLicenseBytes
+    ) {
+      exclusions.push("Repository-root license evidence was not a bounded regular file.");
+      return null;
+    }
+    try {
+      const path = entry.path.split("/").map(encodeURIComponent).join("/");
+      const response = await this.githubFetch(
+        `/repos/${this.coordinates.owner}/${this.coordinates.repository}/contents/${path}?ref=${encodeURIComponent(immutableRef)}`,
+        "application/vnd.github.raw+json",
+      );
+      if (!response.ok) {
+        await response.body?.cancel();
+        exclusions.push(`Repository-root ${entry.path} returned HTTP ${response.status}.`);
+        return null;
+      }
+      const bytes = await readBoundedResponse(response, this.maxLicenseBytes);
+      if (
+        bytes.byteLength !== entry.size ||
+        !/^[a-f0-9]{40}$/i.test(entry.sha) ||
+        gitBlobSha(bytes) !== entry.sha.toLowerCase()
+      ) {
+        exclusions.push(`Repository-root ${entry.path} did not match its exact Git blob.`);
+        return null;
+      }
+      const contents = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+      return {
+        path: entry.path,
+        contents,
+        sha256: createHash("sha256").update(bytes).digest("hex"),
+        sourceUrl,
+        immutableRef,
+      };
+    } catch (error) {
+      exclusions.push(
+        `Repository-root ${entry.path} license evidence was unavailable (${error instanceof Error ? error.message : String(error)}).`,
+      );
+      return null;
+    }
   }
 
   private async githubJson(path: string): Promise<unknown> {

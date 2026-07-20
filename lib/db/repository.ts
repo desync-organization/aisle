@@ -16,6 +16,7 @@ import {
   sql,
 } from "drizzle-orm";
 
+import { installSpecSchema } from "../catalog/source-contract";
 import type { CatalogDatabase } from "./client";
 import {
   auditRecords,
@@ -63,7 +64,10 @@ function noLatestObservedFail() {
     where sl.skill_id = ${skills.id}
       and ar.scope = 'observation'
       and ar.status = 'fail'
-      and ar.upstream_content_hash = ${skillRevisions.contentHash}
+      and (
+        ${skillRevisions.upstreamHash} is null
+        or ar.upstream_content_hash = ${skillRevisions.upstreamHash}
+      )
       and not exists (
         select 1 from audit_records newer
         where newer.source_listing_id = ar.source_listing_id
@@ -82,8 +86,35 @@ function hasSelectableTrust() {
   return sql<boolean>`exists (
     select 1 from trust_assessments selectable_trust
     where selectable_trust.revision_id = ${skillRevisions.id}
+      and selectable_trust.immutable_ref = ${skillRevisions.immutableRef}
+      and selectable_trust.content_hash = ${skillRevisions.contentHash}
       and selectable_trust.state in ('pass', 'warn')
   )`;
+}
+
+function hasStructurallyValidInstallSpec() {
+  return sql<boolean>`case
+    when json_valid(${skillRevisions.installSpecJson}) = 0 then 0
+    when json_extract(${skillRevisions.installSpecJson}, '$.kind') = 'source' then
+      json_type(${skillRevisions.installSpecJson}, '$.sourceUrl') = 'text'
+      and length(trim(json_extract(${skillRevisions.installSpecJson}, '$.sourceUrl'))) > 0
+      and json_type(${skillRevisions.installSpecJson}, '$.immutableRef') = 'text'
+      and length(trim(json_extract(${skillRevisions.installSpecJson}, '$.immutableRef'))) > 0
+      and json_type(${skillRevisions.installSpecJson}, '$.skillPath') = 'text'
+      and length(trim(json_extract(${skillRevisions.installSpecJson}, '$.skillPath'))) > 0
+    when json_extract(${skillRevisions.installSpecJson}, '$.kind') = 'registry' then
+      json_type(${skillRevisions.installSpecJson}, '$.registry') = 'text'
+      and length(trim(json_extract(${skillRevisions.installSpecJson}, '$.registry'))) > 0
+      and json_type(${skillRevisions.installSpecJson}, '$.identifier') = 'text'
+      and length(trim(json_extract(${skillRevisions.installSpecJson}, '$.identifier'))) > 0
+      and json_type(${skillRevisions.installSpecJson}, '$.version') = 'text'
+      and length(trim(json_extract(${skillRevisions.installSpecJson}, '$.version'))) > 0
+    else 0
+  end`;
+}
+
+function hasValidInstallSpec(value: unknown): boolean {
+  return installSpecSchema.safeParse(value).success;
 }
 
 export interface CatalogSearchOptions {
@@ -121,6 +152,7 @@ export interface CanonicalSkillInput {
   installSpec: Record<string, unknown>;
   immutableRef: string;
   contentHash: string;
+  upstreamHash: string | null;
   aliases: string[];
   listingId: string;
   repository: {
@@ -242,6 +274,9 @@ export class CatalogRepository {
       inArray(skills.lifecycle, lifecycle),
       ne(skillRevisions.immutableRef, ""),
       ne(skillRevisions.contentHash, ""),
+      isNotNull(skillRevisions.upstreamHash),
+      ne(skillRevisions.upstreamHash, ""),
+      hasStructurallyValidInstallSpec(),
       notExists(
         this.db
           .select({ value: sql`1` })
@@ -249,6 +284,8 @@ export class CatalogRepository {
           .where(
             and(
               eq(trustAssessments.revisionId, skillRevisions.id),
+              eq(trustAssessments.immutableRef, skillRevisions.immutableRef),
+              eq(trustAssessments.contentHash, skillRevisions.contentHash),
               inArray(trustAssessments.state, ["fail", "quarantined"]),
             ),
           ),
@@ -268,7 +305,7 @@ export class CatalogRepository {
       conditions.push(eq(categories.slug, options.category));
     }
 
-    return this.db
+    const rows = await this.db
       .select({
         id: skills.id,
         name: skills.upstreamName,
@@ -276,21 +313,28 @@ export class CatalogRepository {
         sourceUrl: skills.sourceUrl,
         skillPath: skills.skillPath,
         lifecycle: skills.lifecycle,
-        license: skills.license,
         officialProvenance: skills.officialProvenance,
         revisionId: skillRevisions.id,
         immutableRef: skillRevisions.immutableRef,
         contentHash: skillRevisions.contentHash,
         installSpec: skillRevisions.installSpecJson,
+        license: skillRevisions.license,
+        revisionMetadata: skillRevisions.metadataJson,
         trustState: sql<"unreviewed" | "pass" | "warn">`
           case
             when exists (
               select 1 from trust_assessments ta
-              where ta.revision_id = ${skillRevisions.id} and ta.state = 'warn'
+              where ta.revision_id = ${skillRevisions.id}
+                and ta.immutable_ref = ${skillRevisions.immutableRef}
+                and ta.content_hash = ${skillRevisions.contentHash}
+                and ta.state = 'warn'
             ) then 'warn'
             when exists (
               select 1 from trust_assessments ta
-              where ta.revision_id = ${skillRevisions.id} and ta.state = 'pass'
+              where ta.revision_id = ${skillRevisions.id}
+                and ta.immutable_ref = ${skillRevisions.immutableRef}
+                and ta.content_hash = ${skillRevisions.contentHash}
+                and ta.state = 'pass'
             ) then 'pass'
             else 'unreviewed'
           end
@@ -310,6 +354,7 @@ export class CatalogRepository {
       .orderBy(desc(sql`coalesce(max(${sourceListings.installs}), 0)`), asc(skills.upstreamName))
       .limit(limit)
       .offset(offset);
+    return rows.filter((row) => hasValidInstallSpec(row.installSpec));
   }
 
   async facets() {
@@ -387,15 +432,23 @@ export class CatalogRepository {
         immutableRef: skillRevisions.immutableRef,
         contentHash: skillRevisions.contentHash,
         installSpec: skillRevisions.installSpecJson,
+        license: skillRevisions.license,
+        revisionMetadata: skillRevisions.metadataJson,
         trustState: sql<"unreviewed" | "pass" | "warn">`
           case
             when exists (
               select 1 from trust_assessments ta
-              where ta.revision_id = ${skillRevisions.id} and ta.state = 'warn'
+              where ta.revision_id = ${skillRevisions.id}
+                and ta.immutable_ref = ${skillRevisions.immutableRef}
+                and ta.content_hash = ${skillRevisions.contentHash}
+                and ta.state = 'warn'
             ) then 'warn'
             when exists (
               select 1 from trust_assessments ta
-              where ta.revision_id = ${skillRevisions.id} and ta.state = 'pass'
+              where ta.revision_id = ${skillRevisions.id}
+                and ta.immutable_ref = ${skillRevisions.immutableRef}
+                and ta.content_hash = ${skillRevisions.contentHash}
+                and ta.state = 'pass'
             ) then 'pass'
             else 'unreviewed'
           end
@@ -405,7 +458,13 @@ export class CatalogRepository {
       .innerJoin(packageVersions, eq(packageVersions.packageId, packages.id))
       .innerJoin(packageMembers, eq(packageMembers.packageVersionId, packageVersions.id))
       .innerJoin(skills, eq(skills.id, packageMembers.skillId))
-      .innerJoin(skillRevisions, eq(skillRevisions.id, packageMembers.revisionId))
+      .innerJoin(
+        skillRevisions,
+        and(
+          eq(skillRevisions.id, packageMembers.revisionId),
+          eq(skillRevisions.skillId, skills.id),
+        ),
+      )
       .where(
         and(
           eq(packages.slug, slug),
@@ -417,7 +476,11 @@ export class CatalogRepository {
           inArray(skills.lifecycle, ["current", "stale"]),
           ne(skillRevisions.immutableRef, ""),
           ne(skillRevisions.contentHash, ""),
-          inArray(skills.license, packageEligibleLicenses),
+          isNotNull(skillRevisions.upstreamHash),
+          ne(skillRevisions.upstreamHash, ""),
+          hasStructurallyValidInstallSpec(),
+          inArray(skillRevisions.license, packageEligibleLicenses),
+          sql`json_extract(${skillRevisions.metadataJson}, '$.licenseEvidence.sha256') is not null`,
           notExists(
             this.db
               .select({ value: sql`1` })
@@ -425,6 +488,8 @@ export class CatalogRepository {
               .where(
                 and(
                   eq(trustAssessments.revisionId, skillRevisions.id),
+                  eq(trustAssessments.immutableRef, skillRevisions.immutableRef),
+                  eq(trustAssessments.contentHash, skillRevisions.contentHash),
                   inArray(trustAssessments.state, ["fail", "quarantined"]),
                 ),
               ),
@@ -434,7 +499,9 @@ export class CatalogRepository {
         ),
       )
       .orderBy(desc(packageVersions.version), asc(packageMembers.position));
-    return rows.length === expectedCount ? rows : [];
+    return rows.length === expectedCount && rows.every((row) => hasValidInstallSpec(row.installSpec))
+      ? rows
+      : [];
   }
 
   async coverage(now = new Date()) {
@@ -490,7 +557,13 @@ export class CatalogRepository {
       const [resumable] = await transaction
         .select()
         .from(syncRuns)
-        .where(and(eq(syncRuns.sourceId, sourceId), eq(syncRuns.status, "partial")))
+        .where(
+          and(
+            eq(syncRuns.sourceId, sourceId),
+            eq(syncRuns.status, "partial"),
+            isNotNull(syncRuns.cursor),
+          ),
+        )
         .orderBy(desc(syncRuns.startedAt))
         .limit(1);
       if (resumable) {
@@ -548,6 +621,7 @@ export class CatalogRepository {
     processedCount: number;
     sourceTotal: number;
     cursor?: string | null;
+    reportedTotalKnown?: boolean;
     leaseDurationMs?: number;
   }): Promise<void> {
     const result = await this.db
@@ -558,7 +632,10 @@ export class CatalogRepository {
         processedCount: input.processedCount,
         sourceTotal: input.sourceTotal,
         cursor: input.cursor ?? null,
-        checkpointJson: { nextPage: input.nextPage },
+        checkpointJson: {
+          nextPage: input.nextPage,
+          reportedTotalKnown: input.reportedTotalKnown ?? false,
+        },
         leaseExpiresAt: new Date(Date.now() + Math.max(input.leaseDurationMs ?? 300_000, 100)),
       })
       .where(
@@ -605,11 +682,14 @@ export class CatalogRepository {
     unavailableAfter?: number;
   }): Promise<void> {
     const now = new Date();
+    const incompleteFailure = input.completeCrawl === true
+      ? null
+      : "Source crawl ended without a complete terminal snapshot";
     const failure = input.partialFailures?.length
       ? `${input.partialFailures.length} hydration/audit operation(s) failed: ${input.partialFailures
           .slice(0, 3)
           .join("; ")}`
-      : null;
+      : incompleteFailure;
     await this.db.transaction(async (transaction) => {
       const [lease] = await transaction
         .select({ id: syncRuns.id })
@@ -681,7 +761,7 @@ export class CatalogRepository {
       const result = await transaction
         .update(syncRuns)
         .set({
-          status: "succeeded",
+          status: failure ? "partial" : "succeeded",
           finishedAt: now,
           sourceTotal: input.sourceTotal,
           completeCrawl: input.completeCrawl ?? true,
@@ -704,7 +784,7 @@ export class CatalogRepository {
         .update(catalogSources)
         .set({
           coverageState: failure ? "partial" : "current",
-          lastSuccessfulSyncAt: now,
+          ...(failure ? {} : { lastSuccessfulSyncAt: now }),
           recordCount: input.recordCount,
           unavailableCount,
           lastError: failure,
@@ -782,10 +862,17 @@ export class CatalogRepository {
         skillId: sourceListings.skillId,
         detailEtag: sourceListings.detailEtag,
         detailLastModified: sourceListings.detailLastModified,
+        status: sourceListings.status,
       })
       .from(sourceListings)
       .where(and(eq(sourceListings.sourceId, input.sourceId), eq(sourceListings.upstreamId, input.upstreamId)))
       .limit(1);
+
+    const restoresExistingBinding = Boolean(
+      previous?.skillId &&
+      input.sourceHash &&
+      previous.sourceHash === input.sourceHash,
+    );
 
     await this.db
       .insert(sourceListings)
@@ -819,8 +906,13 @@ export class CatalogRepository {
           lastSeenRunId: input.runId,
           lastSeenAt: now,
           missedCompleteCrawls: 0,
+          ...(restoresExistingBinding ? { status: "current" as const } : {}),
         },
       });
+
+    if (restoresExistingBinding && previous?.skillId && previous.status !== "current") {
+      await this.recomputeSkillLifecycle(previous.skillId);
+    }
 
     return {
       id,
@@ -1035,6 +1127,32 @@ export class CatalogRepository {
       ) {
         throw new Error("Trust assessment did not match the immutable revision and content hash");
       }
+      const [existing] = await transaction
+        .select({ scannedAt: trustAssessments.scannedAt, state: trustAssessments.state })
+        .from(trustAssessments)
+        .where(
+          and(
+            eq(trustAssessments.revisionId, input.revisionId),
+            eq(trustAssessments.scanner, input.scanner),
+          ),
+        )
+        .limit(1);
+      if (existing) {
+        const stateRank = {
+          unreviewed: 0,
+          pass: 1,
+          warn: 2,
+          fail: 3,
+          quarantined: 4,
+        } as const;
+        if (
+          existing.scannedAt > scannedAt ||
+          (existing.scannedAt.getTime() === scannedAt.getTime() &&
+            stateRank[existing.state] >= stateRank[input.state])
+        ) {
+          return;
+        }
+      }
       await transaction
         .insert(trustAssessments)
         .values({
@@ -1102,7 +1220,25 @@ export class CatalogRepository {
     const [row] = await this.db
       .select({ count: sql<number>`count(*)` })
       .from(sourceListings)
-      .where(eq(sourceListings.sourceId, sourceId));
+      .where(
+        and(
+          eq(sourceListings.sourceId, sourceId),
+          notInArray(sourceListings.status, ["unavailable", "removed"]),
+        ),
+      );
+    return row?.count ?? 0;
+  }
+
+  async countListingsSeenInRun(sourceId: string, runId: string): Promise<number> {
+    const [row] = await this.db
+      .select({ count: sql<number>`count(*)` })
+      .from(sourceListings)
+      .where(
+        and(
+          eq(sourceListings.sourceId, sourceId),
+          eq(sourceListings.lastSeenRunId, runId),
+        ),
+      );
     return row?.count ?? 0;
   }
 
@@ -1218,7 +1354,7 @@ export class CatalogRepository {
           skillId,
           immutableRef: input.immutableRef,
           contentHash: input.contentHash,
-          upstreamHash: input.contentHash,
+          upstreamHash: input.upstreamHash,
           installUrl: input.installUrl,
           installSpecJson: input.installSpec,
           license: input.license,
@@ -1230,6 +1366,7 @@ export class CatalogRepository {
         .onConflictDoUpdate({
           target: [skillRevisions.skillId, skillRevisions.immutableRef],
           set: {
+            upstreamHash: input.upstreamHash,
             installUrl: input.installUrl,
             installSpecJson: input.installSpec,
             license: input.license,
@@ -1375,7 +1512,7 @@ export class CatalogRepository {
           status: audit.status,
           summary: audit.summary,
           riskLevel: null,
-          upstreamContentHash: input.contentHash,
+          upstreamContentHash: input.upstreamHash,
           scannerVersion: audit.scannerVersion,
           observedAt: now,
           rawJson: audit.raw,

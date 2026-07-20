@@ -31,6 +31,7 @@ export const discoveredSkillRecordSchema = z.object({
   installSpec: installSpecSchema.nullable().default(null),
   immutableRef: z.string().min(1).nullable(),
   contentHash: z.string().min(1).nullable(),
+  upstreamHash: z.string().min(1).nullable().optional(),
   public: z.boolean(),
   internal: z.boolean(),
   aliases: z.array(z.string().min(1)).default([]),
@@ -45,6 +46,16 @@ export const discoveredSkillRecordSchema = z.object({
     })
     .nullable()
     .default(null),
+  repositoryLicenseEvidence: z
+    .object({
+      path: z.string().min(1).max(256),
+      contents: z.string().max(262_144),
+      sha256: z.string().regex(/^[a-fA-F0-9]{64}$/),
+      sourceUrl: z.url(),
+      immutableRef: z.string().min(1).max(256),
+    })
+    .nullable()
+    .optional(),
   artifact: z
     .object({
       type: z.enum(["skill-md", "archive"]),

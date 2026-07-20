@@ -2,6 +2,10 @@ import { createHash } from "node:crypto";
 
 import { z } from "zod";
 
+import {
+  computeArtifactContentHash,
+  normalizeArtifactFilePath,
+} from "../artifact-fingerprint";
 import { readBoundedResponse, requestTimeout } from "../http-safety";
 import type {
   CatalogSourceConnector,
@@ -10,10 +14,22 @@ import type {
   DiscoveredSkillRecord,
 } from "../source-contract";
 
+const slugSchema = z
+  .string()
+  .min(1)
+  .max(128)
+  .regex(/^[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?$/);
+const ownerSchema = z
+  .string()
+  .min(1)
+  .max(128)
+  .regex(/^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$/);
+const displayNameSchema = z.string().min(1).max(256);
+
 const listItemSchema = z.object({
-  slug: z.string().min(1),
-  displayName: z.string().min(1),
-  summary: z.string().nullable(),
+  slug: slugSchema,
+  displayName: displayNameSchema,
+  summary: z.string().max(4_096).nullable(),
   tags: z.record(z.string(), z.unknown()).default({}),
   stats: z.record(z.string(), z.unknown()).default({}),
   createdAt: z.number(),
@@ -49,9 +65,9 @@ const moderationSchema = z
 
 const detailResponseSchema = z.object({
   skill: z.object({
-    slug: z.string().min(1),
-    displayName: z.string().min(1),
-    summary: z.string().nullable(),
+    slug: slugSchema,
+    displayName: displayNameSchema,
+    summary: z.string().max(4_096).nullable(),
     url: z.url().optional(),
     stats: z.record(z.string(), z.unknown()).default({}),
     createdAt: z.number(),
@@ -66,7 +82,7 @@ const detailResponseSchema = z.object({
     })
     .nullable(),
   metadata: z.record(z.string(), z.unknown()).nullable().optional(),
-  owner: z.object({ handle: z.string().min(1) }).nullable(),
+  owner: z.object({ handle: ownerSchema }).nullable(),
   moderation: moderationSchema.nullable().optional(),
 });
 
@@ -87,7 +103,7 @@ const securitySchema = z
   .passthrough();
 
 const versionResponseSchema = z.object({
-  skill: z.object({ slug: z.string(), displayName: z.string() }).nullable(),
+  skill: z.object({ slug: slugSchema, displayName: displayNameSchema }).nullable(),
   version: z
     .object({
       version: z.string().min(1),
@@ -126,12 +142,12 @@ const verificationSchema = z
 
 const ambiguitySchema = z.object({
   code: z.literal("AMBIGUOUS_SKILL_SLUG"),
-  slug: z.string().min(1),
+  slug: slugSchema,
   matches: z
     .array(
       z.object({
-        ownerHandle: z.string().min(1),
-        slug: z.string().min(1),
+        ownerHandle: ownerSchema,
+        slug: slugSchema,
         ref: z.string().min(1),
         url: z.url(),
       }),
@@ -170,6 +186,17 @@ function isTextFile(file: FileDescriptor): boolean {
   );
 }
 
+function assertUniqueInventory(files: readonly FileDescriptor[], label: string): void {
+  const paths = new Set<string>();
+  for (const file of files) {
+    const path = normalizeArtifactFilePath(file.path);
+    if (paths.has(path)) {
+      throw new Error(`${label} contains duplicate normalized path ${path}`);
+    }
+    paths.add(path);
+  }
+}
+
 export class ClawHubAdapter implements CatalogSourceConnector {
   readonly descriptor = {
     id: "clawhub",
@@ -203,6 +230,7 @@ export class ClawHubAdapter implements CatalogSourceConnector {
 
   async *enumerate(context: ConnectorContext): AsyncIterable<ConnectorPage> {
     let cursor = context.cursor;
+    const seenCursors = new Set<string>(cursor ? [cursor] : []);
     do {
       const parameters = new URLSearchParams({ limit: String(this.limit), sort: "updated" });
       if (cursor) parameters.set("cursor", cursor);
@@ -228,16 +256,25 @@ export class ClawHubAdapter implements CatalogSourceConnector {
         }
       }
 
+      const repeatedCursor =
+        page.nextCursor !== null &&
+        (page.nextCursor === cursor || seenCursors.has(page.nextCursor));
+      if (repeatedCursor) {
+        degraded = true;
+        exclusions.push(`ClawHub returned a repeated cursor (${page.nextCursor}); pagination stopped.`);
+      }
+      const nextCursor = repeatedCursor ? null : page.nextCursor;
+      if (nextCursor) seenCursors.add(nextCursor);
       yield {
         records,
-        nextCursor: page.nextCursor,
-        hasMore: page.nextCursor !== null,
+        nextCursor,
+        hasMore: nextCursor !== null,
         reportedTotal: null,
-        completeSnapshot: page.nextCursor === null && !degraded,
+        completeSnapshot: nextCursor === null && !degraded,
         degraded,
         exclusions,
       };
-      cursor = page.nextCursor;
+      cursor = nextCursor;
     } while (cursor);
   }
 
@@ -320,7 +357,12 @@ export class ClawHubAdapter implements CatalogSourceConnector {
         `/api/v1/skills/${encodeURIComponent(slug)}/versions/${encodedVersion}?${ownerQuery}`,
       ),
     );
-    if (!versionResult.version || versionResult.version.version !== version) {
+    if (
+      !versionResult.skill ||
+      versionResult.skill.slug !== slug ||
+      !versionResult.version ||
+      versionResult.version.version !== version
+    ) {
       throw new Error(`${identity}: exact version response did not match ${version}`);
     }
     const verificationValue = await this.optionalJson(
@@ -337,10 +379,12 @@ export class ClawHubAdapter implements CatalogSourceConnector {
     }
 
     const files = versionResult.version.files;
+    assertUniqueInventory(files, `${identity} version inventory`);
     let artifactComplete = Boolean(verification);
     if (verification) {
       const sourceFiles = files.filter((file) => file.path !== "skill-card.md");
       const verifiedFiles = verification.artifact.files;
+      assertUniqueInventory(verifiedFiles, `${identity} signed inventory`);
       const inventoriesMatch =
         sourceFiles.length === verifiedFiles.length &&
         sourceFiles.every((versionFile) => {
@@ -348,7 +392,9 @@ export class ClawHubAdapter implements CatalogSourceConnector {
           return (
             verifiedFile &&
             versionFile.size === verifiedFile.size &&
-            normalizedSha(versionFile.sha256) === normalizedSha(verifiedFile.sha256)
+            normalizedSha(versionFile.sha256) === normalizedSha(verifiedFile.sha256) &&
+            (versionFile.contentType ?? "").toLowerCase() ===
+              (verifiedFile.contentType ?? "").toLowerCase()
           );
         });
       if (!inventoriesMatch) {
@@ -407,11 +453,21 @@ export class ClawHubAdapter implements CatalogSourceConnector {
           .join("\n"),
       )
       .digest("hex");
-    const contentHash = verification?.artifact.sourceFingerprint ?? null;
-    if (!contentHash) {
+    const sourceFingerprint = verification?.artifact.sourceFingerprint ?? null;
+    if (!sourceFingerprint) {
       artifactComplete = false;
       exclusions.push(`${identity}: exact source fingerprint was unavailable; kept nonselectable.`);
     }
+    const artifactFiles = files.map((file) => ({
+      path: file.path,
+      type: isTextFile(file) ? "file" : "binary",
+      size: file.size,
+      sha: normalizedSha(file.sha256),
+    }));
+    const contentHash =
+      manifest && artifactComplete && sourceFingerprint
+        ? computeArtifactContentHash(artifactFiles)
+        : null;
     const license =
       versionResult.version.license ?? detail.latestVersion?.license ?? "unknown";
     const canonicalUrl =
@@ -437,9 +493,10 @@ export class ClawHubAdapter implements CatalogSourceConnector {
       },
       immutableRef: version,
       contentHash,
+      upstreamHash: sourceFingerprint,
       public: true,
       internal: false,
-      aliases: [identity, slug],
+      aliases: [identity],
       repository: null,
       artifact: manifest
         ? {
@@ -447,12 +504,7 @@ export class ClawHubAdapter implements CatalogSourceConnector {
             contents: manifest.contents,
             complete: artifactComplete,
             textFiles,
-            files: files.map((file) => ({
-              path: file.path,
-              type: "file",
-              size: file.size,
-              sha: normalizedSha(file.sha256),
-            })),
+            files: artifactFiles,
           }
         : null,
       raw: {
@@ -465,6 +517,7 @@ export class ClawHubAdapter implements CatalogSourceConnector {
           latestVersion: detail.latestVersion,
         },
         inventoryHash,
+        sourceFingerprint,
         version: { ...versionResult.version, files },
         moderation: effectiveModeration,
         scan,
@@ -490,9 +543,10 @@ export class ClawHubAdapter implements CatalogSourceConnector {
       installSpec: null,
       immutableRef: item.latestVersion?.version ?? null,
       contentHash: null,
+      upstreamHash: null,
       public: true,
       internal: false,
-      aliases: [identity, item.slug],
+      aliases: [identity],
       repository: null,
       artifact: null,
       raw: { listing: item, owner, unresolved: "exact version unavailable" },
