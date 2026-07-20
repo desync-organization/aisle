@@ -2,11 +2,6 @@ import "server-only";
 
 import { z } from "zod";
 
-const optionalUrl = z.preprocess(
-  (value) => (value === "" ? undefined : value),
-  z.url().optional(),
-);
-
 const optionalSecret = z.preprocess(
   (value) => (value === "" ? undefined : value),
   z.string().min(24).optional(),
@@ -14,8 +9,10 @@ const optionalSecret = z.preprocess(
 
 const serverEnvironmentSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
-  DATABASE_URL: optionalUrl,
+  DATABASE_URL: z.string().min(1).default("file:./data/aisle.db"),
+  DATABASE_AUTH_TOKEN: z.string().min(1).optional(),
   CATALOG_SYNC_TOKEN: optionalSecret,
+  SKILLS_SH_TOKEN: z.string().min(1).optional(),
 });
 
 const publicEnvironmentSchema = z.object({
@@ -25,7 +22,9 @@ const publicEnvironmentSchema = z.object({
 export const serverEnvironment = serverEnvironmentSchema.parse({
   NODE_ENV: process.env.NODE_ENV,
   DATABASE_URL: process.env.DATABASE_URL,
+  DATABASE_AUTH_TOKEN: process.env.DATABASE_AUTH_TOKEN,
   CATALOG_SYNC_TOKEN: process.env.CATALOG_SYNC_TOKEN,
+  SKILLS_SH_TOKEN: process.env.SKILLS_SH_TOKEN,
 });
 
 export const publicEnvironment = publicEnvironmentSchema.parse({
