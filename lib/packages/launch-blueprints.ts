@@ -1042,8 +1042,8 @@ const blueprintInputs = [
     slug: "frontend-foundations",
     editorial: {
       title: "Frontend Foundations",
-      summary: "A disciplined React and interface stack spanning architecture, performance, components, and visual craft.",
-      outcome: "Ship maintainable, fast product interfaces with stronger composition and a sharper design review loop.",
+      summary: "A disciplined React interface stack spanning architecture, responsive styling, and accessible components.",
+      outcome: "Ship maintainable, fast product interfaces with stronger composition and a coherent component foundation.",
       audience: ["Frontend engineers", "Product engineers", "Design engineers"],
       category: "frontend",
       tags: ["react", "nextjs", "components", "ui-design"],
@@ -1055,8 +1055,6 @@ const blueprintInputs = [
       member(1, "developerKitReactPatterns", "Adds current React 19 patterns for concurrent rendering, optimistic interfaces, Server Actions, and performance."),
       member(2, "developerKitTailwindCssPatterns", "Provides responsive Tailwind CSS patterns for accessible components, layouts, and maintainable design systems."),
       member(3, "shadcn", "Brings first-party shadcn guidance for selecting, integrating, and adapting accessible UI components."),
-      member(4, "anthropicFrontendDesign", "Strengthens visual direction and implementation quality beyond generic application scaffolds."),
-      member(5, "impeccable", "Provides an author-maintained interface critique and refinement workflow for the final quality pass."),
     ],
   },
   {
@@ -1089,7 +1087,7 @@ const blueprintInputs = [
     slug: "deployment",
     editorial: {
       title: "Deployment Control Plane",
-      summary: "A practical release stack across Cloudflare, Azure, Expo hosting, and mobile store delivery.",
+      summary: "A practical release stack across Cloudflare, Expo hosting, and mobile store delivery.",
       outcome: "Move applications from local builds to production infrastructure with platform-specific operational guidance.",
       audience: ["Platform engineers", "Full-stack teams", "Mobile release owners"],
       category: "deployment",
@@ -1101,9 +1099,8 @@ const blueprintInputs = [
     members: [
       member(1, "wrangler", "Provides first-party Wrangler commands and workflows for Cloudflare development and deployment."),
       member(2, "workersBestPractices", "Adds production-focused Workers architecture and review guidance before a release reaches users."),
-      member(3, "azureDeploy", "Covers the Azure deployment path for teams operating beyond a single infrastructure provider."),
-      member(4, "easHosting", "Handles Expo web exports and Router API deployments through the supported EAS hosting workflow."),
-      member(5, "easAppStores", "Completes the mobile release path with official EAS build and app-store submission guidance."),
+      member(3, "easHosting", "Handles Expo web exports and Router API deployments through the supported EAS hosting workflow."),
+      member(4, "easAppStores", "Completes the mobile release path with official EAS build and app-store submission guidance."),
     ],
   },
   {
@@ -1112,7 +1109,7 @@ const blueprintInputs = [
     slug: "cybersecurity",
     editorial: {
       title: "Security Surface",
-      summary: "A defensive review kit for application code, cloud posture, identity boundaries, rules, and bot protection.",
+      summary: "A defensive review kit for application code, cloud posture, identity boundaries, and security rules.",
       outcome: "Catch common security weaknesses earlier and apply provider-specific controls with explicit scope and provenance.",
       audience: ["Security engineers", "Platform teams", "Application maintainers"],
       category: "cybersecurity",
@@ -1125,8 +1122,7 @@ const blueprintInputs = [
       member(1, "securityAudit", "Provides Cloudflare's dedicated application security audit workflow for structured defensive reviews."),
       member(2, "firebaseSecurityRulesAuditor", "Checks Firebase rules with first-party product context that generic security guidance cannot supply."),
       member(3, "azureCompliance", "Adds Microsoft-authored Azure compliance assessment and remediation guidance."),
-      member(4, "turnstileSpin", "Covers bot protection setup end to end, including server verification and operational checks."),
-      member(5, "cloudflareOne", "Expands the package to Zero Trust access, network, data, and device policy boundaries."),
+      member(4, "cloudflareOne", "Expands the package to Zero Trust access, network, data, and device policy boundaries."),
     ],
   },
   {
@@ -1159,7 +1155,7 @@ const blueprintInputs = [
     slug: "data-and-ai",
     editorial: {
       title: "Data & AI Systems",
-      summary: "A data engineering set spanning Postgres design, serverless databases, Firebase, datasets, and model training.",
+      summary: "A data engineering set spanning Postgres design, Firebase, datasets, and model training.",
       outcome: "Design dependable application data layers and carry curated datasets into reproducible model-training workflows.",
       audience: ["Data engineers", "AI engineers", "Backend product teams"],
       category: "data-ai",
@@ -1170,11 +1166,10 @@ const blueprintInputs = [
     },
     members: [
       member(1, "supabasePostgresBestPractices", "Adds Supabase-authored Postgres performance, schema, and operational best practices."),
-      member(2, "neonPostgres", "Provides first-party Neon workflows for serverless Postgres development and platform operations."),
-      member(3, "firebaseFirestore", "Adds first-party Firestore guidance for modeling, querying, and securing Firebase application data."),
-      member(4, "firebaseAiLogicBasics", "Adds official Firebase AI Logic guidance for safely connecting model capabilities to applications."),
-      member(5, "huggingfaceDatasets", "Covers dataset creation, transformation, and publication in the Hugging Face ecosystem."),
-      member(6, "huggingfaceLlmTrainer", "Extends the workflow into reproducible language-model training with first-party tooling guidance."),
+      member(2, "firebaseFirestore", "Adds first-party Firestore guidance for modeling, querying, and securing Firebase application data."),
+      member(3, "firebaseAiLogicBasics", "Adds official Firebase AI Logic guidance for safely connecting model capabilities to applications."),
+      member(4, "huggingfaceDatasets", "Covers dataset creation, transformation, and publication in the Hugging Face ecosystem."),
+      member(5, "huggingfaceLlmTrainer", "Extends the workflow into reproducible language-model training with first-party tooling guidance."),
     ],
   },
   {
@@ -1183,7 +1178,7 @@ const blueprintInputs = [
     slug: "agent-engineering",
     editorial: {
       title: "Agent Engineering",
-      summary: "A systems toolkit for skill design, MCP integrations, durable agents, sandboxing, state, and browser control.",
+      summary: "A systems toolkit for durable agents, sandboxed execution, state, and browser control.",
       outcome: "Build capable agent products with explicit tool contracts, state boundaries, safe execution, and browser reach.",
       audience: ["Agent engineers", "AI platform teams", "Tooling developers"],
       category: "agent-engineering",
@@ -1193,12 +1188,10 @@ const blueprintInputs = [
       visual: { iconToken: "network", colorToken: "cyan" },
     },
     members: [
-      member(1, "anthropicSkillCreator", "Defines a first-party workflow for designing, validating, and maintaining effective Agent Skills."),
-      member(2, "anthropicMcpBuilder", "Adds a rigorous first-party path for exposing external capabilities through MCP servers."),
-      member(3, "agentsSdk", "Covers Cloudflare's stateful Agents SDK for real-time and long-running agent workloads."),
-      member(4, "durableObjects", "Provides the state and coordination primitive needed by durable multi-user agent systems."),
-      member(5, "sandboxSdk", "Adds a secure execution boundary for agents that run generated code or untrusted workloads."),
-      member(6, "agentBrowser", "Gives agents a maintained browser automation surface for testing and web interaction workflows."),
+      member(1, "agentsSdk", "Covers Cloudflare's stateful Agents SDK for real-time and long-running agent workloads."),
+      member(2, "durableObjects", "Provides the state and coordination primitive needed by durable multi-user agent systems."),
+      member(3, "sandboxSdk", "Adds a secure execution boundary for agents that run generated code or untrusted workloads."),
+      member(4, "agentBrowser", "Gives agents a maintained browser automation surface for testing and web interaction workflows."),
     ],
   },
   {
@@ -1218,12 +1211,11 @@ const blueprintInputs = [
     },
     members: [
       member(1, "playwrightCli", "Provides Microsoft's supported CLI workflow for repeatable browser automation and inspection."),
-      member(2, "anthropicWebappTesting", "Adds a focused browser-based web application testing workflow with skill-local license evidence."),
-      member(3, "testDrivenDevelopment", "Makes executable tests the starting boundary for behavior changes and regressions."),
-      member(4, "systematicDebugging", "Introduces a disciplined diagnosis loop before fixes are proposed or implemented."),
-      member(5, "verificationBeforeCompletion", "Requires fresh evidence before implementation work is represented as complete."),
-      member(6, "requestingCodeReview", "Builds a clear review handoff into the package's delivery workflow."),
-      member(7, "webPerf", "Completes quality checks with measured Core Web Vitals and browser performance diagnostics."),
+      member(2, "testDrivenDevelopment", "Makes executable tests the starting boundary for behavior changes and regressions."),
+      member(3, "systematicDebugging", "Introduces a disciplined diagnosis loop before fixes are proposed or implemented."),
+      member(4, "verificationBeforeCompletion", "Requires fresh evidence before implementation work is represented as complete."),
+      member(5, "requestingCodeReview", "Builds a clear review handoff into the package's delivery workflow."),
+      member(6, "webPerf", "Completes quality checks with measured Core Web Vitals and browser performance diagnostics."),
     ],
   },
 ] as const;
@@ -1241,9 +1233,9 @@ export const launchPackageRepositoryUrls: readonly string[] = Object.freeze(
   )].sort(),
 );
 
-if (launchPackageRepositoryUrls.length !== 17) {
+if (launchPackageRepositoryUrls.length !== 14) {
   throw new Error(
-    `Launch package repository inventory changed: expected 17 public origins, found ${launchPackageRepositoryUrls.length}.`,
+    `Launch package repository inventory changed: expected 14 public origins, found ${launchPackageRepositoryUrls.length}.`,
   );
 }
 
