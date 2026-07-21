@@ -66,7 +66,7 @@ Stale, failed, credentials-required, and not-configured sources keep their previ
 
 Aisle's catalog contains only records for already-public upstream skills. Connectors may fetch bounded public artifacts transiently to validate schemas, inventory exact files, calculate hashes, inspect licensing, and run static checks. The catalog persists source metadata, immutable references, hashes, file fingerprints, license-evidence metadata, and trust/audit results—not `SKILL.md` bodies or copied skill trees.
 
-Installation resolves back to the verified immutable upstream source. Aisle packages are editorial reference manifests over existing skill revisions; they are not newly authored skills.
+Selection resolves to a verified public upstream locator and records the immutable observation. Aisle package manifests pin those catalog revisions, while installation tooling must disclose whether its upstream mechanism can enforce the exact revision. Packages are editorial reference manifests, not newly authored skills.
 
 ## Quality gates
 
