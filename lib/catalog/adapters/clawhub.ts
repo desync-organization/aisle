@@ -6,7 +6,7 @@ import {
   computeArtifactContentHash,
   normalizeArtifactFilePath,
 } from "../artifact-fingerprint";
-import { readBoundedResponse, requestTimeout } from "../http-safety";
+import { cancelBestEffort, readBoundedResponse, requestTimeout } from "../http-safety";
 import type {
   CatalogSourceConnector,
   ConnectorContext,
@@ -658,7 +658,7 @@ export class ClawHubAdapter implements CatalogSourceConnector {
   private async optionalJson(path: string): Promise<unknown | null> {
     const response = await this.request(path, "application/json", [404]);
     if (response.status === 404) {
-      await response.body?.cancel();
+      cancelBestEffort(response.body, "optional ClawHub response discarded");
       return null;
     }
     return this.decodeJson(response);
@@ -686,7 +686,7 @@ export class ClawHubAdapter implements CatalogSourceConnector {
       });
       if (response.ok || allowedStatuses.includes(response.status)) return response;
       if (response.status >= 300 && response.status < 400) {
-        await response.body?.cancel();
+        cancelBestEffort(response.body, "ClawHub redirect discarded");
         throw new ClawHubHttpError("ClawHub redirects are not followed", response.status);
       }
       const retryable = response.status === 429 || [502, 503, 504].includes(response.status);
@@ -714,7 +714,7 @@ export class ClawHubAdapter implements CatalogSourceConnector {
         Math.ceil(Math.max(baseDelay, 0) + Math.max(baseDelay, 0) * 0.2 * this.random()),
         60_000,
       );
-      await response.body?.cancel();
+      cancelBestEffort(response.body, "retryable ClawHub response discarded");
       await this.sleep(delay);
     }
     throw new ClawHubHttpError("ClawHub request failed", 503);

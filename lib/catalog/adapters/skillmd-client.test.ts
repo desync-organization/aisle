@@ -166,8 +166,9 @@ describe("SkillMdClient", () => {
   });
 
   it("fails redirects closed without fetching the Location target", async () => {
+    const cancel = vi.fn(() => new Promise<void>(() => undefined));
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
-      new Response(null, {
+      new Response(new ReadableStream({ cancel }), {
         status: 302,
         headers: { location: "https://attacker.invalid/redirected" },
       }),
@@ -178,7 +179,18 @@ describe("SkillMdClient", () => {
       maxAttempts: 3,
     });
 
-    await expect(client.listSkills()).rejects.toMatchObject({ status: 302 });
+    const outcome = await Promise.race([
+      client.listSkills().then(
+        () => ({ state: "resolved" as const, error: null }),
+        (error: unknown) => ({ state: "rejected" as const, error }),
+      ),
+      new Promise<{ state: "cancel-blocked"; error: null }>((resolve) =>
+        setTimeout(() => resolve({ state: "cancel-blocked", error: null }), 0),
+      ),
+    ]);
+
+    expect(outcome).toMatchObject({ state: "rejected", error: { status: 302 } });
+    expect(cancel).toHaveBeenCalledTimes(1);
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(fetchMock.mock.calls[0]?.[0]).toBe(
       "https://registry.example/v1/skills?limit=100&offset=0",

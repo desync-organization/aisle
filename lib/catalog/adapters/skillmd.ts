@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { z } from "zod";
 
 import { computeArtifactContentHash, normalizeArtifactFilePath } from "../artifact-fingerprint";
-import { readBoundedResponse, requestTimeout } from "../http-safety";
+import { cancelBestEffort, readBoundedResponse, requestTimeout } from "../http-safety";
 import { normalizeSkillPath, normalizeSourceUrl } from "../normalization";
 import type {
   CatalogSourceConnector,
@@ -345,7 +345,7 @@ export class SkillMdAdapter implements CatalogSourceConnector {
         signal: requestTimeout(),
       });
       if (!response.ok) {
-        await response.body?.cancel();
+        cancelBestEffort(response.body, "SkillMD source-file response discarded");
         complete = false;
         exclusions.push(`${item.slug}: ${entry.path} returned HTTP ${response.status}.`);
         continue;
@@ -548,7 +548,7 @@ export class SkillMdAdapter implements CatalogSourceConnector {
       signal: requestTimeout(),
     });
     if (!response.ok) {
-      await response.body?.cancel();
+      cancelBestEffort(response.body, "SkillMD GitHub metadata response discarded");
       throw new Error(`GitHub public source request returned HTTP ${response.status}`);
     }
     const bytes = await readBoundedResponse(response, 4_194_304);

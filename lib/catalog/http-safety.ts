@@ -1,10 +1,31 @@
+interface CancelableResource {
+  cancel(reason?: unknown): unknown;
+}
+
+/**
+ * Starts disposal without trusting a remote stream's cancellation promise to
+ * settle. Synchronous throws and asynchronous rejections are intentionally
+ * swallowed because this helper is used only after the response is discarded.
+ */
+export function cancelBestEffort(
+  resource: CancelableResource | null | undefined,
+  reason?: unknown,
+): void {
+  if (!resource) return;
+  try {
+    void Promise.resolve(resource.cancel(reason)).catch(() => undefined);
+  } catch {
+    // A hostile or non-standard stream must not block the caller's failure path.
+  }
+}
+
 export async function readBoundedResponse(
   response: Response,
   maximumBytes: number,
 ): Promise<Uint8Array> {
   const contentLength = Number(response.headers.get("content-length"));
   if (Number.isFinite(contentLength) && contentLength > maximumBytes) {
-    await response.body?.cancel();
+    cancelBestEffort(response.body, "response size limit exceeded");
     throw new Error(`Response exceeds the ${maximumBytes}-byte limit`);
   }
   if (!response.body) {
@@ -20,7 +41,7 @@ export async function readBoundedResponse(
       if (done) break;
       total += value.byteLength;
       if (total > maximumBytes) {
-        await reader.cancel("response size limit exceeded");
+        cancelBestEffort(reader, "response size limit exceeded");
         throw new Error(`Response exceeds the ${maximumBytes}-byte limit`);
       }
       chunks.push(value);

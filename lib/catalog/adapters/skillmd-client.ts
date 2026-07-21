@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import { cancelBestEffort } from "../http-safety";
+
 export const SKILLMD_MAX_RAW_BYTES = 200 * 1024;
 
 const DEFAULT_BASE_URL = "https://api.skillmd.com";
@@ -295,13 +297,6 @@ function abortReason(signal: AbortSignal): unknown {
   return signal.reason ?? new DOMException("The operation was aborted", "AbortError");
 }
 
-async function cancelBody(response: Response, reason: unknown): Promise<void> {
-  if (!response.body) {
-    return;
-  }
-  await response.body.cancel(reason).catch(() => undefined);
-}
-
 async function readBoundedText(
   response: Response,
   maximumBytes: number,
@@ -312,7 +307,7 @@ async function readBoundedText(
     const contentLength = Number(contentLengthHeader);
     if (Number.isSafeInteger(contentLength) && contentLength > maximumBytes) {
       const error = new SkillMdPayloadTooLargeError(maximumBytes, contentLength);
-      await cancelBody(response, error);
+      cancelBestEffort(response.body, error);
       throw error;
     }
   }
@@ -329,7 +324,7 @@ async function readBoundedText(
   const chunks: string[] = [];
   let observedBytes = 0;
   const cancelOnAbort = (): void => {
-    void reader.cancel(abortReason(signal)).catch(() => undefined);
+    cancelBestEffort(reader, abortReason(signal));
   };
   signal.addEventListener("abort", cancelOnAbort, { once: true });
 
@@ -346,7 +341,7 @@ async function readBoundedText(
       observedBytes += value.byteLength;
       if (observedBytes > maximumBytes) {
         const error = new SkillMdPayloadTooLargeError(maximumBytes, observedBytes);
-        await reader.cancel(error).catch(() => undefined);
+        cancelBestEffort(reader, error);
         throw error;
       }
       chunks.push(decoder.decode(value, { stream: true }));
@@ -608,7 +603,7 @@ export class SkillMdClient {
         });
 
         if (response.status >= 300 && response.status < 400) {
-          await response.body?.cancel();
+          cancelBestEffort(response.body, "SkillMD redirect discarded");
           throw new SkillMdHttpError(
             "SkillMD redirects are not followed",
             response.status,

@@ -1,7 +1,7 @@
 import { getVercelOidcToken } from "@vercel/oidc";
 import { z } from "zod";
 
-import { readBoundedResponse, requestTimeout } from "../http-safety";
+import { cancelBestEffort, readBoundedResponse, requestTimeout } from "../http-safety";
 
 const v1SkillSchema = z
   .object({
@@ -281,7 +281,7 @@ export class SkillsShClient {
         return { notModified: true, data: null, ...metadata };
       }
       if (response.status >= 300 && response.status < 400) {
-        await response.body?.cancel();
+        cancelBestEffort(response.body, "skills.sh redirect discarded");
         throw new SkillsShHttpError("skills.sh redirects are not followed", response.status, null);
       }
 

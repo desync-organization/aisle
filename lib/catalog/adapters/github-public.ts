@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { z } from "zod";
 
 import { computeArtifactContentHash } from "../artifact-fingerprint";
-import { readBoundedResponse, requestTimeout } from "../http-safety";
+import { cancelBestEffort, readBoundedResponse, requestTimeout } from "../http-safety";
 import { normalizeSkillPath, normalizeSourceUrl } from "../normalization";
 import type {
   CatalogSourceConnector,
@@ -193,7 +193,7 @@ export class GitHubPublicRepositoryAdapter implements CatalogSourceConnector {
         .join("/")}?ref=${encodeURIComponent(commit.sha)}`;
       const response = await this.githubFetch(manifestUrl, "application/vnd.github.raw+json");
       if (!response.ok) {
-        await response.body?.cancel();
+        cancelBestEffort(response.body, "GitHub manifest response discarded");
         degraded = true;
         exclusions.push(`${manifest.path}: manifest returned HTTP ${response.status}.`);
         records.push(unresolvedRecord(`manifest HTTP ${response.status}`));
@@ -251,7 +251,7 @@ export class GitHubPublicRepositoryAdapter implements CatalogSourceConnector {
             "application/vnd.github.raw+json",
           );
           if (!supportResponse.ok) {
-            await supportResponse.body?.cancel();
+            cancelBestEffort(supportResponse.body, "GitHub support-file response discarded");
             artifactComplete = false;
             degraded = true;
             continue;
@@ -393,7 +393,7 @@ export class GitHubPublicRepositoryAdapter implements CatalogSourceConnector {
         "application/vnd.github.raw+json",
       );
       if (!response.ok) {
-        await response.body?.cancel();
+        cancelBestEffort(response.body, "GitHub license response discarded");
         exclusions.push(`Repository-root ${entry.path} returned HTTP ${response.status}.`);
         return null;
       }
@@ -425,7 +425,7 @@ export class GitHubPublicRepositoryAdapter implements CatalogSourceConnector {
   private async githubJson(path: string): Promise<unknown> {
     const response = await this.githubFetch(path, "application/vnd.github+json");
     if (!response.ok) {
-      await response.body?.cancel();
+      cancelBestEffort(response.body, "GitHub JSON response discarded");
       throw new Error(`GitHub API returned HTTP ${response.status}`);
     }
     const bytes = await readBoundedResponse(response, 4_194_304);
@@ -448,7 +448,7 @@ export class GitHubPublicRepositoryAdapter implements CatalogSourceConnector {
         signal: requestTimeout(),
       });
       if (response.status >= 300 && response.status < 400) {
-        await response.body?.cancel();
+        cancelBestEffort(response.body, "GitHub redirect discarded");
         throw new Error("GitHub API redirects are not followed");
       }
       const rateLimited =
@@ -468,7 +468,7 @@ export class GitHubPublicRepositoryAdapter implements CatalogSourceConnector {
         : resetSeconds !== null && Number.isFinite(resetSeconds)
           ? resetSeconds * 1_000 - Date.now()
           : 500 * 2 ** attempt;
-      await response.body?.cancel();
+      cancelBestEffort(response.body, "retryable GitHub response discarded");
       await this.sleep(Math.min(Math.max(Math.ceil(requestedDelay), 0), 30_000));
     }
     return response!;

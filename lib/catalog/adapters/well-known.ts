@@ -8,7 +8,7 @@ import {
   computeArtifactContentHash,
   normalizeArtifactFilePath,
 } from "../artifact-fingerprint";
-import { readBoundedResponse, requestTimeout } from "../http-safety";
+import { cancelBestEffort, readBoundedResponse, requestTimeout } from "../http-safety";
 import type {
   CatalogSourceConnector,
   ConnectorContext,
@@ -317,7 +317,7 @@ export class WellKnownSkillsAdapter implements CatalogSourceConnector {
         if (!artifactResponse.ok) {
           degraded = true;
           exclusions.push(`${entry.name}: artifact returned HTTP ${artifactResponse.status}.`);
-          await artifactResponse.body?.cancel();
+          cancelBestEffort(artifactResponse.body, "well-known artifact response discarded");
           records.push(unresolvedRecord(`artifact HTTP ${artifactResponse.status}`));
           continue;
         }
@@ -447,7 +447,7 @@ export class WellKnownSkillsAdapter implements CatalogSourceConnector {
     if (primary.ok) {
       return { response: primary, indexUrl: primaryUrl, usedLegacyPath: false };
     }
-    await primary.body?.cancel();
+    cancelBestEffort(primary.body, "primary well-known index response discarded");
     if (primary.status !== 404) {
       throw new Error(`Well-known index returned HTTP ${primary.status}`);
     }
@@ -460,7 +460,7 @@ export class WellKnownSkillsAdapter implements CatalogSourceConnector {
       signal: requestTimeout(),
     });
     if (!legacy.ok) {
-      await legacy.body?.cancel();
+      cancelBestEffort(legacy.body, "legacy well-known index response discarded");
       throw new Error(`Well-known index was not found (legacy HTTP ${legacy.status})`);
     }
     return { response: legacy, indexUrl: legacyUrl, usedLegacyPath: true };
