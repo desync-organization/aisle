@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -57,9 +58,32 @@ describe("install command rendering", () => {
     expect(plan.commands.powershell51).toMatch(/^& \{ /);
     expect(plan.commands.powershell51).toContain("$LASTEXITCODE -ne 0");
     expect(plan.commands.powershell51).not.toContain(" && ");
-    expect(plan.commands.cmd).toContain('"npx" "--yes" "skills@1.5.19"');
+    expect(plan.commands.cmd).toContain('npx.cmd "--yes" "skills@1.5.19"');
+    expect(plan.commands.cmd).not.toContain('"npx"');
     expect(plan.commands.cmd).toContain(" && ");
   });
+
+  it.runIf(process.platform === "win32")(
+    "executes the rendered trusted npx token through cmd.exe",
+    () => {
+      const plan = createInstallPlan(installPlanFixture(undefined, { shell: "cmd" }));
+      const executable = plan.command.match(/^\S+/)?.[0];
+
+      expect(executable).toBe("npx.cmd");
+      const result = spawnSync(
+        "cmd.exe",
+        ["/d", "/s", "/c", `${executable} "--version"`],
+        {
+          encoding: "utf8",
+          windowsHide: true,
+          windowsVerbatimArguments: true,
+        },
+      );
+
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout.trim()).toMatch(/^\d+\.\d+\.\d+$/);
+    },
+  );
 
   it("selects the requested shell without changing the other renderings", () => {
     const plan = createInstallPlan(

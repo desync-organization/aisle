@@ -8,6 +8,7 @@ import type { InstallExecutionStep } from "./planner";
 export type ShellCommands = Readonly<Record<InstallShell, string>>;
 
 const controlCharacterPattern = /[\u0000-\u001f\u007f-\u009f]/;
+const CMD_NPX_EXECUTABLE = "npx.cmd";
 
 function assertRenderableArgument(value: string): void {
   if (controlCharacterPattern.test(value)) {
@@ -64,7 +65,10 @@ function renderPowerShellStep(step: InstallExecutionStep): string {
 }
 
 function renderCmdStep(step: InstallExecutionStep): string {
-  return allArguments(step).map(quoteCmdArgument).join(" ");
+  // `"npx"` makes cmd.exe resolve the extensionless Unix shim before
+  // npx.cmd on standard Node.js for Windows installations. The executable is
+  // a fixed planner token; only argv values pass through the cmd quoter.
+  return [CMD_NPX_EXECUTABLE, ...step.args.map(quoteCmdArgument)].join(" ");
 }
 
 function renderPowerShell51(steps: readonly InstallExecutionStep[]): string {
