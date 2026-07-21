@@ -4,7 +4,9 @@ import type { ReactNode } from "react";
 import "@fontsource-variable/jetbrains-mono";
 import "@fontsource-variable/manrope";
 import "./globals.css";
+import "./marketplace.css";
 
+import { SelectionProvider } from "@/lib/selection/react";
 import { siteDescription, siteOrigin } from "@/lib/seo";
 
 export const metadata: Metadata = {
@@ -46,7 +48,9 @@ export const viewport: Viewport = {
 export default function RootLayout({ children }: Readonly<{ children: ReactNode }>) {
   return (
     <html lang="en">
-      <body>{children}</body>
+      <body>
+        <SelectionProvider>{children}</SelectionProvider>
+      </body>
     </html>
   );
 }
