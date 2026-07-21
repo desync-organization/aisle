@@ -360,27 +360,64 @@ describe("CatalogSyncOrchestrator", () => {
 
   it("heartbeats through a slow page so a concurrent worker cannot steal the lease", async () => {
     let startedResolve!: () => void;
+    let releaseResolve!: () => void;
     const started = new Promise<void>((resolve) => {
       startedResolve = resolve;
     });
+    const release = new Promise<void>((resolve) => {
+      releaseResolve = resolve;
+    });
     const slow = new FixtureConnector("slow-fixture", async function* () {
       startedResolve();
-      await new Promise((resolve) => setTimeout(resolve, 240));
+      await release;
       yield* onePage([candidate("slow")]);
     });
     const orchestrator = new CatalogSyncOrchestrator(repository, {
       validateRecord: createAgentSkillValidator(),
-      leaseDurationMs: 100,
-      heartbeatIntervalMs: 20,
+      leaseDurationMs: 1_000,
+      heartbeatIntervalMs: 50,
     });
     const running = orchestrator.syncConnector(slow);
     await started;
-    await new Promise((resolve) => setTimeout(resolve, 170));
-    await expect(repository.acquireSyncRun("slow-fixture", 100)).rejects.toBeInstanceOf(
-      CatalogSyncLeaseConflictError,
-    );
-    await expect(running).resolves.toMatchObject({ status: "current" });
-  });
+    const [initialRun] = await connection.db
+      .select()
+      .from(syncRuns)
+      .where(eq(syncRuns.sourceId, "slow-fixture"));
+    const initialExpiry = initialRun?.leaseExpiresAt?.getTime() ?? 0;
+    const renewedExpiries = new Set<number>();
+    const observationDeadline = Date.now() + 8_000;
+    let latestExpiry = initialExpiry;
+    while (
+      (Date.now() <= initialExpiry || renewedExpiries.size < 2) &&
+      Date.now() < observationDeadline
+    ) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      const [observed] = await connection.db
+        .select({ leaseExpiresAt: syncRuns.leaseExpiresAt })
+        .from(syncRuns)
+        .where(eq(syncRuns.id, initialRun!.id));
+      latestExpiry = observed?.leaseExpiresAt?.getTime() ?? 0;
+      if (latestExpiry > initialExpiry) renewedExpiries.add(latestExpiry);
+    }
+
+    const attemptTime = Date.now();
+    let competingError: unknown = null;
+    try {
+      await repository.acquireSyncRun("slow-fixture", 1_000);
+    } catch (error) {
+      competingError = error;
+    } finally {
+      releaseResolve();
+    }
+    const result = await running;
+
+    expect(initialExpiry).toBeGreaterThan(0);
+    expect(attemptTime).toBeGreaterThan(initialExpiry);
+    expect(renewedExpiries.size).toBeGreaterThanOrEqual(2);
+    expect(latestExpiry).toBeGreaterThan(attemptTime);
+    expect(competingError).toBeInstanceOf(CatalogSyncLeaseConflictError);
+    expect(result).toMatchObject({ status: "current" });
+  }, 15_000);
 
   it("applies complete on-demand misses and lifecycle transitions atomically", async () => {
     const populated = new FixtureConnector(
