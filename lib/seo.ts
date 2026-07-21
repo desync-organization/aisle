@@ -7,6 +7,13 @@ export const siteOrigin = new URL(
   process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000",
 );
 
+export const siteSocialImage = {
+  url: "/aisle-social.png",
+  width: 1733,
+  height: 909,
+  alt: "Aisle public Agent Skills marketplace",
+} as const;
+
 export type SiteRelativePath = "/" | `/${string}`;
 
 export const sitemapRoutes = [
@@ -58,11 +65,13 @@ export function createPageMetadata({ description, path, title }: PageMetadata): 
       title,
       description,
       url: safePath,
+      images: [siteSocialImage],
     },
     twitter: {
-      card: "summary",
+      card: "summary_large_image",
       title,
       description,
+      images: [siteSocialImage.url],
     },
   };
 }

@@ -7,7 +7,7 @@ import "./globals.css";
 import "./marketplace.css";
 
 import { SelectionProvider } from "@/lib/selection/react";
-import { siteDescription, siteOrigin } from "@/lib/seo";
+import { siteDescription, siteOrigin, siteSocialImage } from "@/lib/seo";
 
 export const metadata: Metadata = {
   metadataBase: siteOrigin,
@@ -28,11 +28,13 @@ export const metadata: Metadata = {
     title: "Aisle — Build your agent stack",
     description: siteDescription,
     url: "/",
+    images: [siteSocialImage],
   },
   twitter: {
-    card: "summary",
+    card: "summary_large_image",
     title: "Aisle — Build your agent stack",
     description: siteDescription,
+    images: [siteSocialImage.url],
   },
   robots: {
     index: true,
