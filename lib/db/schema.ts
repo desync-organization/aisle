@@ -232,6 +232,7 @@ export const sourceListings = sqliteTable(
   },
   (table) => [
     uniqueIndex("source_listings_source_upstream_uidx").on(table.sourceId, table.upstreamId),
+    uniqueIndex("source_listings_id_skill_uidx").on(table.id, table.skillId),
     index("source_listings_skill_idx").on(table.skillId),
     index("source_listings_status_idx").on(table.status),
     index("source_listings_hash_idx").on(table.sourceHash),
@@ -266,6 +267,43 @@ export const skillCategories = sqliteTable(
     attribution: text("attribution").notNull().default("aisle"),
   },
   (table) => [primaryKey({ columns: [table.skillId, table.categoryId] })],
+);
+
+/**
+ * Exact source-observation evidence used to derive the source-attributed rows
+ * in `skill_categories`. Evidence is deliberately separate from the public
+ * materialization so independent sources cannot overwrite one another.
+ */
+export const skillCategoryEvidence = sqliteTable(
+  "skill_category_evidence",
+  {
+    sourceListingId: text("source_listing_id").notNull(),
+    skillId: text("skill_id").notNull(),
+    revisionId: text("revision_id").notNull(),
+    categoryId: text("category_id")
+      .notNull()
+      .references(() => categories.id, { onDelete: "cascade" }),
+    sourceHash: text("source_hash").notNull(),
+    observedRunId: text("observed_run_id").notNull(),
+    observedAt: integer("observed_at", { mode: "timestamp_ms" }).notNull(),
+  },
+  (table) => [
+    primaryKey({
+      columns: [table.sourceListingId, table.revisionId, table.categoryId],
+    }),
+    foreignKey({
+      columns: [table.sourceListingId, table.skillId],
+      foreignColumns: [sourceListings.id, sourceListings.skillId],
+      name: "skill_category_evidence_listing_skill_fk",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.revisionId, table.skillId],
+      foreignColumns: [skillRevisions.id, skillRevisions.skillId],
+      name: "skill_category_evidence_revision_skill_fk",
+    }).onDelete("cascade"),
+    index("skill_category_evidence_skill_idx").on(table.skillId),
+    index("skill_category_evidence_listing_idx").on(table.sourceListingId),
+  ],
 );
 
 export const auditRecords = sqliteTable(
@@ -410,6 +448,7 @@ export const schema = {
   repositories,
   skillAliases,
   skillCategories,
+  skillCategoryEvidence,
   skillDuplicates,
   skillRevisions,
   skills,
