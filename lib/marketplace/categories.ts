@@ -1,4 +1,4 @@
-import type { packageCategories } from "@/lib/packages";
+import { packageCategories } from "@/lib/packages";
 
 export type MarketplaceCategorySlug = (typeof packageCategories)[number];
 

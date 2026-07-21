@@ -1,6 +1,7 @@
 "use client";
 
 import { Check, GitBranch, Plus, ShieldCheck, TriangleAlert } from "lucide-react";
+import Link from "next/link";
 import { useState } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -48,7 +49,7 @@ export function SkillCard({ compact = false, skill }: { compact?: boolean; skill
       <div className="skill-card__identity">
         <span className="skill-card__monogram" aria-hidden="true">{skill.name.slice(0, 2).toUpperCase()}</span>
         <div>
-          <h3>{skill.name}</h3>
+          <h3><Link href={`/skills/${encodeURIComponent(skill.id)}`}>{skill.name}</Link></h3>
           <a href={skill.sourceUrl} rel="noreferrer" target="_blank">
             <GitBranch aria-hidden="true" size={13} /> {source}
           </a>

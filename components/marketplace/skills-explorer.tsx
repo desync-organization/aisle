@@ -1,7 +1,8 @@
 "use client";
 
-import { CircleDashed, Search, SlidersHorizontal, Sparkles, Trash2 } from "lucide-react";
-import { useDeferredValue, useMemo, useState } from "react";
+import { ArrowRight, CircleDashed, Search, SlidersHorizontal, Sparkles, Trash2 } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { useDeferredValue, useMemo, useState, type FormEvent } from "react";
 
 import { SkillCard } from "@/components/marketplace/skill-card";
 import { Button } from "@/components/ui/button";
@@ -33,13 +34,16 @@ const availabilityCopy: Record<CatalogAvailability, { title: string; body: strin
 
 export function SkillsExplorer({
   availability,
+  category,
   initialQuery = "",
   skills,
 }: {
   availability: CatalogAvailability;
+  category?: string;
   initialQuery?: string;
   skills: ReadonlyArray<MarketplaceSkillSummary>;
 }) {
+  const router = useRouter();
   const { actions, meta, state } = useSelection();
   const [query, setQuery] = useState(initialQuery);
   const [trust, setTrust] = useState<TrustFilter>("all");
@@ -69,21 +73,47 @@ export function SkillsExplorer({
 
   const emptyCopy = availabilityCopy[availability];
 
+  function catalogUrl(nextQuery: string): string {
+    const params = new URLSearchParams();
+    if (category) params.set("category", category);
+    if (nextQuery) params.set("q", nextQuery);
+    const encoded = params.toString();
+    return encoded ? `/skills?${encoded}` : "/skills";
+  }
+
+  function submitCatalogSearch(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const normalized = query.trim();
+    if (normalized === initialQuery.trim()) return;
+    router.push(catalogUrl(normalized));
+  }
+
+  function clearSearch() {
+    setQuery("");
+    if (initialQuery) router.push(catalogUrl(""));
+  }
+
   return (
     <div className="skills-explorer">
       <section aria-label="Catalog controls" className="skills-toolbar">
-        <label className="skills-search">
-          <span className="sr-only">Search loaded skills</span>
+        <form className="skills-search" onSubmit={submitCatalogSearch} role="search">
           <Search aria-hidden="true" size={18} />
+          <label className="sr-only" htmlFor="skills-explorer-search">Search the public skills catalog</label>
           <input
             autoComplete="off"
+            id="skills-explorer-search"
             onChange={(event) => setQuery(event.target.value)}
             placeholder="Search skills or public sources…"
             type="search"
             value={query}
           />
-          {query ? <button onClick={() => setQuery("")} type="button">Clear</button> : <kbd>/</kbd>}
-        </label>
+          <span className="skills-search__actions">
+            {query ? <button onClick={clearSearch} type="button">Clear</button> : null}
+            <button aria-label="Search the full catalog" className="skills-search__submit" type="submit">
+              Search <ArrowRight aria-hidden="true" size={13} />
+            </button>
+          </span>
+        </form>
         <div className="skills-toolbar__selects">
           <label>
             <span>Trust</span>

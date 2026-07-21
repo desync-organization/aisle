@@ -12,7 +12,7 @@ export function SelectionCount() {
     <Link
       aria-label={`Your Stack, ${state.count} selected`}
       className="stack-link"
-      href="/skills#selected-stack"
+      href="/stack"
     >
       <Layers3 aria-hidden="true" size={16} />
       <span>Your Stack</span>

@@ -154,6 +154,7 @@ function hasValidInstallSpec(value: unknown): boolean {
 }
 
 export interface CatalogSearchOptions {
+  id?: string;
   query?: string;
   category?: string;
   lifecycle?: LifecycleState[];
@@ -424,6 +425,10 @@ export class CatalogRepository {
       noLatestObservedFail(),
     ];
 
+    if (options.id) {
+      conditions.push(eq(skills.id, options.id));
+    }
+
     if (options.query?.trim()) {
       const pattern = `%${options.query.trim()}%`;
       conditions.push(
@@ -440,8 +445,10 @@ export class CatalogRepository {
         id: skills.id,
         name: skills.upstreamName,
         description: skills.upstreamDescription,
+        provider: skills.provider,
         sourceUrl: skills.sourceUrl,
         skillPath: skills.skillPath,
+        compatibility: skills.compatibility,
         lifecycle: skills.lifecycle,
         officialProvenance: skills.officialProvenance,
         revisionId: skillRevisions.id,

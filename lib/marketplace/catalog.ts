@@ -18,6 +18,13 @@ export type MarketplaceSkillSummary = Readonly<{
   installs: number;
 }>;
 
+export type MarketplaceSkillDetail = MarketplaceSkillSummary & Readonly<{
+  provider: string;
+  compatibility: string | null;
+  revisionId: string;
+  contentHash: string;
+}>;
+
 export type MarketplaceCategoryFacet = Readonly<{
   key: string;
   name: string;
@@ -44,6 +51,11 @@ export type ResolvedPackageSnapshot = Readonly<{
       immutableRef: string;
     }>
   >;
+}>;
+
+export type MarketplaceSkillSnapshot = Readonly<{
+  availability: CatalogAvailability;
+  skill: MarketplaceSkillDetail | null;
 }>;
 
 function hasConfiguredDatabase(): boolean {
@@ -133,6 +145,45 @@ export async function loadResolvedPackage(slug: string): Promise<ResolvedPackage
     };
   } catch {
     return { availability: "unavailable", members: [] };
+  } finally {
+    connection.client.close();
+  }
+}
+
+export async function loadMarketplaceSkill(id: string): Promise<MarketplaceSkillSnapshot> {
+  if (!hasConfiguredDatabase()) {
+    return { availability: "not-configured", skill: null };
+  }
+
+  const connection = createCatalogDatabase();
+  const repository = new CatalogRepository(connection.db);
+
+  try {
+    const [row] = await repository.search({ id, limit: 1 });
+    if (!row) return { availability: "empty", skill: null };
+
+    return {
+      availability: "ready",
+      skill: {
+        id: row.id,
+        name: row.name,
+        description: row.description,
+        provider: row.provider,
+        sourceUrl: row.sourceUrl,
+        skillPath: row.skillPath,
+        compatibility: row.compatibility,
+        lifecycle: row.lifecycle,
+        officialProvenance: row.officialProvenance,
+        revisionId: row.revisionId,
+        immutableRef: row.immutableRef,
+        contentHash: row.contentHash,
+        license: row.license,
+        trustState: row.trustState,
+        installs: row.installs,
+      },
+    };
+  } catch {
+    return { availability: "unavailable", skill: null };
   } finally {
     connection.client.close();
   }

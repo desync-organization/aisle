@@ -85,7 +85,12 @@ export default async function SkillsPage({ searchParams }: SkillsPageProps) {
             </div>
           ) : null}
 
-          <SkillsExplorer availability={catalog.availability} initialQuery={query} skills={catalog.skills} />
+          <SkillsExplorer
+            availability={catalog.availability}
+            category={category?.slug}
+            initialQuery={query}
+            skills={catalog.skills}
+          />
         </div>
       </main>
       <SiteFooter />
