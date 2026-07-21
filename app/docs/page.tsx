@@ -31,7 +31,7 @@ const formatParts = [
   {
     icon: FileCode2,
     title: "SKILL.md is required",
-    body: "YAML frontmatter names and describes the skill. Markdown below it carries the instructions an agent reads after activation.",
+    body: "YAML frontmatter requires a 1–64 character lowercase name and a non-empty description of at most 1,024 characters. Markdown below carries the activation-time instructions.",
   },
   {
     icon: FolderOpen,
@@ -41,7 +41,7 @@ const formatParts = [
   {
     icon: Braces,
     title: "Clients decide support",
-    body: "License, compatibility, metadata, and allowed-tools may appear in frontmatter. Experimental fields can behave differently by client.",
+    body: "License, metadata, a compatibility note of at most 500 characters, and experimental allowed-tools may appear in frontmatter. Client behavior can differ.",
   },
 ] as const;
 
