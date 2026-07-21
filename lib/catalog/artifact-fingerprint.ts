@@ -149,6 +149,13 @@ function hashNormalizedInventory(files: readonly PersistedFileInventoryEntry[]):
     .digest("hex");
 }
 
+function isExecutableRegularFileMode(mode: string): boolean {
+  const permissions = /^100([0-7]{3})$/.exec(mode)?.[1];
+  return permissions
+    ? [...permissions].some((digit) => (Number.parseInt(digit, 8) & 1) === 1)
+    : false;
+}
+
 /** Hashes the complete installed inventory, including verified non-text bytes. */
 export function computeArtifactContentHash(files: readonly ArtifactInventoryInput[]): string {
   return hashNormalizedInventory(normalizeVerifiedInventory(files));
@@ -192,7 +199,7 @@ export function createPersistedFileInventory(
     }
     if (file.type === "file") regularFileCount += 1;
     if (file.type === "binary") binaryFileCount += 1;
-    if (/^1007(?:00|55)$/.test(file.mode)) executableFileCount += 1;
+    if (isExecutableRegularFileMode(file.mode)) executableFileCount += 1;
 
     const entryBytes = Buffer.byteLength(JSON.stringify(file), "utf8") + (files.length ? 1 : 0);
     if (files.length >= maxEntries || serializedBytes + entryBytes > maxEntriesBytes) {

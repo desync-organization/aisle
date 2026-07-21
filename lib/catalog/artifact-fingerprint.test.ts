@@ -82,6 +82,30 @@ describe("persisted artifact inventory", () => {
       .toThrow(/mode is invalid/);
   });
 
+  it.each([
+    ["100744", 1],
+    ["100711", 1],
+    ["100775", 1],
+    ["100777", 1],
+    ["100644", 0],
+    ["120777", 0],
+  ])("counts regular-file execute bits for mode %s", (mode, expectedCount) => {
+    const files = [
+      {
+        path: "scripts/run",
+        type: mode === "120777" ? "symlink" : "file",
+        mode,
+        size: 0,
+        sha: sha256(""),
+      },
+    ];
+    const summary = createPersistedFileInventory(
+      { complete: true, files },
+      computeArtifactContentHash(files),
+    );
+    expect(summary.executableFileCount).toBe(expectedCount);
+  });
+
   it("truncates bounded display entries while retaining full counts, bytes, and aggregate hash", () => {
     const files = Array.from({ length: 5 }, (_, index) => ({
       path: `files/${index}.txt`,
