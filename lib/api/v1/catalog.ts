@@ -39,6 +39,7 @@ type PublicTrustState = "pass" | "warn" | "unreviewed" | "fail" | "quarantined";
 type VisibleSkillRow = Readonly<{
   id: string;
   name: string;
+  sortName: string;
   description: string | null;
   compatibility: string | null;
   provider: string;
@@ -147,6 +148,7 @@ function skillSelection() {
   return {
     id: skills.id,
     name: skills.upstreamName,
+    sortName: nameExpression,
     description: skills.upstreamDescription,
     compatibility: skills.compatibility,
     provider: skills.provider,
@@ -455,10 +457,10 @@ export async function listPublicSkills(database: CatalogDatabase, query: SkillsQ
         scope: "skills",
         filterHash,
         key: query.sort === "popular"
-          ? [last.installs, last.name.toLowerCase()]
+          ? [last.installs, last.sortName]
           : query.sort === "recent"
             ? [last.updatedAt.getTime()]
-            : [last.name.toLowerCase()],
+            : [last.sortName],
         id: last.id,
       })
     : null;
@@ -522,6 +524,10 @@ function packagesFilterHash(query: PackagesQuery): string {
   });
 }
 
+function compareText(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
 function packageSummary(
   row: Awaited<ReturnType<CatalogRepository["listPublishedPackages"]>>[number],
 ) {
@@ -565,10 +571,13 @@ export async function listPublicPackages(
 
   rows.sort((left, right) => {
     if (query.sort === "recent") {
-      const published = right.publishedAt.localeCompare(left.publishedAt);
-      return published || left.id.localeCompare(right.id);
+      const published = compareText(right.publishedAt, left.publishedAt);
+      return published || compareText(left.id, right.id);
     }
-    return left.title.localeCompare(right.title) || left.id.localeCompare(right.id);
+    return (
+      compareText(left.title.toLowerCase(), right.title.toLowerCase()) ||
+      compareText(left.id, right.id)
+    );
   });
 
   if (cursor) {
