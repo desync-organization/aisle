@@ -1,4 +1,5 @@
 import type { CatalogRepository } from "./repository";
+import { widerPublicSourceDescriptors } from "../catalog/adapters/wider-public-sources";
 
 export const taxonomySeed = [
   ["frontend", "Frontend", "UI engineering, browser experiences, and frontend frameworks."],
@@ -71,6 +72,7 @@ export const sourceDescriptorSeed = [
       "The documented API requires a search query and rejects wildcard enumeration, so only future labeled federated searches are eligible.",
     ],
   },
+  ...widerPublicSourceDescriptors,
   {
     id: "clawhub",
     name: "ClawHub",

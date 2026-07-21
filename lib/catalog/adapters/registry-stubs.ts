@@ -3,6 +3,7 @@ import type {
   ConnectorContext,
   ConnectorPage,
 } from "../source-contract";
+import { widerPublicSourceDescriptors } from "./wider-public-sources";
 
 class ProviderApprovedStub implements CatalogSourceConnector {
   constructor(readonly descriptor: CatalogSourceConnector["descriptor"]) {}
@@ -34,4 +35,5 @@ export const providerApprovedRegistryStubs: CatalogSourceConnector[] = [
       "The documented API requires a search query and rejects wildcard enumeration, so only future labeled federated searches are eligible.",
     ],
   }),
+  ...widerPublicSourceDescriptors.map((descriptor) => new ProviderApprovedStub(descriptor)),
 ];
