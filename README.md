@@ -45,8 +45,9 @@ npm run catalog:sync
 The catalog CLI reads its process environment. Use the names documented in `.env.example`; for local PowerShell runs, set the required values with `$env:NAME = "value"` before invoking the command. The Next.js runtime also reads `.env.local`.
 
 - `skills.sh` requires a request-scoped Vercel OIDC token. A linked Vercel runtime supplies it through `@vercel/oidc`; local development can use the short-lived `SKILLS_SH_OIDC_TOKEN` override.
-- `GITHUB_TOKEN` increases public GitHub API limits for SkillMD hydration and explicitly configured repositories. It is required when `AISLE_AGENTSKILLS_IN_ENABLED=true`. Use a public-only token that does not grant Aisle access to private repositories.
+- `GITHUB_TOKEN` increases public GitHub API limits for SkillMD hydration and explicitly configured repositories. It is required when `AISLE_AGENTSKILLS_IN_ENABLED=true` or `AISLE_ASKSKILL_ENABLED=true`. Use a public-only token that does not grant Aisle access to private repositories.
 - `AISLE_AGENTSKILLS_IN_ENABLED` defaults to `false`. Setting it to `true` opts into bounded AgentSkills.in discovery plus exact public-GitHub hydration; a missing GitHub token leaves the source honestly `not-configured` and performs no provider fetch.
+- `AISLE_ASKSKILL_ENABLED` defaults to `false`. Setting it to `true` opts into bounded AskSkill page discovery plus exact public-GitHub hydration. Missing either the flag or GitHub token keeps the source `not-configured` without requesting AskSkill.
 - `AISLE_GITHUB_REPOSITORIES` is a comma-separated allowlist of public GitHub repository URLs to inspect for `SKILL.md` files at exact commits.
 - `AISLE_WELL_KNOWN_ORIGINS` is a comma-separated administrator allowlist, but these connectors remain `not-configured` and perform no fetch until hostname traffic is IP-pinned or egress-contained against DNS rebinding. Setting the variable alone does not bypass that guard.
 
@@ -59,6 +60,7 @@ There is no universal registry of every public Agent Skill. Aisle can only claim
 - Full sources such as `skills.sh` and ClawHub become current only after a complete, internally consistent terminal crawl. Pagination drift, duplicate identities, failed hydration, or count mismatches leave coverage partial and do not retire unseen records.
 - SkillMD is federated and non-retiring: its offset API has no stable snapshot token, so a sweep remains partial even after its terminal page.
 - AgentSkills.in is opt-in and non-retiring. Its mutable offset pages always remain partial/degraded; registry rows only nominate exact GitHub repository and `SKILL.md` paths, and failed, oversized, duplicate, or identity-conflicting hydrations become bounded exclusions.
+- AskSkill is opt-in, federated, and non-retiring. Its totals and page windows may be estimated or limited, every sweep remains partial/degraded, and only exact GitHub-hydrated identities enter the catalog. Provider scores, badges, and instruction bodies are not trust evidence or persisted discovery data.
 - Configured GitHub repositories are explicit, on-demand sources. Their coverage applies only to those named public repositories.
 - SkillsMP and well-known hostname discovery remain visibly `not-configured` until their enumeration or transport requirements can be met safely.
 
