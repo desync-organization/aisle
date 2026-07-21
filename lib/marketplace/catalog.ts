@@ -111,6 +111,20 @@ function boundedInteger(value: number | undefined, fallback: number, maximum: nu
   return Math.min(Math.max(candidate, 1), maximum);
 }
 
+function boundedExclusions(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const exclusions = new Set<string>();
+  for (const candidate of value.slice(0, 50)) {
+    if (typeof candidate !== "string") continue;
+    const normalized = candidate
+      .replace(/[\u0000-\u001f\u007f]+/gu, " ")
+      .trim()
+      .slice(0, 512);
+    if (normalized) exclusions.add(normalized);
+  }
+  return [...exclusions];
+}
+
 export async function loadMarketplaceCatalog(
   options: Readonly<{
     query?: string;
@@ -223,9 +237,7 @@ export async function loadMarketplaceCoverage(): Promise<MarketplaceCoverageSnap
       lastSuccessfulSyncAt: row.lastSuccessfulSyncAt?.toISOString() ?? null,
       lagMs: row.lagMs,
       degraded: Boolean(row.error) || !["current", "not-configured"].includes(row.state),
-      exclusions: Array.isArray(row.exclusions)
-        ? row.exclusions.filter((value): value is string => typeof value === "string")
-        : [],
+      exclusions: boundedExclusions(row.exclusions),
     }));
     const successful = sources
       .map((source) => source.lastSuccessfulSyncAt)
