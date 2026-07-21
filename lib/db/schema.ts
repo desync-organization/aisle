@@ -10,6 +10,10 @@ import {
 } from "drizzle-orm/sqlite-core";
 
 export const sourceModes = ["full", "incremental", "federated", "on-demand"] as const;
+export const sourceFreshnessPolicies = [
+  "retain",
+  "latest-completed-observation",
+] as const;
 export const syncStatuses = ["running", "succeeded", "partial", "failed"] as const;
 export const listingStatuses = ["unresolved", "current", "stale", "unavailable", "removed"] as const;
 export const lifecycleStates = ["current", "stale", "unavailable", "removed"] as const;
@@ -31,6 +35,9 @@ export const catalogSources = sqliteTable(
     name: text("name").notNull(),
     baseUrl: text("base_url").notNull(),
     mode: text("mode", { enum: sourceModes }).notNull(),
+    freshnessPolicy: text("freshness_policy", { enum: sourceFreshnessPolicies })
+      .notNull()
+      .default("retain"),
     enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
     upstreamIdentifier: text("upstream_identifier").notNull(),
     termsUrl: text("terms_url"),
@@ -72,6 +79,9 @@ export const syncRuns = sqliteTable(
     leaseToken: text("lease_token"),
     leaseExpiresAt: integer("lease_expires_at", { mode: "timestamp_ms" }),
     completeCrawl: integer("complete_crawl", { mode: "boolean" }).notNull().default(false),
+    observationSweepComplete: integer("observation_sweep_complete", { mode: "boolean" })
+      .notNull()
+      .default(false),
     checkpointJson: text("checkpoint_json", { mode: "json" })
       .$type<Record<string, unknown>>()
       .notNull()
@@ -215,15 +225,21 @@ export const sourceListings = sqliteTable(
     status: text("status", { enum: listingStatuses }).notNull().default("unresolved"),
     rawJson: text("raw_json", { mode: "json" }).$type<Record<string, unknown>>().notNull(),
     lastSeenRunId: text("last_seen_run_id").references(() => syncRuns.id, { onDelete: "set null" }),
+    lastCompletedObservationRunId: text("last_completed_observation_run_id"),
     missedCompleteCrawls: integer("missed_complete_crawls").notNull().default(0),
     firstSeenAt: integer("first_seen_at", { mode: "timestamp_ms" }).notNull(),
     lastSeenAt: integer("last_seen_at", { mode: "timestamp_ms" }).notNull(),
   },
   (table) => [
     uniqueIndex("source_listings_source_upstream_uidx").on(table.sourceId, table.upstreamId),
+    uniqueIndex("source_listings_id_skill_uidx").on(table.id, table.skillId),
     index("source_listings_skill_idx").on(table.skillId),
     index("source_listings_status_idx").on(table.status),
     index("source_listings_hash_idx").on(table.sourceHash),
+    index("source_listings_freshness_idx").on(
+      table.sourceId,
+      table.lastCompletedObservationRunId,
+    ),
   ],
 );
 
@@ -251,6 +267,72 @@ export const skillCategories = sqliteTable(
     attribution: text("attribution").notNull().default("aisle"),
   },
   (table) => [primaryKey({ columns: [table.skillId, table.categoryId] })],
+);
+
+/**
+ * One exact, possibly empty category-classification snapshot for a listing in
+ * a sync run. Keeping the header separate makes an empty classification
+ * distinguishable from a run that never reached category classification.
+ */
+export const skillCategoryObservations = sqliteTable(
+  "skill_category_observations",
+  {
+    sourceListingId: text("source_listing_id").notNull(),
+    observedRunId: text("observed_run_id")
+      .notNull()
+      .references(() => syncRuns.id, { onDelete: "cascade" }),
+    skillId: text("skill_id").notNull(),
+    revisionId: text("revision_id").notNull(),
+    sourceHash: text("source_hash").notNull(),
+    observedAt: integer("observed_at", { mode: "timestamp_ms" }).notNull(),
+  },
+  (table) => [
+    primaryKey({
+      columns: [table.sourceListingId, table.observedRunId],
+    }),
+    foreignKey({
+      columns: [table.sourceListingId, table.skillId],
+      foreignColumns: [sourceListings.id, sourceListings.skillId],
+      name: "skill_category_observations_listing_skill_fk",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.revisionId, table.skillId],
+      foreignColumns: [skillRevisions.id, skillRevisions.skillId],
+      name: "skill_category_observations_revision_skill_fk",
+    }).onDelete("cascade"),
+    index("skill_category_observations_skill_idx").on(table.skillId),
+    index("skill_category_observations_run_idx").on(table.observedRunId),
+  ],
+);
+
+/**
+ * Categories belonging to a versioned source observation. Evidence remains
+ * separate from the public materialization so independent sources and running
+ * syncs cannot overwrite one another.
+ */
+export const skillCategoryEvidence = sqliteTable(
+  "skill_category_evidence",
+  {
+    sourceListingId: text("source_listing_id").notNull(),
+    observedRunId: text("observed_run_id").notNull(),
+    categoryId: text("category_id")
+      .notNull()
+      .references(() => categories.id, { onDelete: "cascade" }),
+  },
+  (table) => [
+    primaryKey({
+      columns: [table.sourceListingId, table.observedRunId, table.categoryId],
+    }),
+    foreignKey({
+      columns: [table.sourceListingId, table.observedRunId],
+      foreignColumns: [
+        skillCategoryObservations.sourceListingId,
+        skillCategoryObservations.observedRunId,
+      ],
+      name: "skill_category_evidence_observation_fk",
+    }).onDelete("cascade"),
+    index("skill_category_evidence_listing_idx").on(table.sourceListingId),
+  ],
 );
 
 export const auditRecords = sqliteTable(
@@ -411,6 +493,8 @@ export const schema = {
   repositories,
   skillAliases,
   skillCategories,
+  skillCategoryEvidence,
+  skillCategoryObservations,
   skillDuplicates,
   skillRevisions,
   skills,

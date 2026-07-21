@@ -72,7 +72,12 @@ function candidate(source = "orchestrator-fixture"): DiscoveredSkillRecord {
       textFiles,
       files,
     },
-    raw: {},
+    raw: {
+      kind: "github-skill",
+      repository: `example/${source}`,
+      manifestPath: "fixture-safe/SKILL.md",
+      commit: immutableRef,
+    },
   };
 }
 
@@ -82,13 +87,18 @@ class FixtureConnector implements CatalogSourceConnector {
   constructor(
     id: string,
     private readonly factory: (context: ConnectorContext) => AsyncIterable<ConnectorPage>,
-    options: { enabled?: boolean; mode?: "full" | "incremental" | "federated" | "on-demand" } = {},
+    options: {
+      enabled?: boolean;
+      mode?: "full" | "incremental" | "federated" | "on-demand";
+      freshnessPolicy?: "retain" | "latest-completed-observation";
+    } = {},
   ) {
     this.descriptor = {
       id,
       name: id,
       baseUrl: `https://example.com/${id}`,
       mode: options.mode ?? ("full" as const),
+      freshnessPolicy: options.freshnessPolicy,
       upstreamIdentifier: id,
       enabled: options.enabled,
       initialCoverageState: options.enabled === false ? "not-configured" : "not-synced",
@@ -288,6 +298,68 @@ describe("CatalogSyncOrchestrator", () => {
     expect(await repository.search()).toEqual([]);
     const [listing] = await connection.db.select().from(sourceListings);
     expect(listing).toMatchObject({ status: "unresolved", skillId: null });
+  });
+
+  it("does not reuse completed-observation certification after an incomplete rebinding", async () => {
+    const sourceId = "freshness-binding-fixture";
+    const valid = candidate("freshness-binding");
+    const unresolved = {
+      ...valid,
+      installUrl: null,
+      installSpec: null,
+      immutableRef: null,
+      contentHash: null,
+      upstreamHash: null,
+      artifact: null,
+    } satisfies DiscoveredSkillRecord;
+    const options = {
+      freshnessPolicy: "latest-completed-observation" as const,
+    };
+    const completedValid = new FixtureConnector(
+      sourceId,
+      () => onePage([valid], false),
+      options,
+    );
+    const completedTombstone = new FixtureConnector(
+      sourceId,
+      () => onePage([unresolved], false),
+      options,
+    );
+    const incompleteReappearance = new FixtureConnector(
+      sourceId,
+      async function* () {
+        yield {
+          records: [valid],
+          nextCursor: "next",
+          hasMore: true,
+          reportedTotal: null,
+          completeSnapshot: false,
+        };
+        throw new Error("Inert interruption after a valid reappearance");
+      },
+      options,
+    );
+    const orchestrator = new CatalogSyncOrchestrator(repository, {
+      validateRecord: createAgentSkillValidator(),
+    });
+
+    expect((await orchestrator.syncConnector(completedValid)).status).toBe("partial");
+    expect(await repository.search()).toHaveLength(1);
+    expect((await orchestrator.syncConnector(completedTombstone)).status).toBe("partial");
+    let [listing] = await connection.db.select().from(sourceListings);
+    expect(listing).toMatchObject({
+      status: "unresolved",
+      skillId: null,
+      lastCompletedObservationRunId: null,
+    });
+
+    expect((await orchestrator.syncConnector(incompleteReappearance)).status).toBe("partial");
+    [listing] = await connection.db.select().from(sourceListings);
+    expect(listing).toMatchObject({
+      status: "current",
+      lastCompletedObservationRunId: null,
+    });
+    expect(await repository.search()).toEqual([]);
   });
 
   it("replays transient validation failures without advancing the page checkpoint", async () => {

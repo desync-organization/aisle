@@ -97,7 +97,16 @@ export class CatalogSyncOrchestrator {
     const run = await this.repository.acquireSyncRun(
       connector.descriptor.id,
       this.leaseDurationMs,
+      {
+        resumePartial:
+          connector.descriptor.freshnessPolicy !== "latest-completed-observation",
+      },
     );
+    const fence = {
+      sourceId: connector.descriptor.id,
+      runId: run.id,
+      leaseToken: run.leaseToken,
+    };
     const heartbeat = startSyncLeaseHeartbeat(this.repository, {
       runId: run.id,
       leaseToken: run.leaseToken,
@@ -155,7 +164,7 @@ export class CatalogSyncOrchestrator {
         const transientFailures: string[] = [];
         for (const candidate of page.records) {
           try {
-            await this.ingestion.persist(connector.descriptor.id, run.id, candidate);
+            await this.ingestion.persist(fence, candidate);
             processed += 1;
           } catch (error) {
             if (error instanceof ZodError || error instanceof CatalogNormalizationError) {
@@ -218,11 +227,18 @@ export class CatalogSyncOrchestrator {
           `Snapshot proved ${seenCount} distinct durable records and ${processed} observations for reported total ${reportedTotal ?? "unknown"}`,
         );
       }
-      const completeCrawl =
+      const reportedTotalConsistent =
+        reportedTotalMode !== "reported" ||
+        (reportedTotal !== null && processed === reportedTotal && seenCount === reportedTotal);
+      const observationSweepComplete =
         sawPage &&
         sawTerminalPage &&
-        completeSnapshot &&
         !degraded &&
+        seenCount === processed &&
+        reportedTotalConsistent;
+      const completeCrawl =
+        observationSweepComplete &&
+        completeSnapshot &&
         coverageFailures.length === 0;
       await this.repository.finishSyncRun({
         runId: run.id,
@@ -233,6 +249,7 @@ export class CatalogSyncOrchestrator {
         partialFailures: coverageFailures,
         exclusions: [...exclusions],
         completeCrawl,
+        observationSweepComplete,
         unavailableAfter: this.unavailableAfterCompleteMisses,
       });
 

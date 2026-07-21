@@ -315,7 +315,15 @@ describe("catalog migrations", () => {
       expect.arrayContaining([
         "sync_runs_one_running_per_source_uidx",
         "skill_revisions_id_skill_uidx",
+        "source_listings_freshness_idx",
       ]),
+    );
+    expect(await columnNames(connection, "catalog_sources")).toContain("freshness_policy");
+    expect(await columnNames(connection, "sync_runs")).toContain(
+      "observation_sweep_complete",
+    );
+    expect(await columnNames(connection, "source_listings")).toContain(
+      "last_completed_observation_run_id",
     );
   });
 });

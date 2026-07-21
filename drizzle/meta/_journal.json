@@ -36,6 +36,20 @@
       "when": 1784589182987,
       "tag": "0004_catalog-corrective-hardening",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1784678400000,
+      "tag": "0005_source-observation-freshness",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1784692800000,
+      "tag": "0006_observation_category_evidence",
+      "breakpoints": true
     }
   ]
 }

@@ -138,7 +138,7 @@ describe("SkillMdAdapter", () => {
     const fetchMock = githubFetch();
     const page = await firstPage(
       new SkillMdAdapter({
-        client: client(),
+        client: client(detail({ category: "Data & AI" })),
         fetch: fetchMock,
         githubToken: "fixture-github-token",
       }),
@@ -150,6 +150,7 @@ describe("SkillMdAdapter", () => {
       sourceUrl: "https://github.com/fixture-owner/fixture-repository",
       skillPath: "skills/fixture-safe",
       immutableRef: COMMIT,
+      categoryHints: { categories: ["Data & AI"], tags: [] },
       installSpec: {
         kind: "source",
         sourceUrl: "https://github.com/fixture-owner/fixture-repository",
@@ -222,7 +223,10 @@ describe("SkillMdAdapter", () => {
       const persisted = await new CatalogIngestionService(
         repository,
         createAgentSkillValidator(),
-      ).persist("skillmd", run.id, record);
+      ).persist(
+        { sourceId: "skillmd", runId: run.id, leaseToken: run.leaseToken },
+        record,
+      );
       const [storedListing] = await connection.db.select().from(sourceListings);
       const persistedJson = JSON.stringify(storedListing?.rawJson);
 

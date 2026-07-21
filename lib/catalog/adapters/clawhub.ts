@@ -7,6 +7,7 @@ import {
   normalizeArtifactFilePath,
 } from "../artifact-fingerprint";
 import { cancelBestEffort, readBoundedResponse, requestTimeout } from "../http-safety";
+import { createPersistedSkillRaw } from "../provider-raw";
 import type {
   CatalogSourceConnector,
   ConnectorContext,
@@ -307,6 +308,7 @@ export class ClawHubAdapter implements CatalogSourceConnector {
     name: "ClawHub",
     baseUrl: "https://clawhub.ai/api/v1/skills",
     mode: "full" as const,
+    freshnessPolicy: "latest-completed-observation" as const,
     upstreamIdentifier: "ClawHub public skills HTTP API",
     termsUrl: "https://docs.openclaw.ai/clawhub/http-api",
     knownExclusions: [
@@ -441,19 +443,31 @@ export class ClawHubAdapter implements CatalogSourceConnector {
         `/api/v1/skills/${encodeURIComponent(slug)}/scan?version=${encodeURIComponent(version)}&${ownerQuery}`,
       ),
     );
-    const effectiveModeration =
-      (moderationSchema.nullable().safeParse(
-        moderation && typeof moderation === "object" && "moderation" in moderation
-          ? (moderation as { moderation: unknown }).moderation
-          : moderation,
-      ).data ?? scan?.moderation ?? detail.moderation ?? null);
-    if (
-      effectiveModeration?.isMalwareBlocked ||
-      effectiveModeration?.isHiddenByMod ||
-      effectiveModeration?.isRemoved
-    ) {
+    const endpointModeration = moderationSchema.nullable().safeParse(
+      moderation && typeof moderation === "object" && "moderation" in moderation
+        ? (moderation as { moderation: unknown }).moderation
+        : moderation,
+    ).data ?? null;
+    const moderationSignals = [
+      endpointModeration,
+      scan?.moderation ?? null,
+      detail.moderation ?? null,
+    ];
+    const blockingModeration = moderationSignals.find((signal) =>
+      signal?.isMalwareBlocked || signal?.isHiddenByMod || signal?.isRemoved
+    ) ?? null;
+    const effectiveModeration = blockingModeration ??
+      moderationSignals.find((signal): signal is Moderation => signal !== null) ??
+      null;
+    if (blockingModeration) {
       exclusions.push(`${identity}: no longer publicly eligible under ClawHub moderation.`);
-      return null;
+      return this.unresolvedRecord(
+        item,
+        detail,
+        "explicit moderation tombstone",
+        effectiveModeration,
+        scan,
+      );
     }
 
     const encodedVersion = encodeURIComponent(version);
@@ -612,7 +626,8 @@ export class ClawHubAdapter implements CatalogSourceConnector {
             files: artifactFiles,
           }
         : null,
-      raw: {
+      raw: createPersistedSkillRaw({
+        kind: "clawhub-skill",
         listing: persistedClawHubListing(item),
         detail: persistedClawHubDetail(detail),
         inventoryHash,
@@ -621,11 +636,17 @@ export class ClawHubAdapter implements CatalogSourceConnector {
         moderation: persistedModerationSummary(effectiveModeration),
         scan: persistedScanSummary(scan),
         verification: persistedVerificationSummary(verification),
-      },
+      }),
     };
   }
 
-  private unresolvedRecord(item: ListItem, detail: Detail): DiscoveredSkillRecord {
+  private unresolvedRecord(
+    item: ListItem,
+    detail: Detail,
+    reason = "exact version unavailable",
+    moderation: Moderation | null = null,
+    scan: Scan | null = null,
+  ): DiscoveredSkillRecord {
     const owner = detail.owner!.handle;
     const identity = `@${owner}/${detail.skill.slug}`;
     return {
@@ -648,11 +669,14 @@ export class ClawHubAdapter implements CatalogSourceConnector {
       aliases: [identity],
       repository: null,
       artifact: null,
-      raw: {
+      raw: createPersistedSkillRaw({
+        kind: "clawhub-skill",
         listing: persistedClawHubListing(item),
         detail: persistedClawHubDetail(detail),
-        unresolved: "exact version unavailable",
-      },
+        moderation: persistedModerationSummary(moderation),
+        scan: persistedScanSummary(scan),
+        unresolved: reason,
+      }),
     };
   }
 

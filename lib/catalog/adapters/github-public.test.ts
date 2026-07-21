@@ -45,6 +45,7 @@ function repo(privateRepository = false) {
     default_branch: "main",
     owner: { login: "example" },
     name: "skills",
+    topics: ["react", "testing"],
   };
 }
 
@@ -150,6 +151,7 @@ describe("GitHubPublicRepositoryAdapter", () => {
       expect.objectContaining({
         sourceRecordId: "example/skills:fixture-safe",
         immutableRef: COMMIT,
+        categoryHints: { categories: [], tags: ["react", "testing"] },
         installSpec: {
           kind: "source",
           sourceUrl: "https://github.com/example/skills",

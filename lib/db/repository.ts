@@ -18,6 +18,17 @@ import {
   type SQL,
 } from "drizzle-orm";
 
+import {
+  persistedAuditRawSchema,
+  persistedSkillRawSchema,
+  type PersistedAuditRaw,
+  type PersistedSkillRaw,
+} from "../catalog/provider-raw";
+import {
+  CANONICAL_CATEGORY_SLUGS,
+  SOURCE_CATEGORY_ATTRIBUTION,
+  type CanonicalCategorySlug,
+} from "../catalog/categories";
 import { installSpecSchema } from "../catalog/source-contract";
 import type {
   CatalogSelectionGateReason,
@@ -46,6 +57,8 @@ import {
   repositories,
   skillAliases,
   skillCategories,
+  skillCategoryEvidence,
+  skillCategoryObservations,
   skillDuplicates,
   skillRevisions,
   skills,
@@ -54,10 +67,12 @@ import {
   trustAssessments,
   trustFindings,
   type lifecycleStates,
+  type sourceFreshnessPolicies,
   type sourceModes,
 } from "./schema";
 
 type SourceMode = (typeof sourceModes)[number];
+type SourceFreshnessPolicy = (typeof sourceFreshnessPolicies)[number];
 type LifecycleState = (typeof lifecycleStates)[number];
 type CatalogTransaction = Parameters<Parameters<CatalogDatabase["transaction"]>[0]>[0];
 type TrustState = "unreviewed" | "pass" | "warn" | "fail" | "quarantined";
@@ -158,6 +173,7 @@ const packageEligibleLicenses = [
   "Unlicense",
 ] as const;
 const packageEligibleLicenseSet = new Set<string>(packageEligibleLicenses);
+const CATEGORY_OBSERVATION_HISTORY_LIMIT = 4;
 
 function stableId(namespace: string, value: string): string {
   return `${namespace}_${createHash("sha256").update(value).digest("hex").slice(0, 24)}`;
@@ -217,7 +233,25 @@ function hasActiveSourceListing() {
       and active_listing.status in ('current', 'stale')
       and active_listing.source_hash = ${skillRevisions.upstreamHash}
       and active_source.enabled = 1
-      and active_source.coverage_state <> 'not-configured'
+      and active_source.coverage_state in ('current', 'partial')
+      and (
+        active_source.freshness_policy = 'retain'
+        or (
+          active_source.freshness_policy = 'latest-completed-observation'
+          and active_listing.last_completed_observation_run_id = (
+            select completed_observation.id
+            from sync_runs completed_observation
+            where completed_observation.source_id = active_source.id
+              and completed_observation.observation_sweep_complete = 1
+              and completed_observation.finished_at is not null
+              and completed_observation.status in ('succeeded', 'partial')
+            order by completed_observation.finished_at desc,
+              completed_observation.started_at desc,
+              completed_observation.id desc
+            limit 1
+          )
+        )
+      )
   )`;
 }
 
@@ -306,6 +340,7 @@ export interface SourceDescriptorInput {
   name: string;
   baseUrl: string;
   mode: SourceMode;
+  freshnessPolicy?: SourceFreshnessPolicy;
   upstreamIdentifier: string;
   termsUrl?: string | null;
   enabled?: boolean;
@@ -314,6 +349,7 @@ export interface SourceDescriptorInput {
 }
 
 export interface CanonicalSkillInput {
+  fence: CatalogMutationFence;
   canonicalKey: string;
   provider: string;
   sourceUrl: string;
@@ -328,7 +364,7 @@ export interface CanonicalSkillInput {
   installSpec: Record<string, unknown>;
   immutableRef: string;
   contentHash: string;
-  upstreamHash: string | null;
+  upstreamHash: string;
   aliases: string[];
   listingId: string;
   repository: {
@@ -358,8 +394,14 @@ export interface CanonicalSkillInput {
     status: "pass" | "warn" | "fail";
     summary: string;
     scannerVersion: string | null;
-    raw: Record<string, unknown>;
+    raw: PersistedAuditRaw;
   }>;
+}
+
+export interface CatalogMutationFence {
+  sourceId: string;
+  runId: string;
+  leaseToken: string;
 }
 
 export class CatalogSyncLeaseConflictError extends Error {
@@ -376,8 +418,329 @@ export class CatalogSyncLeaseLostError extends Error {
   }
 }
 
+export class CatalogImmutableRevisionConflictError extends Error {
+  constructor(immutableRef: string) {
+    super(`Immutable revision ${immutableRef} changed content hash; listing was detached`);
+    this.name = "CatalogImmutableRevisionConflictError";
+  }
+}
+
 export class CatalogRepository {
   constructor(readonly db: CatalogDatabase) {}
+
+  private async assertActiveSyncLease(
+    transaction: CatalogTransaction,
+    fence: CatalogMutationFence,
+  ): Promise<void> {
+    const [lease] = await transaction
+      .select({ id: syncRuns.id })
+      .from(syncRuns)
+      .innerJoin(catalogSources, eq(catalogSources.id, syncRuns.sourceId))
+      .where(
+        and(
+          eq(syncRuns.id, fence.runId),
+          eq(syncRuns.sourceId, fence.sourceId),
+          eq(syncRuns.status, "running"),
+          eq(syncRuns.leaseToken, fence.leaseToken),
+          gt(syncRuns.leaseExpiresAt, new Date()),
+          eq(catalogSources.enabled, true),
+          ne(catalogSources.coverageState, "not-configured"),
+        ),
+      )
+      .limit(1);
+    if (!lease) throw new CatalogSyncLeaseLostError(fence.runId);
+  }
+
+  private async recomputeSkillLifecycleInTransaction(
+    transaction: CatalogTransaction,
+    skillId: string,
+    now = new Date(),
+  ): Promise<void> {
+    const rows = await transaction
+      .select({ status: sourceListings.status })
+      .from(sourceListings)
+      .where(eq(sourceListings.skillId, skillId));
+    const statuses = new Set(rows.map((row) => row.status));
+    const lifecycle: LifecycleState = rows.length === 0
+      ? "stale"
+      : statuses.has("current")
+        ? "current"
+        : statuses.has("stale")
+          ? "stale"
+          : statuses.has("unavailable")
+            ? "unavailable"
+            : "removed";
+    await transaction
+      .update(skills)
+      .set({ lifecycle, updatedAt: now })
+      .where(eq(skills.id, skillId));
+  }
+
+  private async recomputeSkillCategoryMaterializationInTransaction(
+    transaction: CatalogTransaction,
+    skillIds: Iterable<string>,
+  ): Promise<void> {
+    const orderedSkillIds = [...new Set(skillIds)].sort();
+    const chunkSize = 25;
+    for (let offset = 0; offset < orderedSkillIds.length; offset += chunkSize) {
+      const chunk = orderedSkillIds.slice(offset, offset + chunkSize);
+      const eligible = await transaction
+        .selectDistinct({
+          skillId: skillCategoryObservations.skillId,
+          categoryId: skillCategoryEvidence.categoryId,
+          categoryOrder: categories.sortOrder,
+          categorySlug: categories.slug,
+        })
+        .from(skillCategoryEvidence)
+        .innerJoin(
+          skillCategoryObservations,
+          and(
+            eq(
+              skillCategoryObservations.sourceListingId,
+              skillCategoryEvidence.sourceListingId,
+            ),
+            eq(
+              skillCategoryObservations.observedRunId,
+              skillCategoryEvidence.observedRunId,
+            ),
+          ),
+        )
+        .innerJoin(
+          sourceListings,
+          and(
+            eq(sourceListings.id, skillCategoryObservations.sourceListingId),
+            eq(sourceListings.skillId, skillCategoryObservations.skillId),
+            eq(sourceListings.sourceHash, skillCategoryObservations.sourceHash),
+          ),
+        )
+        .innerJoin(catalogSources, eq(catalogSources.id, sourceListings.sourceId))
+        .innerJoin(
+          skillRevisions,
+          and(
+            eq(skillRevisions.id, skillCategoryObservations.revisionId),
+            eq(skillRevisions.skillId, skillCategoryObservations.skillId),
+            eq(skillRevisions.upstreamHash, skillCategoryObservations.sourceHash),
+            eq(skillRevisions.isCurrent, true),
+          ),
+        )
+        .innerJoin(
+          syncRuns,
+          and(
+            eq(syncRuns.id, skillCategoryObservations.observedRunId),
+            eq(syncRuns.sourceId, catalogSources.id),
+          ),
+        )
+        .innerJoin(categories, eq(categories.id, skillCategoryEvidence.categoryId))
+        .where(
+          and(
+            inArray(skillCategoryObservations.skillId, chunk),
+            inArray(sourceListings.status, ["current", "stale"]),
+            eq(catalogSources.enabled, true),
+            inArray(catalogSources.coverageState, ["current", "partial"]),
+            sql<boolean>`(
+              (
+                ${catalogSources.freshnessPolicy} = 'retain'
+                and ${skillCategoryObservations.observedRunId} = (
+                  select retain_category_observation.observed_run_id
+                  from skill_category_observations retain_category_observation
+                  join sync_runs retain_category_run
+                    on retain_category_run.id = retain_category_observation.observed_run_id
+                  where retain_category_observation.source_listing_id = ${sourceListings.id}
+                    and retain_category_observation.skill_id = ${sourceListings.skillId}
+                    and retain_category_observation.revision_id = ${skillRevisions.id}
+                    and retain_category_observation.source_hash = ${sourceListings.sourceHash}
+                    and retain_category_run.source_id = ${catalogSources.id}
+                    and retain_category_run.finished_at is not null
+                    and retain_category_run.status in ('succeeded', 'partial')
+                  order by retain_category_run.finished_at desc,
+                    retain_category_run.started_at desc,
+                    retain_category_run.id desc
+                  limit 1
+                )
+              )
+              or (
+                ${catalogSources.freshnessPolicy} = 'latest-completed-observation'
+                and ${skillCategoryObservations.observedRunId} = ${sourceListings.lastCompletedObservationRunId}
+                and ${sourceListings.lastCompletedObservationRunId} = (
+                  select completed_category_observation.id
+                  from sync_runs completed_category_observation
+                  where completed_category_observation.source_id = ${catalogSources.id}
+                    and completed_category_observation.observation_sweep_complete = 1
+                    and completed_category_observation.finished_at is not null
+                    and completed_category_observation.status in ('succeeded', 'partial')
+                  order by completed_category_observation.finished_at desc,
+                    completed_category_observation.started_at desc,
+                    completed_category_observation.id desc
+                  limit 1
+                )
+              )
+            )`,
+          ),
+        )
+        .orderBy(
+          asc(skillCategoryObservations.skillId),
+          asc(categories.sortOrder),
+          asc(categories.slug),
+          asc(skillCategoryEvidence.categoryId),
+        );
+
+      await transaction
+        .delete(skillCategories)
+        .where(
+          and(
+            inArray(skillCategories.skillId, chunk),
+            eq(skillCategories.attribution, SOURCE_CATEGORY_ATTRIBUTION),
+          ),
+        );
+      if (eligible.length) {
+        await transaction
+          .insert(skillCategories)
+          .values(
+            eligible.map(({ skillId, categoryId }) => ({
+              skillId,
+              categoryId,
+              attribution: SOURCE_CATEGORY_ATTRIBUTION,
+            })),
+          )
+          .onConflictDoNothing();
+      }
+    }
+  }
+
+  private async recomputeSourceCategoryMaterializationInTransaction(
+    transaction: CatalogTransaction,
+    sourceId: string,
+  ): Promise<void> {
+    const affected = await transaction
+      .selectDistinct({ skillId: sourceListings.skillId })
+      .from(sourceListings)
+      .where(
+        and(
+          eq(sourceListings.sourceId, sourceId),
+          isNotNull(sourceListings.skillId),
+        ),
+      );
+    await this.recomputeSkillCategoryMaterializationInTransaction(
+      transaction,
+      affected.flatMap(({ skillId }) => skillId ? [skillId] : []),
+    );
+  }
+
+  private async pruneSkillCategoryObservationHistoryInTransaction(
+    transaction: CatalogTransaction,
+    sourceId: string,
+  ): Promise<void> {
+    const observations = await transaction
+      .select({
+        sourceListingId: skillCategoryObservations.sourceListingId,
+        observedRunId: skillCategoryObservations.observedRunId,
+        lastCompletedObservationRunId: sourceListings.lastCompletedObservationRunId,
+        runStatus: syncRuns.status,
+        runFinishedAt: syncRuns.finishedAt,
+      })
+      .from(skillCategoryObservations)
+      .innerJoin(
+        sourceListings,
+        eq(sourceListings.id, skillCategoryObservations.sourceListingId),
+      )
+      .innerJoin(syncRuns, eq(syncRuns.id, skillCategoryObservations.observedRunId))
+      .where(eq(sourceListings.sourceId, sourceId))
+      .orderBy(
+        asc(skillCategoryObservations.sourceListingId),
+        desc(syncRuns.finishedAt),
+        desc(syncRuns.startedAt),
+        desc(syncRuns.id),
+      );
+
+    const terminalCounts = new Map<string, number>();
+    const removable: Array<{ sourceListingId: string; observedRunId: string }> = [];
+    for (const observation of observations) {
+      const preserveCertificate =
+        observation.observedRunId === observation.lastCompletedObservationRunId;
+      const preserveRunning = observation.runStatus === "running";
+      const terminal =
+        observation.runFinishedAt !== null &&
+        ["succeeded", "partial"].includes(observation.runStatus);
+      const retainedTerminalCount = terminalCounts.get(observation.sourceListingId) ?? 0;
+      const preserveRecentTerminal =
+        terminal && retainedTerminalCount < CATEGORY_OBSERVATION_HISTORY_LIMIT;
+      if (terminal) {
+        terminalCounts.set(observation.sourceListingId, retainedTerminalCount + 1);
+      }
+      if (preserveCertificate || preserveRunning || preserveRecentTerminal) continue;
+      removable.push({
+        sourceListingId: observation.sourceListingId,
+        observedRunId: observation.observedRunId,
+      });
+    }
+
+    const chunkSize = 25;
+    for (let offset = 0; offset < removable.length; offset += chunkSize) {
+      const chunk = removable.slice(offset, offset + chunkSize);
+      const condition = or(
+        ...chunk.map((observation) =>
+          and(
+            eq(
+              skillCategoryObservations.sourceListingId,
+              observation.sourceListingId,
+            ),
+            eq(
+              skillCategoryObservations.observedRunId,
+              observation.observedRunId,
+            ),
+          )),
+      );
+      if (condition) await transaction.delete(skillCategoryObservations).where(condition);
+    }
+  }
+
+  private async markListingUnresolvedInTransaction(
+    transaction: CatalogTransaction,
+    fence: CatalogMutationFence,
+    listingId: string,
+    sourceHash: string | null,
+    now = new Date(),
+  ): Promise<boolean> {
+    const [listing] = await transaction
+      .select({ skillId: sourceListings.skillId })
+      .from(sourceListings)
+      .where(
+        and(
+          eq(sourceListings.id, listingId),
+          eq(sourceListings.sourceId, fence.sourceId),
+        ),
+      )
+      .limit(1);
+    if (!listing) return false;
+    await transaction
+      .delete(skillCategoryObservations)
+      .where(eq(skillCategoryObservations.sourceListingId, listingId));
+    await transaction
+      .update(sourceListings)
+      .set({
+        skillId: null,
+        status: "unresolved",
+        sourceHash,
+        lastCompletedObservationRunId: null,
+        duplicateIndicator: false,
+        lastSeenRunId: fence.runId,
+        lastSeenAt: now,
+      })
+      .where(
+        and(
+          eq(sourceListings.id, listingId),
+          eq(sourceListings.sourceId, fence.sourceId),
+        ),
+      );
+    if (listing.skillId) {
+      await this.recomputeSkillLifecycleInTransaction(transaction, listing.skillId, now);
+      await this.recomputeSkillCategoryMaterializationInTransaction(
+        transaction,
+        [listing.skillId],
+      );
+    }
+    return true;
+  }
 
   private async writeMonotonicTrustAssessment(
     transaction: CatalogTransaction,
@@ -493,44 +856,182 @@ export class CatalogRepository {
       });
   }
 
+  async replaceSkillCategoryEvidence(input: {
+    fence: CatalogMutationFence;
+    listingId: string;
+    skillId: string;
+    revisionId: string;
+    sourceHash: string;
+    categorySlugs: readonly CanonicalCategorySlug[];
+  }): Promise<void> {
+    const requested = [...new Set(input.categorySlugs)];
+    const allowed = new Set<string>(CANONICAL_CATEGORY_SLUGS);
+    if (requested.some((slug) => !allowed.has(slug))) {
+      throw new Error("Category assignment referenced a non-canonical taxonomy slug");
+    }
+
+    await this.db.transaction(async (transaction) => {
+      await this.assertActiveSyncLease(transaction, input.fence);
+      const [binding] = await transaction
+        .select({
+          listingId: sourceListings.id,
+          revisionId: skillRevisions.id,
+        })
+        .from(sourceListings)
+        .innerJoin(
+          skillRevisions,
+          and(
+            eq(skillRevisions.id, input.revisionId),
+            eq(skillRevisions.skillId, input.skillId),
+            eq(skillRevisions.upstreamHash, input.sourceHash),
+            eq(skillRevisions.isCurrent, true),
+          ),
+        )
+        .where(
+          and(
+            eq(sourceListings.id, input.listingId),
+            eq(sourceListings.sourceId, input.fence.sourceId),
+            eq(sourceListings.lastSeenRunId, input.fence.runId),
+            eq(sourceListings.skillId, input.skillId),
+            eq(sourceListings.status, "current"),
+            eq(sourceListings.sourceHash, input.sourceHash),
+          ),
+        )
+        .limit(1);
+      if (!binding) {
+        throw new Error("Category assignment was not bound to the active source observation");
+      }
+
+      const resolved = requested.length
+        ? await transaction
+            .select({ id: categories.id, slug: categories.slug })
+            .from(categories)
+            .where(inArray(categories.slug, requested))
+        : [];
+      if (resolved.length !== requested.length) {
+        throw new Error("Canonical category taxonomy is not fully seeded");
+      }
+
+      await transaction
+        .delete(skillCategoryObservations)
+        .where(
+          and(
+            eq(skillCategoryObservations.sourceListingId, input.listingId),
+            eq(skillCategoryObservations.observedRunId, input.fence.runId),
+          ),
+        );
+      const observedAt = new Date();
+      await transaction.insert(skillCategoryObservations).values({
+        sourceListingId: input.listingId,
+        observedRunId: input.fence.runId,
+        skillId: input.skillId,
+        revisionId: input.revisionId,
+        sourceHash: input.sourceHash,
+        observedAt,
+      });
+      if (resolved.length) {
+        await transaction
+          .insert(skillCategoryEvidence)
+          .values(
+            resolved.map((category) => ({
+              sourceListingId: input.listingId,
+              observedRunId: input.fence.runId,
+              categoryId: category.id,
+            })),
+          );
+      }
+      await this.recomputeSkillCategoryMaterializationInTransaction(
+        transaction,
+        [input.skillId],
+      );
+    });
+  }
+
   async upsertSource(input: SourceDescriptorInput): Promise<void> {
     const now = new Date();
-    await this.db
-      .insert(catalogSources)
-      .values({
-        ...input,
-        termsUrl: input.termsUrl ?? null,
-        enabled: input.enabled ?? true,
-        coverageState: input.initialCoverageState ?? "not-synced",
-        exclusionsJson: input.knownExclusions ? [...input.knownExclusions] : [],
-        createdAt: now,
-        updatedAt: now,
-      })
-      .onConflictDoUpdate({
-        target: catalogSources.id,
-        set: {
-          name: input.name,
-          baseUrl: input.baseUrl,
-          mode: input.mode,
-          upstreamIdentifier: input.upstreamIdentifier,
+    await this.db.transaction(async (transaction) => {
+      const [previous] = await transaction
+        .select({
+          enabled: catalogSources.enabled,
+          freshnessPolicy: catalogSources.freshnessPolicy,
+        })
+        .from(catalogSources)
+        .where(eq(catalogSources.id, input.id))
+        .limit(1);
+      const enabled = input.enabled ?? true;
+      const freshnessPolicy = input.freshnessPolicy ?? "retain";
+      await transaction
+        .insert(catalogSources)
+        .values({
+          ...input,
           termsUrl: input.termsUrl ?? null,
-          enabled: input.enabled ?? true,
+          enabled,
+          freshnessPolicy,
+          coverageState: input.initialCoverageState ?? "not-synced",
+          exclusionsJson: input.knownExclusions ? [...input.knownExclusions] : [],
+          createdAt: now,
           updatedAt: now,
-        },
-      });
+        })
+        .onConflictDoUpdate({
+          target: catalogSources.id,
+          set: {
+            name: input.name,
+            baseUrl: input.baseUrl,
+            mode: input.mode,
+            freshnessPolicy,
+            upstreamIdentifier: input.upstreamIdentifier,
+            termsUrl: input.termsUrl ?? null,
+            enabled,
+            updatedAt: now,
+          },
+        });
+      if (
+        previous &&
+        (previous.enabled !== enabled || previous.freshnessPolicy !== freshnessPolicy)
+      ) {
+        const affected = await transaction
+          .selectDistinct({ skillId: sourceListings.skillId })
+          .from(sourceListings)
+          .where(
+            and(
+              eq(sourceListings.sourceId, input.id),
+              isNotNull(sourceListings.skillId),
+            ),
+          );
+        await this.recomputeSkillCategoryMaterializationInTransaction(
+          transaction,
+          affected.flatMap(({ skillId }) => skillId ? [skillId] : []),
+        );
+      }
+    });
   }
 
   async markSourceNotConfigured(sourceId: string, exclusions: readonly string[]): Promise<void> {
-    await this.db
-      .update(catalogSources)
-      .set({
-        coverageState: "not-configured",
-        lastSuccessfulSyncAt: null,
-        lastError: null,
-        exclusionsJson: [...exclusions],
-        updatedAt: new Date(),
-      })
-      .where(eq(catalogSources.id, sourceId));
+    await this.db.transaction(async (transaction) => {
+      const affected = await transaction
+        .selectDistinct({ skillId: sourceListings.skillId })
+        .from(sourceListings)
+        .where(
+          and(
+            eq(sourceListings.sourceId, sourceId),
+            isNotNull(sourceListings.skillId),
+          ),
+        );
+      await transaction
+        .update(catalogSources)
+        .set({
+          coverageState: "not-configured",
+          lastSuccessfulSyncAt: null,
+          lastError: null,
+          exclusionsJson: [...exclusions],
+          updatedAt: new Date(),
+        })
+        .where(eq(catalogSources.id, sourceId));
+      await this.recomputeSkillCategoryMaterializationInTransaction(
+        transaction,
+        affected.flatMap(({ skillId }) => skillId ? [skillId] : []),
+      );
+    });
   }
 
   async search(options: CatalogSearchOptions = {}) {
@@ -1409,6 +1910,7 @@ export class CatalogRepository {
       sourceId: source.id,
       name: source.name,
       mode: source.mode,
+      freshnessPolicy: source.freshnessPolicy,
       state: source.coverageState,
       recordCount: source.recordCount,
       unavailableCount: source.unavailableCount,
@@ -1422,7 +1924,11 @@ export class CatalogRepository {
     }));
   }
 
-  async acquireSyncRun(sourceId: string, leaseDurationMs = 300_000) {
+  async acquireSyncRun(
+    sourceId: string,
+    leaseDurationMs = 300_000,
+    options: { resumePartial?: boolean } = {},
+  ) {
     const now = new Date();
     const leaseExpiresAt = new Date(now.getTime() + Math.max(leaseDurationMs, 100));
     const leaseToken = randomUUID();
@@ -1449,31 +1955,44 @@ export class CatalogRepository {
           .where(eq(syncRuns.id, active.id));
       }
 
-      const [resumable] = await transaction
-        .select()
-        .from(syncRuns)
-        .where(
-          and(
-            eq(syncRuns.sourceId, sourceId),
-            eq(syncRuns.status, "partial"),
-            isNotNull(syncRuns.cursor),
-          ),
-        )
-        .orderBy(desc(syncRuns.startedAt))
-        .limit(1);
-      if (resumable) {
-        await transaction
-          .update(syncRuns)
-          .set({
-            status: "running",
-            failure: null,
-            finishedAt: null,
-            nextRetryAt: null,
+      if (options.resumePartial !== false) {
+        const [resumable] = await transaction
+          .select()
+          .from(syncRuns)
+          .where(
+            and(
+              eq(syncRuns.sourceId, sourceId),
+              eq(syncRuns.status, "partial"),
+              isNotNull(syncRuns.cursor),
+            ),
+          )
+          .orderBy(desc(syncRuns.startedAt))
+          .limit(1);
+        if (resumable) {
+          await transaction
+            .update(syncRuns)
+            .set({
+              status: "running",
+              failure: null,
+              finishedAt: null,
+              nextRetryAt: null,
+              observationSweepComplete: false,
+              leaseToken,
+              leaseExpiresAt,
+            })
+            .where(eq(syncRuns.id, resumable.id));
+          await this.recomputeSourceCategoryMaterializationInTransaction(
+            transaction,
+            sourceId,
+          );
+          return {
+            ...resumable,
+            status: "running" as const,
             leaseToken,
             leaseExpiresAt,
-          })
-          .where(eq(syncRuns.id, resumable.id));
-        return { ...resumable, status: "running" as const, leaseToken, leaseExpiresAt, resumed: true };
+            resumed: true,
+          };
+        }
       }
 
       const id = randomUUID();
@@ -1485,6 +2004,12 @@ export class CatalogRepository {
         leaseToken,
         leaseExpiresAt,
       });
+      if (active) {
+        await this.recomputeSourceCategoryMaterializationInTransaction(
+          transaction,
+          sourceId,
+        );
+      }
       return {
         id,
         sourceId,
@@ -1519,6 +2044,7 @@ export class CatalogRepository {
     reportedTotalKnown?: boolean;
     leaseDurationMs?: number;
   }): Promise<void> {
+    const now = new Date();
     const result = await this.db
       .update(syncRuns)
       .set({
@@ -1531,13 +2057,14 @@ export class CatalogRepository {
           nextPage: input.nextPage,
           reportedTotalKnown: input.reportedTotalKnown ?? false,
         },
-        leaseExpiresAt: new Date(Date.now() + Math.max(input.leaseDurationMs ?? 300_000, 100)),
+        leaseExpiresAt: new Date(now.getTime() + Math.max(input.leaseDurationMs ?? 300_000, 100)),
       })
       .where(
         and(
           eq(syncRuns.id, input.runId),
           eq(syncRuns.status, "running"),
           eq(syncRuns.leaseToken, input.leaseToken),
+          gt(syncRuns.leaseExpiresAt, now),
         ),
       );
     if (result.rowsAffected !== 1) {
@@ -1550,14 +2077,16 @@ export class CatalogRepository {
     leaseToken: string,
     leaseDurationMs = 300_000,
   ): Promise<void> {
+    const now = new Date();
     const result = await this.db
       .update(syncRuns)
-      .set({ leaseExpiresAt: new Date(Date.now() + Math.max(leaseDurationMs, 100)) })
+      .set({ leaseExpiresAt: new Date(now.getTime() + Math.max(leaseDurationMs, 100)) })
       .where(
         and(
           eq(syncRuns.id, runId),
           eq(syncRuns.status, "running"),
           eq(syncRuns.leaseToken, leaseToken),
+          gt(syncRuns.leaseExpiresAt, now),
         ),
       );
     if (result.rowsAffected !== 1) {
@@ -1574,6 +2103,7 @@ export class CatalogRepository {
     partialFailures?: string[];
     exclusions?: string[];
     completeCrawl?: boolean;
+    observationSweepComplete?: boolean;
     unavailableAfter?: number;
   }): Promise<void> {
     const now = new Date();
@@ -1587,19 +2117,82 @@ export class CatalogRepository {
       : incompleteFailure;
     await this.db.transaction(async (transaction) => {
       const [lease] = await transaction
-        .select({ id: syncRuns.id })
+        .select({
+          id: syncRuns.id,
+          freshnessPolicy: catalogSources.freshnessPolicy,
+        })
         .from(syncRuns)
+        .innerJoin(catalogSources, eq(catalogSources.id, syncRuns.sourceId))
         .where(
           and(
             eq(syncRuns.id, input.runId),
+            eq(syncRuns.sourceId, input.sourceId),
             eq(syncRuns.status, "running"),
             eq(syncRuns.leaseToken, input.leaseToken),
+            gt(syncRuns.leaseExpiresAt, now),
           ),
         )
         .limit(1);
       if (!lease) throw new CatalogSyncLeaseLostError(input.runId);
 
-      if (input.completeCrawl) {
+      if (
+        lease.freshnessPolicy === "latest-completed-observation" &&
+        input.observationSweepComplete === true
+      ) {
+        await transaction
+          .update(sourceListings)
+          .set({ lastCompletedObservationRunId: null })
+          .where(
+            and(
+              eq(sourceListings.sourceId, input.sourceId),
+              eq(sourceListings.lastSeenRunId, input.runId),
+            ),
+          );
+        await transaction
+          .update(sourceListings)
+          .set({ lastCompletedObservationRunId: input.runId })
+          .where(
+            and(
+              eq(sourceListings.sourceId, input.sourceId),
+              eq(sourceListings.lastSeenRunId, input.runId),
+              inArray(sourceListings.status, ["current", "stale"]),
+              isNotNull(sourceListings.skillId),
+              isNotNull(sourceListings.sourceHash),
+            ),
+          );
+        const missing = await transaction
+          .select({
+            id: sourceListings.id,
+            skillId: sourceListings.skillId,
+          })
+          .from(sourceListings)
+          .where(
+            and(
+              eq(sourceListings.sourceId, input.sourceId),
+              or(
+                isNull(sourceListings.lastSeenRunId),
+                ne(sourceListings.lastSeenRunId, input.runId),
+              ),
+              notInArray(sourceListings.status, ["removed", "unresolved"]),
+            ),
+          );
+        const changedSkills = new Set<string>();
+        for (const listing of missing) {
+          await transaction
+            .update(sourceListings)
+            .set({ status: "stale" })
+            .where(
+              and(
+                eq(sourceListings.id, listing.id),
+                eq(sourceListings.sourceId, input.sourceId),
+              ),
+            );
+          if (listing.skillId) changedSkills.add(listing.skillId);
+        }
+        for (const skillId of changedSkills) {
+          await this.recomputeSkillLifecycleInTransaction(transaction, skillId, now);
+        }
+      } else if (input.completeCrawl) {
         const missing = await transaction
           .select({
             id: sourceListings.id,
@@ -1620,27 +2213,18 @@ export class CatalogRepository {
           const status = missed >= (input.unavailableAfter ?? 2) ? "unavailable" : "stale";
           await transaction
             .update(sourceListings)
-            .set({ status, missedCompleteCrawls: missed })
+            .set({
+              status,
+              missedCompleteCrawls: missed,
+              ...(status === "unavailable"
+                ? { lastCompletedObservationRunId: null }
+                : {}),
+            })
             .where(eq(sourceListings.id, listing.id));
           if (listing.skillId) changedSkills.add(listing.skillId);
         }
         for (const skillId of changedSkills) {
-          const listingRows = await transaction
-            .select({ status: sourceListings.status })
-            .from(sourceListings)
-            .where(eq(sourceListings.skillId, skillId));
-          const statuses = new Set(listingRows.map((row) => row.status));
-          const lifecycle: LifecycleState = statuses.has("current")
-            ? "current"
-            : statuses.has("stale")
-              ? "stale"
-              : statuses.has("unavailable")
-                ? "unavailable"
-                : "removed";
-          await transaction
-            .update(skills)
-            .set({ lifecycle, updatedAt: now })
-            .where(eq(skills.id, skillId));
+          await this.recomputeSkillLifecycleInTransaction(transaction, skillId, now);
         }
       }
 
@@ -1653,6 +2237,7 @@ export class CatalogRepository {
             inArray(sourceListings.status, ["unavailable", "removed"]),
           ),
         );
+      const completionFenceTime = new Date();
       const result = await transaction
         .update(syncRuns)
         .set({
@@ -1660,6 +2245,7 @@ export class CatalogRepository {
           finishedAt: now,
           sourceTotal: input.sourceTotal,
           completeCrawl: input.completeCrawl ?? true,
+          observationSweepComplete: input.observationSweepComplete ?? false,
           failure,
           nextRetryAt: null,
           leaseToken: null,
@@ -1668,8 +2254,10 @@ export class CatalogRepository {
         .where(
           and(
             eq(syncRuns.id, input.runId),
+            eq(syncRuns.sourceId, input.sourceId),
             eq(syncRuns.status, "running"),
             eq(syncRuns.leaseToken, input.leaseToken),
+            gt(syncRuns.leaseExpiresAt, completionFenceTime),
           ),
         );
       if (result.rowsAffected !== 1) {
@@ -1687,12 +2275,20 @@ export class CatalogRepository {
           updatedAt: now,
         })
         .where(eq(catalogSources.id, input.sourceId));
+      await this.recomputeSourceCategoryMaterializationInTransaction(
+        transaction,
+        input.sourceId,
+      );
+      await this.pruneSkillCategoryObservationHistoryInTransaction(
+        transaction,
+        input.sourceId,
+      );
     });
   }
 
   async failSyncRun(input: {
-    runId?: string;
-    leaseToken?: string;
+    runId: string;
+    leaseToken: string;
     sourceId: string;
     message: string;
     retryCount?: number;
@@ -1700,8 +2296,8 @@ export class CatalogRepository {
     authMissing?: boolean;
   }): Promise<void> {
     const now = new Date();
-    if (input.runId) {
-      const result = await this.db
+    await this.db.transaction(async (transaction) => {
+      const result = await transaction
         .update(syncRuns)
         .set({
           status: "partial",
@@ -1709,31 +2305,43 @@ export class CatalogRepository {
           failure: input.message,
           retryCount: input.retryCount ?? 0,
           nextRetryAt: input.nextRetryAt ?? null,
+          observationSweepComplete: false,
           leaseToken: null,
           leaseExpiresAt: null,
         })
         .where(
-          input.leaseToken
-            ? and(eq(syncRuns.id, input.runId), eq(syncRuns.leaseToken, input.leaseToken))
-            : eq(syncRuns.id, input.runId),
+          and(
+            eq(syncRuns.id, input.runId),
+            eq(syncRuns.sourceId, input.sourceId),
+            eq(syncRuns.status, "running"),
+            eq(syncRuns.leaseToken, input.leaseToken),
+            gt(syncRuns.leaseExpiresAt, now),
+          ),
         );
-      if (input.leaseToken && result.rowsAffected !== 1) {
+      if (result.rowsAffected !== 1) {
         throw new CatalogSyncLeaseLostError(input.runId);
       }
-    }
-    await this.db
-      .update(catalogSources)
-      .set({
-        coverageState: input.authMissing ? "credentials-required" : "partial",
-        lastError: input.message,
-        updatedAt: now,
-      })
-      .where(eq(catalogSources.id, input.sourceId));
+      await transaction
+        .update(catalogSources)
+        .set({
+          coverageState: input.authMissing ? "credentials-required" : "partial",
+          lastError: input.message,
+          updatedAt: now,
+        })
+        .where(eq(catalogSources.id, input.sourceId));
+      await this.recomputeSourceCategoryMaterializationInTransaction(
+        transaction,
+        input.sourceId,
+      );
+      await this.pruneSkillCategoryObservationHistoryInTransaction(
+        transaction,
+        input.sourceId,
+      );
+    });
   }
 
   async upsertSourceListing(input: {
-    sourceId: string;
-    runId: string;
+    fence: CatalogMutationFence;
     upstreamId: string;
     sourceType: string;
     installUrl?: string | null;
@@ -1741,7 +2349,7 @@ export class CatalogRepository {
     installs: number;
     duplicateIndicator?: boolean;
     preserveSourceHash?: boolean;
-    raw: Record<string, unknown>;
+    raw: PersistedSkillRaw;
   }): Promise<{
     id: string;
     previousHash: string | null;
@@ -1750,150 +2358,221 @@ export class CatalogRepository {
     detailLastModified: string | null;
   }> {
     const now = new Date();
-    const id = stableId("listing", `${input.sourceId}:${input.upstreamId}`);
-    const [previous] = await this.db
-      .select({
-        sourceHash: sourceListings.sourceHash,
-        skillId: sourceListings.skillId,
-        detailEtag: sourceListings.detailEtag,
-        detailLastModified: sourceListings.detailLastModified,
-        status: sourceListings.status,
-      })
-      .from(sourceListings)
-      .where(and(eq(sourceListings.sourceId, input.sourceId), eq(sourceListings.upstreamId, input.upstreamId)))
-      .limit(1);
+    const raw = persistedSkillRawSchema.parse(input.raw);
+    const id = stableId("listing", `${input.fence.sourceId}:${input.upstreamId}`);
+    return this.db.transaction(async (transaction) => {
+      await this.assertActiveSyncLease(transaction, input.fence);
+      const [previous] = await transaction
+        .select({
+          sourceHash: sourceListings.sourceHash,
+          skillId: sourceListings.skillId,
+          detailEtag: sourceListings.detailEtag,
+          detailLastModified: sourceListings.detailLastModified,
+          status: sourceListings.status,
+        })
+        .from(sourceListings)
+        .where(
+          and(
+            eq(sourceListings.sourceId, input.fence.sourceId),
+            eq(sourceListings.upstreamId, input.upstreamId),
+          ),
+        )
+        .limit(1);
+      const nextSourceHash = input.sourceHash ??
+        (input.preserveSourceHash === false ? null : previous?.sourceHash ?? null);
+      const sourceHashChanged = Boolean(
+        previous && previous.sourceHash !== nextSourceHash,
+      );
+      const invalidatesExistingBinding = Boolean(
+        previous?.skillId && previous.sourceHash !== nextSourceHash,
+      );
+      const restoresExistingBinding = Boolean(
+        previous?.skillId &&
+        input.sourceHash &&
+        previous.sourceHash === input.sourceHash,
+      );
 
-    const restoresExistingBinding = Boolean(
-      previous?.skillId &&
-      input.sourceHash &&
-      previous.sourceHash === input.sourceHash,
-    );
+      if (invalidatesExistingBinding) {
+        await transaction
+          .delete(skillCategoryObservations)
+          .where(eq(skillCategoryObservations.sourceListingId, id));
+      }
 
-    await this.db
-      .insert(sourceListings)
-      .values({
-        id,
-        sourceId: input.sourceId,
-        upstreamId: input.upstreamId,
-        sourceType: input.sourceType,
-        installUrl: input.installUrl ?? null,
-        sourceHash:
-          input.sourceHash ?? (input.preserveSourceHash === false ? null : previous?.sourceHash ?? null),
-        installs: input.installs,
-        duplicateIndicator: input.duplicateIndicator ?? false,
-        status: previous?.skillId ? "current" : "unresolved",
-        rawJson: input.raw,
-        lastSeenRunId: input.runId,
-        firstSeenAt: now,
-        lastSeenAt: now,
-      })
-      .onConflictDoUpdate({
-        target: [sourceListings.sourceId, sourceListings.upstreamId],
-        set: {
+      await transaction
+        .insert(sourceListings)
+        .values({
+          id,
+          sourceId: input.fence.sourceId,
+          upstreamId: input.upstreamId,
           sourceType: input.sourceType,
           installUrl: input.installUrl ?? null,
-          sourceHash:
-            input.sourceHash ??
-            (input.preserveSourceHash === false ? null : previous?.sourceHash ?? null),
+          sourceHash: nextSourceHash,
           installs: input.installs,
           duplicateIndicator: input.duplicateIndicator ?? false,
-          rawJson: input.raw,
-          lastSeenRunId: input.runId,
+          status: "unresolved",
+          rawJson: raw,
+          lastSeenRunId: input.fence.runId,
+          firstSeenAt: now,
           lastSeenAt: now,
-          missedCompleteCrawls: 0,
-          ...(restoresExistingBinding ? { status: "current" as const } : {}),
-        },
-      });
+        })
+        .onConflictDoUpdate({
+          target: [sourceListings.sourceId, sourceListings.upstreamId],
+          set: {
+            sourceType: input.sourceType,
+            installUrl: input.installUrl ?? null,
+            sourceHash: nextSourceHash,
+            installs: input.installs,
+            duplicateIndicator: invalidatesExistingBinding
+              ? false
+              : input.duplicateIndicator ?? false,
+            rawJson: raw,
+            lastSeenRunId: input.fence.runId,
+            lastSeenAt: now,
+            missedCompleteCrawls: 0,
+            ...(sourceHashChanged
+              ? { lastCompletedObservationRunId: null }
+              : {}),
+            ...(invalidatesExistingBinding
+              ? { skillId: null, status: "unresolved" as const }
+              : restoresExistingBinding
+                ? { status: "current" as const }
+                : {}),
+          },
+        });
 
-    if (restoresExistingBinding && previous?.skillId && previous.status !== "current") {
-      await this.recomputeSkillLifecycle(previous.skillId);
-    }
+      if (previous?.skillId && (invalidatesExistingBinding ||
+        (restoresExistingBinding && previous.status !== "current"))) {
+        await this.recomputeSkillLifecycleInTransaction(transaction, previous.skillId, now);
+      }
+      if (previous?.skillId) {
+        await this.recomputeSkillCategoryMaterializationInTransaction(
+          transaction,
+          [previous.skillId],
+        );
+      }
 
-    return {
-      id,
-      previousHash: previous?.sourceHash ?? null,
-      skillId: previous?.skillId ?? null,
-      detailEtag: previous?.detailEtag ?? null,
-      detailLastModified: previous?.detailLastModified ?? null,
-    };
+      return {
+        id,
+        previousHash: previous?.sourceHash ?? null,
+        skillId: invalidatesExistingBinding ? null : previous?.skillId ?? null,
+        detailEtag: previous?.detailEtag ?? null,
+        detailLastModified: previous?.detailLastModified ?? null,
+      };
+    });
   }
 
-  async markListingUnresolved(listingId: string, sourceHash: string | null): Promise<void> {
-    const now = new Date();
+  async markListingUnresolved(
+    fence: CatalogMutationFence,
+    listingId: string,
+    sourceHash: string | null,
+  ): Promise<void> {
     await this.db.transaction(async (transaction) => {
-      const [listing] = await transaction
-        .select({ skillId: sourceListings.skillId })
-        .from(sourceListings)
-        .where(eq(sourceListings.id, listingId))
-        .limit(1);
-      await transaction
-        .update(sourceListings)
-        .set({
-          skillId: null,
-          status: "unresolved",
-          sourceHash,
-          duplicateIndicator: false,
-        })
-        .where(eq(sourceListings.id, listingId));
-      if (!listing?.skillId) return;
-      const rows = await transaction
-        .select({ status: sourceListings.status })
-        .from(sourceListings)
-        .where(eq(sourceListings.skillId, listing.skillId));
-      const statuses = new Set(rows.map((row) => row.status));
-      const lifecycle: LifecycleState = statuses.has("current")
-        ? "current"
-        : statuses.has("stale")
-          ? "stale"
-          : statuses.has("unavailable")
-            ? "unavailable"
-            : statuses.has("removed")
-              ? "removed"
-              : "stale";
-      await transaction
-        .update(skills)
-        .set({ lifecycle, updatedAt: now })
-        .where(eq(skills.id, listing.skillId));
+      await this.assertActiveSyncLease(transaction, fence);
+      const found = await this.markListingUnresolvedInTransaction(
+        transaction,
+        fence,
+        listingId,
+        sourceHash,
+      );
+      if (!found) throw new Error("Source listing did not belong to the active sync source");
     });
   }
 
   async markSourceRecordUnresolved(
-    sourceId: string,
+    fence: CatalogMutationFence,
     upstreamId: string,
     sourceHash: string | null,
   ): Promise<void> {
-    const [listing] = await this.db
-      .select({ id: sourceListings.id })
-      .from(sourceListings)
-      .where(
-        and(
-          eq(sourceListings.sourceId, sourceId),
-          eq(sourceListings.upstreamId, upstreamId),
-        ),
-      )
-      .limit(1);
-    if (listing) await this.markListingUnresolved(listing.id, sourceHash);
+    await this.db.transaction(async (transaction) => {
+      await this.assertActiveSyncLease(transaction, fence);
+      const [listing] = await transaction
+        .select({ id: sourceListings.id })
+        .from(sourceListings)
+        .where(
+          and(
+            eq(sourceListings.sourceId, fence.sourceId),
+            eq(sourceListings.upstreamId, upstreamId),
+          ),
+        )
+        .limit(1);
+      if (listing) {
+        await this.markListingUnresolvedInTransaction(
+          transaction,
+          fence,
+          listing.id,
+          sourceHash,
+        );
+      }
+    });
   }
 
   async updateSourceListingHydration(input: {
+    fence: CatalogMutationFence;
     listingId: string;
     hash: string | null;
     etag: string | null;
     lastModified: string | null;
     hydratedAt?: Date;
   }): Promise<void> {
-    await this.db
-      .update(sourceListings)
-      .set({
-        sourceHash: input.hash,
-        detailEtag: input.etag,
-        detailLastModified: input.lastModified,
-        hydratedAt: input.hydratedAt ?? new Date(),
-      })
-      .where(eq(sourceListings.id, input.listingId));
+    await this.db.transaction(async (transaction) => {
+      await this.assertActiveSyncLease(transaction, input.fence);
+      const [listing] = await transaction
+        .select({
+          skillId: sourceListings.skillId,
+          sourceHash: sourceListings.sourceHash,
+        })
+        .from(sourceListings)
+        .where(
+          and(
+            eq(sourceListings.id, input.listingId),
+            eq(sourceListings.sourceId, input.fence.sourceId),
+            eq(sourceListings.lastSeenRunId, input.fence.runId),
+          ),
+        )
+        .limit(1);
+      if (!listing) {
+        throw new Error("Hydration target did not belong to the active sync observation");
+      }
+      const hashChanged = listing.sourceHash !== input.hash;
+      if (hashChanged) {
+        await transaction
+          .delete(skillCategoryObservations)
+          .where(eq(skillCategoryObservations.sourceListingId, input.listingId));
+      }
+      const result = await transaction
+        .update(sourceListings)
+        .set({
+          sourceHash: input.hash,
+          lastCompletedObservationRunId: sql`case
+            when ${sourceListings.sourceHash} is ${input.hash}
+              then ${sourceListings.lastCompletedObservationRunId}
+            else null
+          end`,
+          detailEtag: input.etag,
+          detailLastModified: input.lastModified,
+          hydratedAt: input.hydratedAt ?? new Date(),
+        })
+        .where(
+          and(
+            eq(sourceListings.id, input.listingId),
+            eq(sourceListings.sourceId, input.fence.sourceId),
+            eq(sourceListings.lastSeenRunId, input.fence.runId),
+          ),
+        );
+      if (result.rowsAffected !== 1) {
+        throw new Error("Hydration target did not belong to the active sync observation");
+      }
+      if (hashChanged && listing.skillId) {
+        await this.recomputeSkillCategoryMaterializationInTransaction(
+          transaction,
+          [listing.skillId],
+        );
+      }
+    });
   }
 
   async recordObservedAudits(input: {
+    fence: CatalogMutationFence;
     listingId: string;
     upstreamContentHash: string | null;
     audits: Array<{
@@ -1903,48 +2582,67 @@ export class CatalogRepository {
       summary: string;
       riskLevel?: string;
       auditedAt?: string;
-      raw: Record<string, unknown>;
+      raw: PersistedAuditRaw;
     }>;
     observedAt?: Date;
   }): Promise<void> {
     const observedAt = input.observedAt ?? new Date();
-    for (const audit of input.audits) {
-      const auditTime = audit.auditedAt ? new Date(audit.auditedAt) : observedAt;
-      const id = stableId(
-        "audit",
-        `${input.listingId}:${audit.provider}:${audit.providerSlug}:${auditTime.toISOString()}`,
-      );
-      await this.db
-        .insert(auditRecords)
-        .values({
-          id,
-          revisionId: null,
-          sourceListingId: input.listingId,
-          scope: "observation",
-          provider: audit.provider,
-          providerSlug: audit.providerSlug,
-          status: audit.status,
-          summary: audit.summary,
-          riskLevel: audit.riskLevel ?? null,
-          upstreamContentHash: input.upstreamContentHash,
-          scannerVersion: null,
-          observedAt: auditTime,
-          rawJson: audit.raw,
-        })
-        .onConflictDoUpdate({
-          target: auditRecords.id,
-          set: {
+    await this.db.transaction(async (transaction) => {
+      await this.assertActiveSyncLease(transaction, input.fence);
+      const [listing] = await transaction
+        .select({ id: sourceListings.id })
+        .from(sourceListings)
+        .where(
+          and(
+            eq(sourceListings.id, input.listingId),
+            eq(sourceListings.sourceId, input.fence.sourceId),
+            eq(sourceListings.lastSeenRunId, input.fence.runId),
+          ),
+        )
+        .limit(1);
+      if (!listing) {
+        throw new Error("Audit target did not belong to the active sync observation");
+      }
+      for (const audit of input.audits) {
+        const raw = persistedAuditRawSchema.parse(audit.raw);
+        const auditTime = audit.auditedAt ? new Date(audit.auditedAt) : observedAt;
+        const id = stableId(
+          "audit",
+          `${input.listingId}:${audit.provider}:${audit.providerSlug}:${auditTime.toISOString()}`,
+        );
+        await transaction
+          .insert(auditRecords)
+          .values({
+            id,
+            revisionId: null,
+            sourceListingId: input.listingId,
+            scope: "observation",
+            provider: audit.provider,
+            providerSlug: audit.providerSlug,
             status: audit.status,
             summary: audit.summary,
             riskLevel: audit.riskLevel ?? null,
             upstreamContentHash: input.upstreamContentHash,
-            rawJson: audit.raw,
-          },
-        });
-    }
+            scannerVersion: null,
+            observedAt: auditTime,
+            rawJson: raw,
+          })
+          .onConflictDoUpdate({
+            target: auditRecords.id,
+            set: {
+              status: audit.status,
+              summary: audit.summary,
+              riskLevel: audit.riskLevel ?? null,
+              upstreamContentHash: input.upstreamContentHash,
+              rawJson: raw,
+            },
+          });
+      }
+    });
   }
 
   async recordRevisionAudits(input: {
+    fence: CatalogMutationFence;
     revisionId: string;
     upstreamContentHash: string;
     audits: Array<{
@@ -1953,35 +2651,40 @@ export class CatalogRepository {
       status: "pass" | "warn" | "fail";
       summary: string;
       scannerVersion: string | null;
-      raw: Record<string, unknown>;
+      raw: PersistedAuditRaw;
     }>;
     observedAt?: Date;
   }): Promise<void> {
     const observedAt = input.observedAt ?? new Date();
-    for (const audit of input.audits) {
-      const id = stableId(
-        "audit",
-        `${input.revisionId}:${audit.provider}:${audit.providerSlug}:${observedAt.toISOString()}`,
-      );
-      await this.db.insert(auditRecords).values({
-        id,
-        revisionId: input.revisionId,
-        sourceListingId: null,
-        scope: "revision",
-        provider: audit.provider,
-        providerSlug: audit.providerSlug,
-        status: audit.status,
-        summary: audit.summary,
-        riskLevel: null,
-        upstreamContentHash: input.upstreamContentHash,
-        scannerVersion: audit.scannerVersion,
-        observedAt,
-        rawJson: audit.raw,
-      });
-    }
+    await this.db.transaction(async (transaction) => {
+      await this.assertActiveSyncLease(transaction, input.fence);
+      for (const audit of input.audits) {
+        const raw = persistedAuditRawSchema.parse(audit.raw);
+        const id = stableId(
+          "audit",
+          `${input.revisionId}:${audit.provider}:${audit.providerSlug}:${observedAt.toISOString()}`,
+        );
+        await transaction.insert(auditRecords).values({
+          id,
+          revisionId: input.revisionId,
+          sourceListingId: null,
+          scope: "revision",
+          provider: audit.provider,
+          providerSlug: audit.providerSlug,
+          status: audit.status,
+          summary: audit.summary,
+          riskLevel: null,
+          upstreamContentHash: input.upstreamContentHash,
+          scannerVersion: audit.scannerVersion,
+          observedAt,
+          rawJson: raw,
+        });
+      }
+    });
   }
 
   async recordTrustAssessment(input: {
+    fence: CatalogMutationFence;
     revisionId: string;
     immutableRef: string;
     contentHash: string;
@@ -1993,8 +2696,16 @@ export class CatalogRepository {
     scannedAt?: Date;
   }): Promise<void> {
     await this.db.transaction(async (transaction) => {
+      await this.assertActiveSyncLease(transaction, input.fence);
       await this.writeMonotonicTrustAssessment(transaction, {
-        ...input,
+        revisionId: input.revisionId,
+        immutableRef: input.immutableRef,
+        contentHash: input.contentHash,
+        scanner: input.scanner,
+        scannerVersion: input.scannerVersion,
+        state: input.state,
+        quarantineReason: input.quarantineReason,
+        findings: input.findings,
         scannedAt: input.scannedAt ?? new Date(),
       });
     });
@@ -2064,7 +2775,47 @@ export class CatalogRepository {
       ? stableId("repository", `${input.repository.provider}:${input.repository.url}`)
       : null;
 
-    return this.db.transaction(async (transaction) => {
+    const outcome = await this.db.transaction(async (transaction) => {
+      await this.assertActiveSyncLease(transaction, input.fence);
+      const [listingObservation] = await transaction
+        .select({
+          skillId: sourceListings.skillId,
+          sourceHash: sourceListings.sourceHash,
+        })
+        .from(sourceListings)
+        .where(
+          and(
+            eq(sourceListings.id, input.listingId),
+            eq(sourceListings.sourceId, input.fence.sourceId),
+            eq(sourceListings.lastSeenRunId, input.fence.runId),
+          ),
+        )
+        .limit(1);
+      if (!listingObservation || listingObservation.sourceHash !== input.upstreamHash) {
+        throw new Error("Canonical skill was not bound to this active source observation");
+      }
+
+      const [existingRevision] = await transaction
+        .select({ id: skillRevisions.id, contentHash: skillRevisions.contentHash })
+        .from(skillRevisions)
+        .where(
+          and(
+            eq(skillRevisions.skillId, skillId),
+            eq(skillRevisions.immutableRef, input.immutableRef),
+          ),
+        )
+        .limit(1);
+      if (existingRevision && existingRevision.contentHash !== input.contentHash) {
+        await this.markListingUnresolvedInTransaction(
+          transaction,
+          input.fence,
+          input.listingId,
+          input.upstreamHash,
+          now,
+        );
+        return { conflict: true as const };
+      }
+
       if (input.repository && repositoryId) {
         await transaction
           .insert(repositories)
@@ -2129,21 +2880,6 @@ export class CatalogRepository {
           },
         });
 
-      const [existingRevision] = await transaction
-        .select({ id: skillRevisions.id, contentHash: skillRevisions.contentHash })
-        .from(skillRevisions)
-        .where(
-          and(
-            eq(skillRevisions.skillId, skillId),
-            eq(skillRevisions.immutableRef, input.immutableRef),
-          ),
-        )
-        .limit(1);
-      if (existingRevision && existingRevision.contentHash !== input.contentHash) {
-        throw new Error(
-          `Immutable revision ${input.immutableRef} changed content hash; refusing in-place mutation`,
-        );
-      }
       const [previousCurrentRevision] = await transaction
         .select({ contentHash: skillRevisions.contentHash })
         .from(skillRevisions)
@@ -2196,10 +2932,35 @@ export class CatalogRepository {
           .onConflictDoNothing();
       }
 
-      await transaction
+      if (
+        listingObservation.skillId &&
+        listingObservation.skillId !== skillId
+      ) {
+        await transaction
+          .delete(skillCategoryObservations)
+          .where(eq(skillCategoryObservations.sourceListingId, input.listingId));
+      }
+      const listingLink = await transaction
         .update(sourceListings)
-        .set({ skillId, status: "current", missedCompleteCrawls: 0 })
-        .where(eq(sourceListings.id, input.listingId));
+        .set({
+          skillId,
+          status: "current",
+          missedCompleteCrawls: 0,
+          ...(listingObservation.skillId !== skillId
+            ? { lastCompletedObservationRunId: null }
+            : {}),
+        })
+        .where(
+          and(
+            eq(sourceListings.id, input.listingId),
+            eq(sourceListings.sourceId, input.fence.sourceId),
+            eq(sourceListings.lastSeenRunId, input.fence.runId),
+            eq(sourceListings.sourceHash, input.upstreamHash),
+          ),
+        );
+      if (listingLink.rowsAffected !== 1) {
+        throw new Error("Canonical listing link lost its active source observation");
+      }
 
       const affectedHashes = new Set(
         [previousCurrentRevision?.contentHash, input.contentHash].filter(
@@ -2263,6 +3024,7 @@ export class CatalogRepository {
         });
       }
       for (const audit of input.upstreamAudits ?? []) {
+        const raw = persistedAuditRawSchema.parse(audit.raw);
         await transaction.insert(auditRecords).values({
           id: stableId(
             "audit",
@@ -2279,87 +3041,133 @@ export class CatalogRepository {
           upstreamContentHash: input.upstreamHash,
           scannerVersion: audit.scannerVersion,
           observedAt: now,
-          rawJson: audit.raw,
+          rawJson: raw,
         });
       }
 
+      const categoryAffectedSkills = new Set([skillId]);
+      if (
+        listingObservation.skillId &&
+        listingObservation.skillId !== skillId
+      ) {
+        categoryAffectedSkills.add(listingObservation.skillId);
+        await this.recomputeSkillLifecycleInTransaction(
+          transaction,
+          listingObservation.skillId,
+          now,
+        );
+      }
+      await this.recomputeSkillCategoryMaterializationInTransaction(
+        transaction,
+        categoryAffectedSkills,
+      );
+
       return {
+        conflict: false as const,
         skillId,
         revisionId,
         duplicateOfSkillId: duplicate?.skillId ?? null,
       };
     });
+    if (outcome.conflict) {
+      throw new CatalogImmutableRevisionConflictError(input.immutableRef);
+    }
+    return {
+      skillId: outcome.skillId,
+      revisionId: outcome.revisionId,
+      duplicateOfSkillId: outcome.duplicateOfSkillId,
+    };
   }
 
   async markCompleteCrawlMisses(
-    sourceId: string,
-    runId: string,
+    fence: CatalogMutationFence,
     unavailableAfter = 2,
   ): Promise<void> {
-    const missing = await this.db
-      .select({
-        id: sourceListings.id,
-        skillId: sourceListings.skillId,
-        missed: sourceListings.missedCompleteCrawls,
-      })
-      .from(sourceListings)
-      .where(
-        and(
-          eq(sourceListings.sourceId, sourceId),
-          or(isNull(sourceListings.lastSeenRunId), ne(sourceListings.lastSeenRunId, runId)),
-          notInArray(sourceListings.status, ["removed", "unavailable"]),
-        ),
-      );
+    await this.db.transaction(async (transaction) => {
+      await this.assertActiveSyncLease(transaction, fence);
+      const missing = await transaction
+        .select({
+          id: sourceListings.id,
+          skillId: sourceListings.skillId,
+          missed: sourceListings.missedCompleteCrawls,
+        })
+        .from(sourceListings)
+        .where(
+          and(
+            eq(sourceListings.sourceId, fence.sourceId),
+            or(
+              isNull(sourceListings.lastSeenRunId),
+              ne(sourceListings.lastSeenRunId, fence.runId),
+            ),
+            notInArray(sourceListings.status, ["removed", "unavailable"]),
+          ),
+        );
 
-    for (const listing of missing) {
-      const missed = listing.missed + 1;
-      const status = missed >= unavailableAfter ? "unavailable" : "stale";
-      await this.db
-        .update(sourceListings)
-        .set({ status, missedCompleteCrawls: missed })
-        .where(eq(sourceListings.id, listing.id));
-      if (listing.skillId) {
-        await this.recomputeSkillLifecycle(listing.skillId);
+      for (const listing of missing) {
+        const missed = listing.missed + 1;
+        const status = missed >= unavailableAfter ? "unavailable" : "stale";
+        await transaction
+          .update(sourceListings)
+          .set({
+            status,
+            missedCompleteCrawls: missed,
+            ...(status === "unavailable"
+              ? { lastCompletedObservationRunId: null }
+              : {}),
+          })
+          .where(
+            and(
+              eq(sourceListings.id, listing.id),
+              eq(sourceListings.sourceId, fence.sourceId),
+            ),
+          );
+        if (listing.skillId) {
+          await this.recomputeSkillLifecycleInTransaction(transaction, listing.skillId);
+          await this.recomputeSkillCategoryMaterializationInTransaction(
+            transaction,
+            [listing.skillId],
+          );
+        }
       }
-    }
+    });
   }
 
-  async markSourceListingRemoved(sourceId: string, upstreamId: string): Promise<void> {
-    const [listing] = await this.db
-      .select({ id: sourceListings.id, skillId: sourceListings.skillId })
-      .from(sourceListings)
-      .where(and(eq(sourceListings.sourceId, sourceId), eq(sourceListings.upstreamId, upstreamId)))
-      .limit(1);
-    if (!listing) {
-      return;
-    }
-    await this.db
-      .update(sourceListings)
-      .set({ status: "removed" })
-      .where(eq(sourceListings.id, listing.id));
-    if (listing.skillId) {
-      await this.recomputeSkillLifecycle(listing.skillId);
-    }
-  }
-
-  private async recomputeSkillLifecycle(skillId: string): Promise<void> {
-    const rows = await this.db
-      .select({ status: sourceListings.status })
-      .from(sourceListings)
-      .where(eq(sourceListings.skillId, skillId));
-    const statuses = new Set(rows.map((row) => row.status));
-    const lifecycle: LifecycleState = rows.length === 0
-      ? "stale"
-      : statuses.has("current")
-      ? "current"
-      : statuses.has("stale")
-        ? "stale"
-        : statuses.has("unavailable")
-          ? "unavailable"
-          : "removed";
-    await this.db
-      .update(skills)
-      .set({ lifecycle, updatedAt: new Date() })
-      .where(eq(skills.id, skillId));
+  async markSourceListingRemoved(
+    fence: CatalogMutationFence,
+    upstreamId: string,
+  ): Promise<void> {
+    await this.db.transaction(async (transaction) => {
+      await this.assertActiveSyncLease(transaction, fence);
+      const [listing] = await transaction
+        .select({ id: sourceListings.id, skillId: sourceListings.skillId })
+        .from(sourceListings)
+        .where(
+          and(
+            eq(sourceListings.sourceId, fence.sourceId),
+            eq(sourceListings.upstreamId, upstreamId),
+          ),
+        )
+        .limit(1);
+      if (!listing) return;
+      await transaction
+        .delete(skillCategoryObservations)
+        .where(eq(skillCategoryObservations.sourceListingId, listing.id));
+      await transaction
+        .update(sourceListings)
+        .set({ status: "removed", lastCompletedObservationRunId: null })
+        .where(
+          and(
+            eq(sourceListings.id, listing.id),
+            eq(sourceListings.sourceId, fence.sourceId),
+          ),
+        );
+      if (listing.skillId) {
+        await this.recomputeSkillLifecycleInTransaction(transaction, listing.skillId);
+        await this.recomputeSkillCategoryMaterializationInTransaction(
+          transaction,
+          [listing.skillId],
+        );
+      }
+    });
   }
 }

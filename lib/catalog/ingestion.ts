@@ -4,11 +4,16 @@ import {
   type NormalizedSkillRecord,
 } from "./normalization";
 import { createPersistedFileInventory } from "./artifact-fingerprint";
+import { classifySkillCategories } from "./categories";
 import {
   discoveredSkillRecordSchema,
   type DiscoveredSkillRecord,
 } from "./source-contract";
-import type { CatalogRepository } from "../db/repository";
+import type {
+  CatalogMutationFence,
+  CatalogRepository,
+} from "../db/repository";
+import type { PersistedAuditRaw } from "./provider-raw";
 
 export interface PersistedDiscovery {
   listingId: string;
@@ -56,7 +61,7 @@ export interface DiscoveryValidationResult {
     status: "pass" | "warn" | "fail";
     summary: string;
     scannerVersion: string | null;
-    raw: Record<string, unknown>;
+    raw: PersistedAuditRaw;
   }>;
 }
 
@@ -132,8 +137,7 @@ export class CatalogIngestionService {
   ) {}
 
   async persist(
-    sourceId: string,
-    runId: string,
+    fence: CatalogMutationFence,
     candidate: unknown,
     options: { installs?: number } = {},
   ): Promise<PersistedDiscovery> {
@@ -146,7 +150,7 @@ export class CatalogIngestionService {
         typeof candidate.sourceRecordId === "string"
           ? candidate.sourceRecordId
           : null;
-      if (identity) await this.repository.markSourceRecordUnresolved(sourceId, identity, null);
+      if (identity) await this.repository.markSourceRecordUnresolved(fence, identity, null);
       throw parsed.error;
     }
     const decoded = parsed.data;
@@ -155,7 +159,7 @@ export class CatalogIngestionService {
       normalized = normalizeDiscoveredSkill(decoded);
     } catch (error) {
       await this.repository.markSourceRecordUnresolved(
-        sourceId,
+        fence,
         decoded.sourceRecordId,
         decoded.upstreamHash ?? decoded.contentHash,
       );
@@ -163,8 +167,7 @@ export class CatalogIngestionService {
     }
     const validation = await this.validateRecord(decoded);
     const listing = await this.repository.upsertSourceListing({
-      sourceId,
-      runId,
+      fence,
       upstreamId: normalized.sourceRecordId,
       sourceType: normalized.sourceType,
       installUrl: normalized.installUrl,
@@ -187,6 +190,7 @@ export class CatalogIngestionService {
       !decoded.artifact.files?.length
     ) {
       await this.repository.markListingUnresolved(
+        fence,
         listing.id,
         normalized.upstreamHash ?? normalized.contentHash,
       );
@@ -203,6 +207,7 @@ export class CatalogIngestionService {
       fileInventory = createPersistedFileInventory(decoded.artifact, normalized.contentHash);
     } catch {
       await this.repository.markListingUnresolved(
+        fence,
         listing.id,
         normalized.upstreamHash ?? normalized.contentHash,
       );
@@ -216,6 +221,7 @@ export class CatalogIngestionService {
 
     const branchHeadEvidence = persistedBranchHeadEvidence(normalized);
     const persisted = await this.repository.upsertCanonicalSkill({
+      fence,
       canonicalKey: normalized.canonicalKey,
       provider: normalized.provider,
       sourceUrl: normalized.sourceUrl,
@@ -242,6 +248,22 @@ export class CatalogIngestionService {
       repository: normalized.repository,
       trustAssessment: validation.trustAssessment,
       upstreamAudits: validation.upstreamAudits,
+    });
+    const categorySlugs = classifySkillCategories({
+      providerName: normalized.upstreamName,
+      providerDescription: normalized.upstreamDescription,
+      frontmatterName: validation.metadata.name,
+      frontmatterDescription: validation.metadata.description,
+      skillPath: normalized.skillPath,
+      categoryHints: decoded.categoryHints,
+    });
+    await this.repository.replaceSkillCategoryEvidence({
+      fence,
+      listingId: listing.id,
+      skillId: persisted.skillId,
+      revisionId: persisted.revisionId,
+      sourceHash: normalized.upstreamHash,
+      categorySlugs,
     });
     return {
       listingId: listing.id,

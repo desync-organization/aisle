@@ -1,6 +1,10 @@
 import { z } from "zod";
 
-import { sourceModes } from "../db/schema";
+import {
+  sourceFreshnessPolicies,
+  sourceModes,
+} from "../db/schema";
+import { persistedSkillRawSchema } from "./provider-raw";
 
 export const installSpecSchema = z.discriminatedUnion("kind", [
   z.object({
@@ -17,14 +21,30 @@ export const installSpecSchema = z.discriminatedUnion("kind", [
   }),
 ]);
 
+const sourceCategoryHintSchema = z.string().trim().min(1).max(128);
+const sourceTagHintSchema = z.string().trim().min(1).max(64);
+export const DISCOVERED_SKILL_NAME_MAX_LENGTH = 256;
+export const DISCOVERED_SKILL_DESCRIPTION_MAX_LENGTH = 4_096;
+export const DISCOVERED_SKILL_PATH_MAX_LENGTH = 4_096;
+
 export const discoveredSkillRecordSchema = z.object({
   sourceRecordId: z.string().min(1),
   provider: z.string().min(1),
   sourceType: z.string().min(1),
   sourceUrl: z.url(),
-  skillPath: z.string().min(1),
-  upstreamName: z.string().min(1).nullable(),
-  upstreamDescription: z.string().min(1).nullable(),
+  skillPath: z.string().min(1).max(DISCOVERED_SKILL_PATH_MAX_LENGTH),
+  upstreamName: z.string().min(1).max(DISCOVERED_SKILL_NAME_MAX_LENGTH).nullable(),
+  upstreamDescription: z
+    .string()
+    .min(1)
+    .max(DISCOVERED_SKILL_DESCRIPTION_MAX_LENGTH)
+    .nullable(),
+  categoryHints: z
+    .object({
+      categories: z.array(sourceCategoryHintSchema).max(16),
+      tags: z.array(sourceTagHintSchema).max(32),
+    })
+    .optional(),
   compatibility: z.string().min(1).nullable().optional(),
   license: z.string().min(1).nullable().optional(),
   installUrl: z.url().nullable(),
@@ -91,7 +111,26 @@ export const discoveredSkillRecordSchema = z.object({
     })
     .nullable()
     .default(null),
-  raw: z.record(z.string(), z.unknown()),
+  raw: persistedSkillRawSchema,
+}).superRefine((record, context) => {
+  const expectedKind = record.provider === "skills-sh"
+    ? "skills-sh-skill"
+    : record.provider === "clawhub"
+      ? "clawhub-skill"
+      : record.provider === "skillmd"
+        ? "skillmd-skill"
+        : record.provider === "github"
+          ? "github-skill"
+          : record.provider === "well-known"
+            ? "well-known-skill"
+            : null;
+  if (!expectedKind || record.raw.kind !== expectedKind) {
+    context.addIssue({
+      code: "custom",
+      path: ["raw", "kind"],
+      message: `Provider ${record.provider} cannot persist raw kind ${record.raw.kind}`,
+    });
+  }
 });
 
 export type DiscoveredSkillRecord = z.infer<typeof discoveredSkillRecordSchema>;
@@ -101,6 +140,7 @@ export interface CatalogSourceDescriptor {
   name: string;
   baseUrl: string;
   mode: (typeof sourceModes)[number];
+  freshnessPolicy?: (typeof sourceFreshnessPolicies)[number];
   upstreamIdentifier: string;
   termsUrl?: string | null;
   enabled?: boolean;

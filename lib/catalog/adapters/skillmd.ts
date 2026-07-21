@@ -4,6 +4,7 @@ import { z } from "zod";
 
 import { computeArtifactContentHash, normalizeArtifactFilePath } from "../artifact-fingerprint";
 import { cancelBestEffort, readBoundedResponse, requestTimeout } from "../http-safety";
+import { createPersistedSkillRaw } from "../provider-raw";
 import { normalizeSkillPath, normalizeSourceUrl } from "../normalization";
 import type {
   CatalogSourceConnector,
@@ -140,6 +141,16 @@ function persistedSkillMdDetail(
 
 function boundedUnresolvedReason(reason: string): string {
   return boundedProviderText(reason, 1_024);
+}
+
+function skillMdCategoryHints(
+  item: SkillMdListItem,
+  detail: SkillMdSkillMetadata | null,
+): NonNullable<DiscoveredSkillRecord["categoryHints"]> {
+  const categories = [detail?.category, item.category].filter(
+    (value): value is string => Boolean(value?.trim()),
+  );
+  return { categories: [...new Set(categories)], tags: [] };
 }
 
 function parseGitHubCoordinates(source: string | null): GitHubCoordinates | null {
@@ -410,6 +421,7 @@ export class SkillMdAdapter implements CatalogSourceConnector {
       skillPath,
       upstreamName: detail.title,
       upstreamDescription: detail.description || item.description || null,
+      categoryHints: skillMdCategoryHints(item, detail),
       compatibility: null,
       license: detail.license,
       installUrl: `https://github.com/${coordinates.owner}/${coordinates.repository}/tree/${detail.commit_sha}${skillPath === "." ? "" : `/${skillPath}`}`,
@@ -442,12 +454,13 @@ export class SkillMdAdapter implements CatalogSourceConnector {
             files: artifactFiles,
           }
         : null,
-      raw: {
+      raw: createPersistedSkillRaw({
+        kind: "skillmd-skill",
         listing: persistedSkillMdListing(item),
         detail: persistedSkillMdDetail(detail),
         sourceTreeSha: snapshot.tree.sha,
         providerVerifiedScope: detail.verified_scope,
-      },
+      }),
     };
   }
 
@@ -464,6 +477,7 @@ export class SkillMdAdapter implements CatalogSourceConnector {
       skillPath: item.slug,
       upstreamName: detail?.title ?? item.title,
       upstreamDescription: detail?.description || item.description || null,
+      categoryHints: skillMdCategoryHints(item, detail),
       compatibility: null,
       license: detail?.license ?? null,
       installUrl: null,
@@ -476,11 +490,12 @@ export class SkillMdAdapter implements CatalogSourceConnector {
       aliases: [item.slug],
       repository: null,
       artifact: null,
-      raw: {
+      raw: createPersistedSkillRaw({
+        kind: "skillmd-skill",
         listing: persistedSkillMdListing(item),
         detail: persistedSkillMdDetail(detail),
         unresolved: boundedUnresolvedReason(reason),
-      },
+      }),
     };
   }
 

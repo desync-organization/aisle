@@ -1,6 +1,9 @@
 import { createHash } from "node:crypto";
 
-import type { CatalogRepository } from "../../db/repository";
+import type {
+  CatalogMutationFence,
+  CatalogRepository,
+} from "../../db/repository";
 import { CatalogSyncLeaseLostError } from "../../db/repository";
 import {
   computeArtifactContentHash,
@@ -8,6 +11,13 @@ import {
 } from "../artifact-fingerprint";
 import { startSyncLeaseHeartbeat } from "../lease-heartbeat";
 import type { CatalogIngestionService } from "../ingestion";
+import { normalizeSkillPath } from "../normalization";
+import {
+  createPersistedAuditRaw,
+  createPersistedSkillRaw,
+  type PersistedAuditRaw,
+  type PersistedSkillRaw,
+} from "../provider-raw";
 import {
   SkillsShAuthenticationError,
   SkillsShClient,
@@ -39,7 +49,16 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function persistedListingSummary(listing: SkillsShSkill): Record<string, unknown> {
+type SkillsShListingSummary = Extract<
+  PersistedSkillRaw,
+  { kind: "skills-sh-listing" }
+>["listing"];
+type SkillsShAuditSummary = Extract<
+  PersistedAuditRaw,
+  { kind: "skills-sh-audit" }
+>;
+
+function persistedListingSummary(listing: SkillsShSkill): SkillsShListingSummary {
   return {
     id: listing.id,
     slug: listing.slug,
@@ -56,8 +75,9 @@ function persistedListingSummary(listing: SkillsShSkill): Record<string, unknown
 
 function persistedAuditSummary(
   entry: SkillsShAuditResponse["audits"][number],
-): Record<string, unknown> {
+): SkillsShAuditSummary {
   return {
+    kind: "skills-sh-audit",
     provider: entry.provider,
     slug: entry.slug,
     status: entry.status,
@@ -121,7 +141,16 @@ export class SkillsShSync {
   }
 
   async run(): Promise<SkillsShSyncResult> {
-    const run = await this.repository.acquireSyncRun(this.sourceId, this.leaseDurationMs);
+    const run = await this.repository.acquireSyncRun(
+      this.sourceId,
+      this.leaseDurationMs,
+      { resumePartial: false },
+    );
+    const fence: CatalogMutationFence = {
+      sourceId: this.sourceId,
+      runId: run.id,
+      leaseToken: run.leaseToken,
+    };
     const heartbeat = startSyncLeaseHeartbeat(this.repository, {
       runId: run.id,
       leaseToken: run.leaseToken,
@@ -137,6 +166,18 @@ export class SkillsShSync {
     const seenIds = new Set<string>();
 
     try {
+      if (
+        run.resumed ||
+        run.nextPage !== 0 ||
+        run.pageCount !== 0 ||
+        run.processedCount !== 0 ||
+        run.sourceTotal !== null ||
+        run.cursor !== null
+      ) {
+        throw new Error(
+          "skills.sh pagination lacks a snapshot token and must start from a fresh page-zero run",
+        );
+      }
       while (true) {
         const response = await this.client.listSkills(pageNumber, this.perPage);
         if (response.notModified) {
@@ -189,7 +230,7 @@ export class SkillsShSync {
           this.detailConcurrency,
           async (listing) => {
             try {
-              await this.ingestListing(run.id, listing);
+              await this.ingestListing(fence, listing);
               return null;
             } catch (error) {
               if (error instanceof SkillsShAuthenticationError) {
@@ -280,25 +321,27 @@ export class SkillsShSync {
     }
   }
 
-  private async ingestListing(runId: string, listing: SkillsShSkill): Promise<void> {
+  private async ingestListing(
+    fence: CatalogMutationFence,
+    listing: SkillsShSkill,
+  ): Promise<void> {
     const listingHash = listing.hash ?? undefined;
     const stored = await this.repository.upsertSourceListing({
-      sourceId: this.sourceId,
-      runId,
+      fence,
       upstreamId: listing.id,
       sourceType: listing.sourceType,
       installUrl: listing.installUrl,
       sourceHash: listingHash,
       installs: listing.installs,
       duplicateIndicator: listing.duplicate ?? listing.isDuplicate ?? false,
-      raw: persistedListingSummary(listing),
+      raw: createPersistedSkillRaw({
+        kind: "skills-sh-listing",
+        listing: persistedListingSummary(listing),
+      }),
     });
 
     let observedContentHash = listingHash ?? stored.previousHash;
     const listingHashChanged = stored.previousHash !== (listingHash ?? null);
-    if (listingHashChanged && stored.skillId) {
-      await this.repository.markListingUnresolved(stored.id, listingHash ?? null);
-    }
     if (!listingHash || stored.previousHash !== listingHash || (this.ingestion && !stored.skillId)) {
       const hashChanged = listingHashChanged;
       const mayUseValidators = !hashChanged && !(this.ingestion && !stored.skillId);
@@ -311,6 +354,7 @@ export class SkillsShSync {
           throw new Error("skills.sh returned 304 after the listing hash changed");
         }
         await this.repository.updateSourceListingHydration({
+          fence,
           listingId: stored.id,
           hash: stored.previousHash,
           etag: detail.etag ?? stored.detailEtag,
@@ -322,6 +366,7 @@ export class SkillsShSync {
         }
         observedContentHash = detail.data.hash;
         await this.repository.updateSourceListingHydration({
+          fence,
           listingId: stored.id,
           hash: detail.data.hash,
           etag: detail.etag,
@@ -336,17 +381,35 @@ export class SkillsShSync {
           const skillPath = listing.id.startsWith(`${listing.source}/`)
             ? listing.id.slice(listing.source.length + 1)
             : listing.slug;
+          const normalizedSkillPath = normalizeSkillPath(skillPath);
           const upstreamTextFiles = (detail.data.files ?? []).map((file) => ({
             path: normalizeArtifactFilePath(file.path),
             contents: file.contents,
             sha256: createHash("sha256").update(file.contents).digest("hex"),
           }));
-          const exactManifest = upstreamTextFiles.find((file) => file.path === "SKILL.md");
-          const nestedManifests = upstreamTextFiles.filter((file) =>
-            file.path.endsWith("/SKILL.md"),
+          const rootManifests = upstreamTextFiles.filter(
+            (file) => file.path === "SKILL.md",
           );
-          const upstreamManifest = exactManifest ??
-            (nestedManifests.length === 1 ? nestedManifests[0] : undefined);
+          const nestedManifests = upstreamTextFiles.filter(
+            (file) => file.path.endsWith("/SKILL.md"),
+          );
+          const declaredNestedPath = normalizedSkillPath === "."
+            ? null
+            : `${normalizedSkillPath}/SKILL.md`;
+          const declaredNestedManifests = declaredNestedPath
+            ? nestedManifests.filter((file) => file.path === declaredNestedPath)
+            : [];
+          const hasAmbiguousRootNestedMixture =
+            rootManifests.length > 0 && nestedManifests.length > 0;
+          const upstreamManifest = hasAmbiguousRootNestedMixture
+            ? undefined
+            : normalizedSkillPath === "."
+              ? rootManifests.length === 1 ? rootManifests[0] : undefined
+              : declaredNestedManifests.length === 1
+                ? declaredNestedManifests[0]
+                : nestedManifests.length === 0 && rootManifests.length === 1
+                  ? rootManifests[0]
+                  : undefined;
           const artifactPrefix = upstreamManifest && upstreamManifest.path !== "SKILL.md"
             ? upstreamManifest.path.slice(0, -"SKILL.md".length)
             : "";
@@ -369,12 +432,12 @@ export class SkillsShSync {
             ? computeArtifactContentHash(artifactFiles)
             : null;
           const github = /^https:\/\/github\.com\/([^/]+)\/([^/#?]+)/i.exec(sourceUrl);
-          await this.ingestion.persist(this.sourceId, runId, {
+          await this.ingestion.persist(fence, {
             sourceRecordId: listing.id,
             provider: "skills-sh",
             sourceType: listing.sourceType,
             sourceUrl,
-            skillPath,
+            skillPath: normalizedSkillPath,
             upstreamName: listing.name,
             upstreamDescription: null,
             compatibility: null,
@@ -413,7 +476,8 @@ export class SkillsShSync {
                   files: artifactFiles,
                 }
               : null,
-            raw: {
+            raw: createPersistedSkillRaw({
+              kind: "skills-sh-skill",
               listing: persistedListingSummary(listing),
               detail: {
                 id: detail.data.id,
@@ -423,7 +487,7 @@ export class SkillsShSync {
                 fileCount: detail.data.files?.length ?? null,
                 artifactContentHash,
               },
-            },
+            }),
           }, { installs: listing.installs });
         }
       }
@@ -437,6 +501,7 @@ export class SkillsShSync {
       throw new Error(`skills.sh audit id ${audit.data.id} did not match ${listing.id}`);
     }
     await this.repository.recordObservedAudits({
+      fence,
       listingId: stored.id,
       // skills.sh audits do not identify a revision. This hash is only the
       // content observed alongside the audit request, never an exact scan scope.
@@ -448,7 +513,7 @@ export class SkillsShSync {
         summary: entry.summary,
         riskLevel: entry.riskLevel,
         auditedAt: entry.auditedAt,
-        raw: persistedAuditSummary(entry),
+        raw: createPersistedAuditRaw(persistedAuditSummary(entry)),
       })),
     });
 

@@ -4,6 +4,7 @@ import { z } from "zod";
 
 import { computeArtifactContentHash } from "../artifact-fingerprint";
 import { cancelBestEffort, readBoundedResponse, requestTimeout } from "../http-safety";
+import { createPersistedSkillRaw } from "../provider-raw";
 import { normalizeSkillPath, normalizeSourceUrl } from "../normalization";
 import type {
   CatalogSourceConnector,
@@ -20,6 +21,7 @@ const repositorySchema = z.object({
   default_branch: z.string().min(1),
   owner: z.object({ login: z.string().min(1) }),
   name: z.string().min(1),
+  topics: z.array(z.string().min(1).max(50)).max(20).default([]),
 });
 
 const commitSchema = z.object({ sha: z.string().regex(/^[a-fA-F0-9]{40}$/) });
@@ -162,6 +164,7 @@ export class GitHubPublicRepositoryAdapter implements CatalogSourceConnector {
         skillPath,
         upstreamName: null,
         upstreamDescription: null,
+        categoryHints: { categories: [], tags: repository.topics },
         compatibility: null,
         license: null,
         installUrl: `https://github.com/${repository.full_name}/tree/${observedHeadSha}${skillPath === "." ? "" : `/${skillPath}`}`,
@@ -190,7 +193,13 @@ export class GitHubPublicRepositoryAdapter implements CatalogSourceConnector {
           },
         },
         artifact: null,
-        raw: { repository: repository.full_name, manifestPath: manifest.path, commit: observedHeadSha, reason },
+        raw: createPersistedSkillRaw({
+          kind: "github-skill",
+          repository: repository.full_name,
+          manifestPath: manifest.path,
+          commit: observedHeadSha,
+          reason,
+        }),
       });
       const manifestUrl = `/repos/${this.coordinates.owner}/${this.coordinates.repository}/contents/${manifest.path
         .split("/")
@@ -313,6 +322,7 @@ export class GitHubPublicRepositoryAdapter implements CatalogSourceConnector {
         skillPath,
         upstreamName: null,
         upstreamDescription: null,
+        categoryHints: { categories: [], tags: repository.topics },
         compatibility: null,
         license: null,
         installUrl: `https://github.com/${repository.full_name}/tree/${observedHeadSha}${skillPath === "." ? "" : `/${skillPath}`}`,
@@ -348,12 +358,13 @@ export class GitHubPublicRepositoryAdapter implements CatalogSourceConnector {
           textFiles,
           files: artifactFiles,
         },
-        raw: {
+        raw: createPersistedSkillRaw({
+          kind: "github-skill",
           repository: repository.full_name,
           manifestPath: manifest.path,
           commit: observedHeadSha,
           tree: tree.sha,
-        },
+        }),
       });
     }
 

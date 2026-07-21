@@ -8,6 +8,7 @@ import { eq, sql } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { createCatalogDatabase, type CatalogDatabaseConnection } from "./client";
+import type { PersistedAuditRaw } from "../catalog/provider-raw";
 import { migrateCatalogDatabase } from "./migrate";
 import { CatalogRepository } from "./repository";
 import {
@@ -23,6 +24,22 @@ import {
   trustAssessments,
 } from "./schema";
 import { seedCatalog, sourceDescriptorSeed, taxonomySeed } from "./seed";
+
+function fixtureAuditRaw(
+  status: "pass" | "warn" | "fail",
+  summary: string,
+  auditedAt: string,
+): PersistedAuditRaw {
+  return {
+    kind: "skills-sh-audit",
+    provider: "Fixture upstream",
+    slug: "fixture-upstream",
+    status,
+    summary,
+    auditedAt,
+    riskLevel: null,
+  };
+}
 
 describe("catalog database and repository", () => {
   let connection: CatalogDatabaseConnection;
@@ -68,6 +85,12 @@ describe("catalog database and repository", () => {
 
   it("supports searchable catalog rows, facets, and ordered package resolution", async () => {
     await seedCatalog(repository);
+    const run = await repository.acquireSyncRun("skills-sh");
+    const fence = {
+      sourceId: "skills-sh",
+      runId: run.id,
+      leaseToken: run.leaseToken,
+    };
     const now = new Date("2026-07-20T12:00:00.000Z");
     const repoId = "repo_fixture_public";
     const skillId = "skill_fixture_public";
@@ -148,6 +171,7 @@ describe("catalog database and repository", () => {
       installs: 42,
       status: "current",
       rawJson: { fixture: true },
+      lastSeenRunId: run.id,
       firstSeenAt: now,
       lastSeenAt: now,
     });
@@ -232,6 +256,7 @@ describe("catalog database and repository", () => {
     ]);
 
     await repository.recordObservedAudits({
+      fence,
       listingId: "listing_fixture_public",
       upstreamContentHash: "provider-revision-v1",
       audits: [
@@ -241,7 +266,11 @@ describe("catalog database and repository", () => {
           status: "fail",
           summary: "First inert observation failed.",
           auditedAt: "2026-07-20T10:00:00.000Z",
-          raw: {},
+          raw: fixtureAuditRaw(
+            "fail",
+            "First inert observation failed.",
+            "2026-07-20T10:00:00.000Z",
+          ),
         },
       ],
     });
@@ -249,6 +278,7 @@ describe("catalog database and repository", () => {
     expect(await repository.resolvePackage("fixture-stack")).toEqual([]);
 
     await repository.recordObservedAudits({
+      fence,
       listingId: "listing_fixture_public",
       upstreamContentHash: "provider-revision-v1",
       audits: [
@@ -258,7 +288,11 @@ describe("catalog database and repository", () => {
           status: "pass",
           summary: "Later inert observation passed.",
           auditedAt: "2026-07-20T11:00:00.000Z",
-          raw: {},
+          raw: fixtureAuditRaw(
+            "pass",
+            "Later inert observation passed.",
+            "2026-07-20T11:00:00.000Z",
+          ),
         },
       ],
     });
@@ -266,6 +300,7 @@ describe("catalog database and repository", () => {
     expect(await repository.resolvePackage("fixture-stack")).toHaveLength(1);
 
     await repository.recordObservedAudits({
+      fence,
       listingId: "listing_fixture_public",
       upstreamContentHash: "provider-revision-v1",
       audits: [
@@ -275,7 +310,11 @@ describe("catalog database and repository", () => {
           status: "fail",
           summary: "Newest inert observation failed.",
           auditedAt: "2026-07-20T12:00:00.000Z",
-          raw: {},
+          raw: fixtureAuditRaw(
+            "fail",
+            "Newest inert observation failed.",
+            "2026-07-20T12:00:00.000Z",
+          ),
         },
       ],
     });
@@ -283,6 +322,7 @@ describe("catalog database and repository", () => {
     expect(await repository.resolvePackage("fixture-stack")).toEqual([]);
 
     await repository.recordObservedAudits({
+      fence,
       listingId: "listing_fixture_public",
       upstreamContentHash: "provider-revision-v1",
       audits: [
@@ -292,7 +332,11 @@ describe("catalog database and repository", () => {
           status: "pass",
           summary: "Final inert observation passed before local blocking test.",
           auditedAt: "2026-07-20T13:00:00.000Z",
-          raw: {},
+          raw: fixtureAuditRaw(
+            "pass",
+            "Final inert observation passed before local blocking test.",
+            "2026-07-20T13:00:00.000Z",
+          ),
         },
       ],
     });
