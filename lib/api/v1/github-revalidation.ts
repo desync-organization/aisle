@@ -12,6 +12,9 @@ const DEFAULT_OVERALL_TIMEOUT_MS = 25_000;
 const DEFAULT_CONCURRENCY = 4;
 const DEFAULT_MAXIMUM_TREE_BYTES = 8 * 1_024 * 1_024;
 const DEFAULT_MAXIMUM_TREE_ENTRIES = 50_000;
+const DEFAULT_SCOPE_CACHE_TTL_MS = 20_000;
+const DEFAULT_MAXIMUM_SCOPE_CACHE_ENTRIES = 256;
+const MAXIMUM_REPOSITORY_BYTES = 128 * 1_024;
 const MAXIMUM_COMMIT_BYTES = 64 * 1_024;
 
 const githubOwnerSchema = z
@@ -26,6 +29,12 @@ const githubRepositorySchema = z
   .regex(/^(?!\.{1,2}$)[A-Za-z0-9._-]+$/);
 const commitResponseSchema = z.object({
   sha: z.string().regex(/^[a-fA-F0-9]{40}$/),
+});
+const repositoryResponseSchema = z.object({
+  full_name: z.string().min(3).max(141),
+  private: z.boolean(),
+  visibility: z.enum(["public", "private", "internal"]),
+  default_branch: githubBranchSchema,
 });
 const treeEntrySchema = z.object({
   path: z.string().min(1).max(1_024),
@@ -60,9 +69,18 @@ export type StackGithubRevalidationOptions = Readonly<{
   concurrency?: number;
   maximumTreeBytes?: number;
   maximumTreeEntries?: number;
+  scopeCache?: boolean;
+  scopeCacheTtlMs?: number;
+  maximumScopeCacheEntries?: number;
 }>;
 
 type VerifiedCandidate = StackGithubVerificationCandidate;
+type CachedScopeVerification = Readonly<{
+  state: "verified" | "ambiguous";
+  expiresAt: number;
+}>;
+
+const scopeVerificationCache = new Map<string, CachedScopeVerification>();
 
 function boundedInteger(value: number | undefined, fallback: number, maximum: number): number {
   if (!Number.isFinite(value)) return fallback;
@@ -89,6 +107,51 @@ function groupKey(candidate: VerifiedCandidate): string {
     candidate.repository.toLowerCase(),
     candidate.branch,
   ]);
+}
+
+function scopeCacheKey(candidate: VerifiedCandidate, liveHeadSha: string): string {
+  return JSON.stringify([
+    candidate.owner.toLowerCase(),
+    candidate.repository.toLowerCase(),
+    candidate.branch,
+    liveHeadSha,
+    candidate.skillPath,
+  ]);
+}
+
+function readCachedScopeVerification(
+  key: string,
+  now: number,
+): CachedScopeVerification | null {
+  const cached = scopeVerificationCache.get(key);
+  if (!cached) return null;
+  if (cached.expiresAt <= now) {
+    scopeVerificationCache.delete(key);
+    return null;
+  }
+  scopeVerificationCache.delete(key);
+  scopeVerificationCache.set(key, cached);
+  return cached;
+}
+
+function writeCachedScopeVerification(
+  key: string,
+  state: CachedScopeVerification["state"],
+  options: Readonly<{ now: number; ttlMs: number; maximumEntries: number }>,
+): void {
+  for (const [candidateKey, cached] of scopeVerificationCache) {
+    if (cached.expiresAt <= options.now) scopeVerificationCache.delete(candidateKey);
+  }
+  scopeVerificationCache.delete(key);
+  while (scopeVerificationCache.size >= options.maximumEntries) {
+    const oldestKey = scopeVerificationCache.keys().next().value as string | undefined;
+    if (!oldestKey) break;
+    scopeVerificationCache.delete(oldestKey);
+  }
+  scopeVerificationCache.set(key, {
+    state,
+    expiresAt: options.now + options.ttlMs,
+  });
 }
 
 export function stackGithubCandidateKey(candidate: StackGithubVerificationCandidate): string {
@@ -153,7 +216,16 @@ function manifestPathsInScope(
 async function verifyGroup(
   candidates: readonly VerifiedCandidate[],
   options: Required<
-    Pick<StackGithubRevalidationOptions, "fetch" | "timeoutMs" | "maximumTreeBytes" | "maximumTreeEntries">
+    Pick<
+      StackGithubRevalidationOptions,
+      | "fetch"
+      | "timeoutMs"
+      | "maximumTreeBytes"
+      | "maximumTreeEntries"
+      | "scopeCache"
+      | "scopeCacheTtlMs"
+      | "maximumScopeCacheEntries"
+    >
   > & Readonly<{ token: string | null; deadlineMs: number }>,
 ): Promise<Map<string, StackGithubVerificationResult>> {
   const results = new Map<string, StackGithubVerificationResult>();
@@ -169,6 +241,33 @@ async function verifyGroup(
   };
 
   try {
+    const repositoryMetadata = repositoryResponseSchema.parse(
+      await fetchBoundedJson(
+        options.fetch,
+        `https://api.github.com/repos/${owner}/${repository}`,
+        {
+          maximumBytes: MAXIMUM_REPOSITORY_BYTES,
+          timeoutMs: remainingTimeout(),
+          token: options.token,
+        },
+      ),
+    );
+    const expectedFullName = `${first.owner}/${first.repository}`.toLowerCase();
+    if (
+      repositoryMetadata.private ||
+      repositoryMetadata.visibility !== "public" ||
+      repositoryMetadata.full_name.toLowerCase() !== expectedFullName
+    ) {
+      for (const candidate of candidates) {
+        results.set(candidate.selectionId, { state: "unavailable" });
+      }
+      return results;
+    }
+    if (repositoryMetadata.default_branch !== first.branch) {
+      for (const candidate of candidates) results.set(candidate.selectionId, { state: "changed" });
+      return results;
+    }
+
     const commit = commitResponseSchema.parse(
       await fetchBoundedJson(
         options.fetch,
@@ -186,6 +285,32 @@ async function verifyGroup(
       return results;
     }
 
+    if (options.scopeCache) {
+      const now = Date.now();
+      const cached = candidates.map((candidate) => ({
+        candidate,
+        result: readCachedScopeVerification(
+          scopeCacheKey(candidate, liveHeadSha),
+          now,
+        ),
+      }));
+      if (cached.every((entry) => entry.result !== null)) {
+        for (const entry of cached) {
+          results.set(
+            entry.candidate.selectionId,
+            entry.result!.state === "verified"
+              ? {
+                  state: "verified",
+                  headSha: liveHeadSha,
+                  candidateKey: stackGithubCandidateKey(entry.candidate),
+                }
+              : { state: "ambiguous" },
+          );
+        }
+        return results;
+      }
+    }
+
     const tree = treeResponseSchema.parse(
       await fetchBoundedJson(
         options.fetch,
@@ -198,23 +323,49 @@ async function verifyGroup(
       ),
     );
     if (tree.truncated || tree.tree.length > options.maximumTreeEntries) {
-      for (const candidate of candidates) results.set(candidate.selectionId, { state: "ambiguous" });
+      const now = Date.now();
+      for (const candidate of candidates) {
+        results.set(candidate.selectionId, { state: "ambiguous" });
+        if (options.scopeCache) {
+          writeCachedScopeVerification(
+            scopeCacheKey(candidate, liveHeadSha),
+            "ambiguous",
+            {
+              now,
+              ttlMs: options.scopeCacheTtlMs,
+              maximumEntries: options.maximumScopeCacheEntries,
+            },
+          );
+        }
+      }
       return results;
     }
 
+    const now = Date.now();
     for (const candidate of candidates) {
       const manifests = manifestPathsInScope(tree.tree, candidate.skillPath);
       const expected = expectedManifestPath(candidate.skillPath);
-      results.set(
-        candidate.selectionId,
-        manifests.length === 1 && manifests[0] === expected
-          ? {
-              state: "verified",
-              headSha: liveHeadSha,
-              candidateKey: stackGithubCandidateKey(candidate),
-            }
-          : { state: "ambiguous" },
-      );
+      const state = manifests.length === 1 && manifests[0] === expected
+        ? "verified"
+        : "ambiguous";
+      results.set(candidate.selectionId, state === "verified"
+        ? {
+            state: "verified",
+            headSha: liveHeadSha,
+            candidateKey: stackGithubCandidateKey(candidate),
+          }
+        : { state: "ambiguous" });
+      if (options.scopeCache) {
+        writeCachedScopeVerification(
+          scopeCacheKey(candidate, liveHeadSha),
+          state,
+          {
+            now,
+            ttlMs: options.scopeCacheTtlMs,
+            maximumEntries: options.maximumScopeCacheEntries,
+          },
+        );
+      }
     }
     return results;
   } catch {
@@ -224,9 +375,10 @@ async function verifyGroup(
 }
 
 /**
- * Revalidates persisted GitHub candidates against the current branch head and
- * one complete, bounded recursive tree. Persisted connector assertions are
- * never sufficient on their own to make a stack selection installable.
+ * Revalidates persisted GitHub candidates against current public-repository
+ * metadata, the expected default branch head, and one complete bounded tree.
+ * Only manifest-scope verdicts tied to an immutable commit are briefly cached;
+ * visibility, default-branch, and live-head checks always reach GitHub.
  */
 export async function revalidateGithubStackCandidates(
   candidates: readonly StackGithubVerificationCandidate[],
@@ -278,6 +430,17 @@ export async function revalidateGithubStackCandidates(
       input.maximumTreeEntries,
       DEFAULT_MAXIMUM_TREE_ENTRIES,
       DEFAULT_MAXIMUM_TREE_ENTRIES,
+    ),
+    scopeCache: input.scopeCache ?? (input.fetch === undefined),
+    scopeCacheTtlMs: boundedInteger(
+      input.scopeCacheTtlMs,
+      DEFAULT_SCOPE_CACHE_TTL_MS,
+      60_000,
+    ),
+    maximumScopeCacheEntries: boundedInteger(
+      input.maximumScopeCacheEntries,
+      DEFAULT_MAXIMUM_SCOPE_CACHE_ENTRIES,
+      1_024,
     ),
   } as const;
 
