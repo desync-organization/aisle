@@ -689,7 +689,7 @@ export async function getPublicPackage(
     id: first.packageId,
     slug: first.slug,
     title: first.title,
-    description: first.description,
+    description: first.packageDescription,
     version: first.version,
     publishedAt: first.publishedAt.toISOString(),
     memberCount: members.length,

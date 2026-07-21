@@ -751,6 +751,15 @@ license: MIT
           pagination: { page: 0, perPage: 2, total: 2, hasMore: false },
         });
       }
+      if (url.pathname.includes("/skills/audit/")) {
+        siblingSettled = true;
+        return json({
+          id: "fixture-org/fixture-repo/fixture-skill-1",
+          source: "fixture-org/fixture-repo",
+          slug: "fixture-skill-1",
+          audits: [],
+        });
+      }
       if (url.pathname.includes("fixture-skill-0")) {
         return json({ message: "expired" }, 401);
       }

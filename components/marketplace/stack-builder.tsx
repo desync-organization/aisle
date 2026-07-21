@@ -15,6 +15,7 @@ import {
   Trash2,
   X,
 } from "lucide-react";
+import Link from "next/link";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -52,6 +53,16 @@ type PreflightState =
       fieldIssues: ReadonlyArray<Readonly<{ path: string; message: string }>>;
     }>;
 
+type AcknowledgedWarningsState = Readonly<{
+  selectionKey: string;
+  keys: ReadonlySet<string>;
+}>;
+
+type CopyState = Readonly<{
+  requestKey: string;
+  status: "idle" | "copied" | "failed";
+}>;
+
 function warningAcknowledgementKey(row: StackPreflightRow): string {
   return JSON.stringify([row.id, row.revisionId, row.warningFingerprint]);
 }
@@ -88,11 +99,12 @@ export function StackBuilder() {
   const [shell, setShell] = useState<StackShell>("powershell7");
   const [preflightState, setPreflight] = useState<PreflightState>({ status: "idle" });
   const [preflightAttempt, setPreflightAttempt] = useState(0);
-  const [acknowledgedWarnings, setAcknowledgedWarnings] = useState<ReadonlySet<string>>(
-    () => new Set(),
-  );
+  const [acknowledgedWarningsState, setAcknowledgedWarnings] = useState<AcknowledgedWarningsState>(() => ({
+    selectionKey: "",
+    keys: new Set(),
+  }));
   const [resolutionState, setResolution] = useState<ResolutionState>({ status: "idle" });
-  const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
+  const [copyState, setCopyState] = useState<CopyState>({ requestKey: "", status: "idle" });
   const preflightControllerRef = useRef<AbortController | null>(null);
   const resolveControllerRef = useRef<AbortController | null>(null);
 
@@ -103,6 +115,9 @@ export function StackBuilder() {
   const preflight = preflightState.status !== "idle" && preflightState.selectionKey !== selectionKey
     ? ({ status: "idle" } as const)
     : preflightState;
+  const acknowledgedWarnings = acknowledgedWarningsState.selectionKey === selectionKey
+    ? acknowledgedWarningsState.keys
+    : new Set<string>();
   const preflightRows = preflight.status === "success" ? preflight.snapshot.rows : [];
   const warningRows = preflightRows.filter((row) => row.trust === "warn");
   const hasUnselectableRows = preflightRows.some((row) => !row.selectable);
@@ -121,22 +136,13 @@ export function StackBuilder() {
   const resolution = resolutionState.status !== "idle" && resolutionState.requestKey !== requestKey
     ? ({ status: "idle" } as const)
     : resolutionState;
-
-  useEffect(() => {
-    resolveControllerRef.current?.abort();
-    setResolution({ status: "idle" });
-    setCopyState("idle");
-  }, [requestKey]);
+  const copyStatus = copyState.requestKey === requestKey ? copyState.status : "idle";
 
   useEffect(() => {
     preflightControllerRef.current?.abort();
     resolveControllerRef.current?.abort();
-    setAcknowledgedWarnings(new Set());
-    setResolution({ status: "idle" });
-    setCopyState("idle");
 
     if (!state.hydrated || state.count === 0) {
-      setPreflight({ status: "idle" });
       return;
     }
 
@@ -144,7 +150,11 @@ export function StackBuilder() {
     preflightControllerRef.current = controller;
     const selectionIds = [...state.ids];
     const packageAssertions = [...state.packageAssertions];
-    setPreflight({ status: "loading", selectionKey });
+    queueMicrotask(() => {
+      if (!controller.signal.aborted) {
+        setPreflight({ status: "loading", selectionKey });
+      }
+    });
 
     void preflightStack(
       { selectionIds, packageAssertions },
@@ -193,10 +203,12 @@ export function StackBuilder() {
   function toggleWarningAcknowledgement(row: StackPreflightRow) {
     const key = warningAcknowledgementKey(row);
     setAcknowledgedWarnings((current) => {
-      const next = new Set(current);
+      const next = current.selectionKey === selectionKey
+        ? new Set(current.keys)
+        : new Set<string>();
       if (next.has(key)) next.delete(key);
       else next.add(key);
-      return next;
+      return { selectionKey, keys: next };
     });
   }
 
@@ -222,7 +234,7 @@ export function StackBuilder() {
     resolveControllerRef.current?.abort();
     const controller = new AbortController();
     resolveControllerRef.current = controller;
-    setCopyState("idle");
+    setCopyState({ requestKey, status: "idle" });
     setResolution({ status: "loading", requestKey });
 
     try {
@@ -263,9 +275,9 @@ export function StackBuilder() {
     if (resolution.status !== "success") return;
     try {
       await navigator.clipboard.writeText(resolution.plan.command);
-      setCopyState("copied");
+      setCopyState({ requestKey, status: "copied" });
     } catch {
-      setCopyState("failed");
+      setCopyState({ requestKey, status: "failed" });
     }
   }
 
@@ -278,7 +290,7 @@ export function StackBuilder() {
           <h2>Select public skills before generating a command.</h2>
           <p>The resolver accepts only canonical catalog IDs from your device-local selection. It does not accept pasted source URLs or arbitrary command fragments.</p>
         </div>
-        <a className="button button--primary" href="/skills">Browse public skills</a>
+        <Link className="button button--primary" href="/skills">Browse public skills</Link>
       </section>
     );
   }
@@ -522,8 +534,8 @@ export function StackBuilder() {
             <div className="stack-command-result__command">
               <code>{resolution.plan.command}</code>
               <Button onClick={copyCommand} variant="secondary">
-                {copyState === "copied" ? <Check aria-hidden="true" size={15} /> : <Clipboard aria-hidden="true" size={15} />}
-                {copyState === "copied" ? "Copied" : copyState === "failed" ? "Copy failed" : "Copy"}
+                {copyStatus === "copied" ? <Check aria-hidden="true" size={15} /> : <Clipboard aria-hidden="true" size={15} />}
+                {copyStatus === "copied" ? "Copied" : copyStatus === "failed" ? "Copy failed" : "Copy"}
               </Button>
             </div>
             <ul className="stack-command-result__warnings">

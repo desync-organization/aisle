@@ -1,4 +1,4 @@
-import { and, desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
 
 import { normalizeSkillPath, normalizeSourceUrl } from "../catalog/normalization";
 import { installSpecSchema } from "../catalog/source-contract";
@@ -118,36 +118,22 @@ function hasCompleteInventory(
   );
 }
 
-function hasCertifiedSourceObservation(skillId: string, revisionId: string) {
+function hasCertifiedSourceObservation() {
   return sql<boolean>`(
     (
       ${catalogSources.freshnessPolicy} = 'retain'
       and exists (
         select 1
-        from skill_category_observations package_observation
-        join sync_runs package_observation_run
-          on package_observation_run.id = package_observation.observed_run_id
-          and package_observation_run.source_id = ${sourceListings.sourceId}
-        where package_observation.source_listing_id = ${sourceListings.id}
-          and package_observation.skill_id = ${skillId}
-          and package_observation.revision_id = ${revisionId}
-          and package_observation.source_hash = ${sourceListings.sourceHash}
-          and package_observation_run.status in ('succeeded', 'partial')
-          and package_observation_run.finished_at is not null
+        from sync_runs package_retain_run
+        where package_retain_run.id = ${sourceListings.lastSeenRunId}
+          and package_retain_run.source_id = ${sourceListings.sourceId}
+          and package_retain_run.status in ('succeeded', 'partial')
+          and package_retain_run.finished_at is not null
       )
     )
     or (
       ${catalogSources.freshnessPolicy} = 'latest-completed-observation'
       and ${sourceListings.lastCompletedObservationRunId} is not null
-      and exists (
-        select 1
-        from skill_category_observations package_certified_observation
-        where package_certified_observation.source_listing_id = ${sourceListings.id}
-          and package_certified_observation.observed_run_id = ${sourceListings.lastCompletedObservationRunId}
-          and package_certified_observation.skill_id = ${skillId}
-          and package_certified_observation.revision_id = ${revisionId}
-          and package_certified_observation.source_hash = ${sourceListings.sourceHash}
-      )
       and ${sourceListings.lastCompletedObservationRunId} = (
         select package_completed_run.id
         from sync_runs package_completed_run
@@ -307,11 +293,11 @@ export async function resolveEligiblePackageMember(
     .where(
       and(
         eq(sourceListings.skillId, candidate.skillId),
-        eq(sourceListings.status, "current"),
+        inArray(sourceListings.status, ["current", "stale"]),
         eq(sourceListings.sourceHash, input.observedHead),
         eq(catalogSources.enabled, true),
         eq(catalogSources.coverageState, packageAdmissibleCoverageStates[0]),
-        hasCertifiedSourceObservation(candidate.skillId, candidate.revisionId),
+        hasCertifiedSourceObservation(),
       ),
     )
     .limit(1);

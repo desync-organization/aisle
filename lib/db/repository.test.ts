@@ -17,7 +17,6 @@ import {
   packages,
   packageVersions,
   repositories,
-  skillCategories,
   skillRevisions,
   skills,
   sourceListings,
@@ -95,6 +94,23 @@ describe("catalog database and repository", () => {
     const repoId = "repo_fixture_public";
     const skillId = "skill_fixture_public";
     const revisionId = "revision_fixture_public";
+    const observedHead = "0000000000000000000000000000000000000000";
+    const contentHash = "0".repeat(64);
+    const packageSummary = "Inert package fixture used by repository resolution tests only.";
+    const packageEditorial = {
+      title: "Fixture stack",
+      summary: packageSummary,
+      outcome: "Proves package resolution keeps exact public provenance bindings.",
+      audience: ["Repository tests"],
+      category: "frontend",
+      tags: ["fixture", "repository"],
+      featured: false,
+      reviewedAt: "2026-07-20",
+      visual: {
+        iconToken: "brackets",
+        colorToken: "iris",
+      },
+    };
 
     await connection.db.insert(repositories).values({
       id: repoId,
@@ -141,20 +157,30 @@ describe("catalog database and repository", () => {
     await connection.db.insert(skillRevisions).values({
       id: revisionId,
       skillId,
-      immutableRef: "0000000000000000000000000000000000000000",
-      contentHash: "0".repeat(64),
-      upstreamHash: "provider-revision-v1",
+      immutableRef: observedHead,
+      contentHash,
+      upstreamHash: observedHead,
       installUrl:
         "https://github.com/example/public-skill-fixture/tree/0000000000000000000000000000000000000000/skills/catalog-fixture",
       installSpecJson: {
         kind: "source",
         sourceUrl: "https://github.com/example/public-skill-fixture",
-        immutableRef: "0000000000000000000000000000000000000000",
+        immutableRef: observedHead,
         skillPath: "skills/catalog-fixture",
       },
       license: "MIT",
       metadataJson: {
-        licenseEvidence: { path: "SKILL.md", sha256: "0".repeat(64) },
+        fileInventory: {
+          schemaVersion: 1,
+          complete: true,
+          fileCount: 1,
+          aggregateSha256: contentHash,
+        },
+        licenseEvidence: {
+          source: "frontmatter-spdx",
+          path: "SKILL.md",
+          sha256: contentHash,
+        },
       },
       isCurrent: true,
       firstSeenAt: now,
@@ -167,7 +193,7 @@ describe("catalog database and repository", () => {
       skillId,
       sourceType: "github",
       installUrl: "https://github.com/example/public-skill-fixture",
-      sourceHash: "provider-revision-v1",
+      sourceHash: observedHead,
       installs: 42,
       status: "current",
       rawJson: { fixture: true },
@@ -180,8 +206,8 @@ describe("catalog database and repository", () => {
       revisionId,
       scanner: "fixture-baseline-scanner",
       scannerVersion: "1.0.0",
-      immutableRef: "0000000000000000000000000000000000000000",
-      contentHash: "0".repeat(64),
+      immutableRef: observedHead,
+      contentHash,
       state: "pass",
       scannedAt: now,
     });
@@ -191,16 +217,29 @@ describe("catalog database and repository", () => {
       .from(categories)
       .where(eq(categories.slug, "frontend"));
     expect(frontend).toBeDefined();
-    await connection.db.insert(skillCategories).values({
+    await repository.replaceSkillCategoryEvidence({
+      fence,
+      listingId: "listing_fixture_public",
       skillId,
-      categoryId: frontend!.id,
+      revisionId,
+      sourceHash: observedHead,
+      categorySlugs: ["frontend"],
+    });
+    await repository.finishSyncRun({
+      runId: run.id,
+      leaseToken: run.leaseToken,
+      sourceId: "skills-sh",
+      sourceTotal: 1,
+      recordCount: 1,
+      completeCrawl: true,
+      observationSweepComplete: true,
     });
 
     await connection.db.insert(packages).values({
       id: "package_fixture",
       slug: "fixture-stack",
       title: "Fixture stack",
-      description: "Inert package fixture.",
+      description: packageSummary,
       published: true,
       createdAt: now,
       updatedAt: now,
@@ -209,6 +248,9 @@ describe("catalog database and repository", () => {
       id: "package_version_fixture",
       packageId: "package_fixture",
       version: 1,
+      blueprintSchemaVersion: 1,
+      blueprintDigest: `sha256:${"1".repeat(64)}`,
+      editorialJson: packageEditorial,
       publishedAt: now,
       createdAt: now,
     });
@@ -216,6 +258,9 @@ describe("catalog database and repository", () => {
       id: "package_version_fixture_v2",
       packageId: "package_fixture",
       version: 2,
+      blueprintSchemaVersion: 1,
+      blueprintDigest: `sha256:${"2".repeat(64)}`,
+      editorialJson: packageEditorial,
       publishedAt: now,
       createdAt: now,
     });
@@ -224,12 +269,28 @@ describe("catalog database and repository", () => {
       skillId,
       revisionId,
       position: 0,
+      upstreamRepositoryUrl: "https://github.com/example/public-skill-fixture",
+      upstreamSkillPath: "skills/catalog-fixture",
+      upstreamSkillName: "catalog-fixture",
+      observedHead,
+      observedLicense: "MIT",
+      licenseEvidenceClass: "skill-frontmatter",
+      licenseEvidencePath: "skills/catalog-fixture/SKILL.md",
+      publisherClass: "community",
     });
     await connection.db.insert(packageMembers).values({
       packageVersionId: "package_version_fixture_v2",
       skillId,
       revisionId,
       position: 0,
+      upstreamRepositoryUrl: "https://github.com/example/public-skill-fixture",
+      upstreamSkillPath: "skills/catalog-fixture",
+      upstreamSkillName: "catalog-fixture",
+      observedHead,
+      observedLicense: "MIT",
+      licenseEvidenceClass: "skill-frontmatter",
+      licenseEvidencePath: "skills/catalog-fixture/SKILL.md",
+      publisherClass: "community",
     });
 
     const results = await repository.search({ query: "database fixture", category: "frontend" });
@@ -255,91 +316,86 @@ describe("catalog database and repository", () => {
       }),
     ]);
 
-    await repository.recordObservedAudits({
-      fence,
-      listingId: "listing_fixture_public",
-      upstreamContentHash: "provider-revision-v1",
-      audits: [
-        {
-          provider: "Fixture upstream",
-          providerSlug: "fixture-upstream",
-          status: "fail",
-          summary: "First inert observation failed.",
-          auditedAt: "2026-07-20T10:00:00.000Z",
-          raw: fixtureAuditRaw(
-            "fail",
-            "First inert observation failed.",
-            "2026-07-20T10:00:00.000Z",
-          ),
-        },
-      ],
-    });
+    async function completeObservedAudit(
+      status: "pass" | "fail",
+      summary: string,
+      auditedAt: string,
+    ) {
+      const auditRun = await repository.acquireSyncRun("skills-sh", undefined, {
+        resumePartial: false,
+      });
+      const auditFence = {
+        sourceId: "skills-sh",
+        runId: auditRun.id,
+        leaseToken: auditRun.leaseToken,
+      };
+      await connection.db
+        .update(sourceListings)
+        .set({ lastSeenRunId: auditRun.id })
+        .where(eq(sourceListings.id, "listing_fixture_public"));
+      await repository.replaceSkillCategoryEvidence({
+        fence: auditFence,
+        listingId: "listing_fixture_public",
+        skillId,
+        revisionId,
+        sourceHash: observedHead,
+        categorySlugs: ["frontend"],
+      });
+      await repository.recordObservedAudits({
+        fence: auditFence,
+        listingId: "listing_fixture_public",
+        upstreamContentHash: observedHead,
+        audits: [
+          {
+            provider: "Fixture upstream",
+            providerSlug: "fixture-upstream",
+            status,
+            summary,
+            auditedAt,
+            raw: fixtureAuditRaw(status, summary, auditedAt),
+          },
+        ],
+      });
+      await repository.finishSyncRun({
+        runId: auditRun.id,
+        leaseToken: auditRun.leaseToken,
+        sourceId: "skills-sh",
+        sourceTotal: 1,
+        recordCount: 1,
+        completeCrawl: true,
+        observationSweepComplete: true,
+      });
+    }
+
+    await completeObservedAudit(
+      "fail",
+      "First inert observation failed.",
+      "2026-07-20T10:00:00.000Z",
+    );
     expect(await repository.search()).toEqual([]);
     expect(await repository.resolvePackage("fixture-stack")).toEqual([]);
 
-    await repository.recordObservedAudits({
-      fence,
-      listingId: "listing_fixture_public",
-      upstreamContentHash: "provider-revision-v1",
-      audits: [
-        {
-          provider: "Fixture upstream",
-          providerSlug: "fixture-upstream",
-          status: "pass",
-          summary: "Later inert observation passed.",
-          auditedAt: "2026-07-20T11:00:00.000Z",
-          raw: fixtureAuditRaw(
-            "pass",
-            "Later inert observation passed.",
-            "2026-07-20T11:00:00.000Z",
-          ),
-        },
-      ],
-    });
+    await completeObservedAudit(
+      "pass",
+      "Later inert observation passed.",
+      "2026-07-20T11:00:00.000Z",
+    );
     expect(await repository.search()).toHaveLength(1);
     expect(await repository.resolvePackage("fixture-stack")).toHaveLength(1);
 
-    await repository.recordObservedAudits({
-      fence,
-      listingId: "listing_fixture_public",
-      upstreamContentHash: "provider-revision-v1",
-      audits: [
-        {
-          provider: "Fixture upstream",
-          providerSlug: "fixture-upstream",
-          status: "fail",
-          summary: "Newest inert observation failed.",
-          auditedAt: "2026-07-20T12:00:00.000Z",
-          raw: fixtureAuditRaw(
-            "fail",
-            "Newest inert observation failed.",
-            "2026-07-20T12:00:00.000Z",
-          ),
-        },
-      ],
-    });
+    await completeObservedAudit(
+      "fail",
+      "Newest inert observation failed.",
+      "2026-07-20T12:00:00.000Z",
+    );
     expect(await repository.search()).toEqual([]);
     expect(await repository.resolvePackage("fixture-stack")).toEqual([]);
 
-    await repository.recordObservedAudits({
-      fence,
-      listingId: "listing_fixture_public",
-      upstreamContentHash: "provider-revision-v1",
-      audits: [
-        {
-          provider: "Fixture upstream",
-          providerSlug: "fixture-upstream",
-          status: "pass",
-          summary: "Final inert observation passed before local blocking test.",
-          auditedAt: "2026-07-20T13:00:00.000Z",
-          raw: fixtureAuditRaw(
-            "pass",
-            "Final inert observation passed before local blocking test.",
-            "2026-07-20T13:00:00.000Z",
-          ),
-        },
-      ],
-    });
+    await completeObservedAudit(
+      "pass",
+      "Final inert observation passed before local blocking test.",
+      "2026-07-20T13:00:00.000Z",
+    );
 
     await connection.db.insert(trustAssessments).values([
       {
@@ -347,8 +403,8 @@ describe("catalog database and repository", () => {
         revisionId,
         scanner: "fixture-pass-scanner",
         scannerVersion: "1.0.0",
-        immutableRef: "0000000000000000000000000000000000000000",
-        contentHash: "0".repeat(64),
+        immutableRef: observedHead,
+        contentHash,
         state: "pass",
         scannedAt: now,
       },
@@ -357,8 +413,8 @@ describe("catalog database and repository", () => {
         revisionId,
         scanner: "fixture-fail-scanner",
         scannerVersion: "1.0.0",
-        immutableRef: "0000000000000000000000000000000000000000",
-        contentHash: "0".repeat(64),
+        immutableRef: observedHead,
+        contentHash,
         state: "fail",
         quarantineReason: "Critical inert test finding.",
         scannedAt: now,

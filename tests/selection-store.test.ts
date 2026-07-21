@@ -5,7 +5,6 @@ import {
   EMPTY_SELECTION_SERVER_SNAPSHOT,
   MAX_SELECTED_SKILLS,
   SELECTION_STORAGE_KEY,
-  SELECTION_STORAGE_VERSION,
 } from "@/lib/selection";
 import { MemorySelectionStorage } from "./selection-test-helpers";
 

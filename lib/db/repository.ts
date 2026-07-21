@@ -11,7 +11,6 @@ import {
   isNotNull,
   like,
   ne,
-  notExists,
   notInArray,
   or,
   sql,
@@ -232,29 +231,15 @@ function hasActiveSourceListing() {
           active_source.freshness_policy = 'retain'
           and exists (
             select 1
-            from skill_category_observations active_observation
-            join sync_runs active_observation_run
-              on active_observation_run.id = active_observation.observed_run_id
-              and active_observation_run.source_id = active_listing.source_id
-            where active_observation.source_listing_id = active_listing.id
-              and active_observation.skill_id = ${skills.id}
-              and active_observation.revision_id = ${skillRevisions.id}
-              and active_observation.source_hash = active_listing.source_hash
-              and active_observation_run.status in ('succeeded', 'partial')
-              and active_observation_run.finished_at is not null
+            from sync_runs active_retain_run
+            where active_retain_run.id = active_listing.last_seen_run_id
+              and active_retain_run.source_id = active_listing.source_id
+              and active_retain_run.status in ('succeeded', 'partial')
+              and active_retain_run.finished_at is not null
           )
         )
         or (
           active_source.freshness_policy = 'latest-completed-observation'
-          and exists (
-            select 1
-            from skill_category_observations active_certified_observation
-            where active_certified_observation.source_listing_id = active_listing.id
-              and active_certified_observation.observed_run_id = active_listing.last_completed_observation_run_id
-              and active_certified_observation.skill_id = ${skills.id}
-              and active_certified_observation.revision_id = ${skillRevisions.id}
-              and active_certified_observation.source_hash = active_listing.source_hash
-          )
           and active_listing.last_completed_observation_run_id = (
             select completed_observation.id
             from sync_runs completed_observation
@@ -294,6 +279,14 @@ function hasRevisionBoundInstallSpecSql() {
       and json_type(${skillRevisions.installSpecJson}, '$.skillPath') = 'text'
       and length(trim(json_extract(${skillRevisions.installSpecJson}, '$.skillPath'))) > 0
       and json_extract(${skillRevisions.installSpecJson}, '$.skillPath') = ${skills.skillPath}
+    when json_extract(${skillRevisions.installSpecJson}, '$.kind') = 'registry' then
+      json_type(${skillRevisions.installSpecJson}, '$.registry') = 'text'
+      and length(trim(json_extract(${skillRevisions.installSpecJson}, '$.registry'))) > 0
+      and json_type(${skillRevisions.installSpecJson}, '$.identifier') = 'text'
+      and length(trim(json_extract(${skillRevisions.installSpecJson}, '$.identifier'))) > 0
+      and json_type(${skillRevisions.installSpecJson}, '$.version') = 'text'
+      and length(trim(json_extract(${skillRevisions.installSpecJson}, '$.version'))) > 0
+      and json_extract(${skillRevisions.installSpecJson}, '$.version') = ${skillRevisions.immutableRef}
     else 0
   end`;
 }
@@ -327,7 +320,7 @@ function hasRevisionBoundInstallSpec(
       parsed.data.immutableRef === identity.immutableRef
     );
   }
-  return false;
+  return parsed.data.version === identity.immutableRef;
 }
 
 function hasValidLicenseEvidence(value: unknown): boolean {
@@ -1962,7 +1955,7 @@ export class CatalogRepository {
       packageId: resolved.id,
       slug: resolved.slug,
       title: resolved.title,
-      description: resolved.description,
+      packageDescription: resolved.description,
       versionId: resolved.versionId,
       version: resolved.version,
       blueprintSchemaVersion: resolved.blueprintSchemaVersion,
@@ -2413,6 +2406,8 @@ export class CatalogRepository {
           updatedAt: now,
         })
         .where(eq(catalogSources.id, input.sourceId));
+    });
+    await this.db.transaction(async (transaction) => {
       await this.recomputeSourceCategoryMaterializationInTransaction(
         transaction,
         input.sourceId,

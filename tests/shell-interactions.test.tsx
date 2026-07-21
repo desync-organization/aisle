@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { SiteHeader } from "@/components/site-header";
 import { CommandBlock } from "@/components/ui/command-block";
+import { SelectionProvider } from "@/lib/selection/react";
 
 const push = vi.fn();
 
@@ -16,7 +17,7 @@ describe("marketplace shell interactions", () => {
   });
 
   it("opens catalog search from the visible trigger and submits a normalized query", async () => {
-    render(<SiteHeader />);
+    render(<SelectionProvider><SiteHeader /></SelectionProvider>);
 
     fireEvent.click(screen.getByRole("button", { name: /search catalog/i }));
     const searchInput = screen.getByRole("searchbox", { name: /search public agent skills/i });
@@ -28,7 +29,7 @@ describe("marketplace shell interactions", () => {
   });
 
   it("opens catalog search with the slash shortcut outside an input", () => {
-    render(<SiteHeader />);
+    render(<SelectionProvider><SiteHeader /></SelectionProvider>);
 
     fireEvent.keyDown(window, { key: "/" });
 

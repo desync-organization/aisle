@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import DocsPage from "@/app/docs/page";
 import PublicCatalogPolicyPage from "@/app/docs/public-catalog-policy/page";
+import { SelectionProvider } from "@/lib/selection/react";
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: vi.fn() }),
@@ -10,7 +11,7 @@ vi.mock("next/navigation", () => ({
 
 describe("Aisle documentation", () => {
   it("explains the open format without presenting authored skill content", () => {
-    render(<DocsPage />);
+    render(<SelectionProvider><DocsPage /></SelectionProvider>);
 
     expect(
       screen.getByRole("heading", { level: 1, name: /a clear map of what a skill is/i }),
@@ -21,7 +22,7 @@ describe("Aisle documentation", () => {
   });
 
   it("links format and installer claims to their primary sources", () => {
-    render(<DocsPage />);
+    render(<SelectionProvider><DocsPage /></SelectionProvider>);
 
     expect(screen.getByRole("link", { name: /Agent Skills specification/i })).toHaveAttribute(
       "href",
@@ -31,11 +32,11 @@ describe("Aisle documentation", () => {
       "href",
       "https://github.com/vercel-labs/skills",
     );
-    expect(screen.getByText(/composed install command is not live/i)).toBeInTheDocument();
+    expect(screen.getByText(/commands are issued only after current server-side revalidation/i)).toBeInTheDocument();
   });
 
   it("keeps upstream, editorial, and findings attribution separate", () => {
-    render(<PublicCatalogPolicyPage />);
+    render(<SelectionProvider><PublicCatalogPolicyPage /></SelectionProvider>);
 
     expect(screen.getByRole("heading", { name: /three kinds of context/i })).toBeInTheDocument();
     expect(screen.getByText(/missing license is displayed as unknown/i)).toBeInTheDocument();

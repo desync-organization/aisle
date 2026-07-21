@@ -56,6 +56,23 @@ function mutationFence(
   return { sourceId, runId: run.id, leaseToken: run.leaseToken };
 }
 
+async function finishCertifiedRun(
+  repository: CatalogRepository,
+  run: { id: string; leaseToken: string },
+  recordCount: number,
+  sourceId = "skills-sh",
+): Promise<void> {
+  await repository.finishSyncRun({
+    runId: run.id,
+    leaseToken: run.leaseToken,
+    sourceId,
+    sourceTotal: recordCount,
+    recordCount,
+    completeCrawl: true,
+    observationSweepComplete: true,
+  });
+}
+
 function skillsShListingRaw(id: string): PersistedSkillRaw {
   return {
     kind: "skills-sh-listing",
@@ -114,7 +131,14 @@ function candidate(
     public: true,
     internal: false,
     aliases: [],
-    repository: null,
+    repository: {
+      provider: "github",
+      url: sourceUrl,
+      owner: "example",
+      name: key,
+      visibility: "public",
+      defaultBranch: "main",
+    },
     artifact: {
       type: "skill-md",
       contents,
@@ -129,6 +153,89 @@ function candidate(
       commit: immutableRef,
     },
   };
+}
+
+async function insertPackageFixture(
+  connection: CatalogDatabaseConnection,
+  input: {
+    packageId: string;
+    slug: string;
+    title: string;
+    summary: string;
+    versionId: string;
+    members: Array<{
+      skillId: string;
+      revisionId: string;
+      position: number;
+      fixture: DiscoveredSkillRecord;
+      licenseEvidenceClass?: "repository-license" | "skill-frontmatter";
+      licenseEvidencePath?: string;
+    }>;
+    draftVersionId?: string;
+  },
+): Promise<void> {
+  const now = new Date();
+  const editorial = {
+    title: input.title,
+    summary: input.summary,
+    outcome: "Proves exact package resolution preserves current provenance contracts.",
+    audience: ["Repository tests"],
+    category: "frontend",
+    tags: ["fixture", "repository"],
+    featured: false,
+    reviewedAt: "2026-07-20",
+    visual: {
+      iconToken: "brackets",
+      colorToken: "iris",
+    },
+  };
+  await connection.db.insert(packages).values({
+    id: input.packageId,
+    slug: input.slug,
+    title: input.title,
+    description: input.summary,
+    published: true,
+    createdAt: now,
+    updatedAt: now,
+  });
+  await connection.db.insert(packageVersions).values({
+    id: input.versionId,
+    packageId: input.packageId,
+    version: 1,
+    blueprintSchemaVersion: 1,
+    blueprintDigest: `sha256:${createHash("sha256").update(input.slug).digest("hex")}`,
+    editorialJson: editorial,
+    publishedAt: now,
+    createdAt: now,
+  });
+  if (input.draftVersionId) {
+    await connection.db.insert(packageVersions).values({
+      id: input.draftVersionId,
+      packageId: input.packageId,
+      version: 2,
+      blueprintSchemaVersion: 1,
+      blueprintDigest: `sha256:${createHash("sha256").update(`${input.slug}:draft`).digest("hex")}`,
+      editorialJson: editorial,
+      publishedAt: null,
+      createdAt: now,
+    });
+  }
+  await connection.db.insert(packageMembers).values(
+    input.members.map((member) => ({
+      packageVersionId: input.versionId,
+      skillId: member.skillId,
+      revisionId: member.revisionId,
+      position: member.position,
+      upstreamRepositoryUrl: member.fixture.sourceUrl,
+      upstreamSkillPath: member.fixture.skillPath,
+      upstreamSkillName: "fixture-safe",
+      observedHead: member.fixture.immutableRef!,
+      observedLicense: "MIT",
+      licenseEvidenceClass: member.licenseEvidenceClass ?? "skill-frontmatter",
+      licenseEvidencePath: member.licenseEvidencePath ?? `${member.fixture.skillPath}/SKILL.md`,
+      publisherClass: "community" as const,
+    })),
+  );
 }
 
 describe("CatalogRepository invariants", () => {
@@ -422,6 +529,7 @@ describe("CatalogRepository invariants", () => {
         Date.now(),
       ],
     });
+    await finishCertifiedRun(repository, run, 1);
     expect(await repository.search()).toEqual([
       expect.objectContaining({ id: persisted.skillId, trustState: "pass" }),
     ]);
@@ -535,8 +643,24 @@ describe("CatalogRepository invariants", () => {
     });
 
     await audit(fixture.contentHash!);
+    await finishCertifiedRun(repository, run, 1);
     expect(await repository.search()).toHaveLength(1);
-    await audit(upstreamHash);
+
+    const secondRun = await repository.acquireSyncRun("skills-sh");
+    const second = await ingestion.persist(mutationFence("skills-sh", secondRun), fixture);
+    await repository.recordObservedAudits({
+      fence: mutationFence("skills-sh", secondRun),
+      listingId: second.listingId,
+      upstreamContentHash: upstreamHash,
+      audits: [{
+        provider: "fixture-auditor",
+        providerSlug: "fixture",
+        status: "fail" as const,
+        summary: "Inert failure fixture.",
+        raw: fixtureAuditRaw(),
+      }],
+    });
+    await finishCertifiedRun(repository, secondRun, 1);
     expect(await repository.search()).toEqual([]);
   });
 
@@ -663,34 +787,32 @@ describe("CatalogRepository invariants", () => {
 
   it("enforces revision/skill package pairs, publication, atomic blocking, and licenses", async () => {
     const run = await repository.acquireSyncRun("skills-sh");
-    const first = await ingestion.persist(mutationFence("skills-sh", run), candidate("package-one"));
-    const second = await ingestion.persist(mutationFence("skills-sh", run), candidate("package-two"));
-    const now = new Date();
-    await connection.db.insert(packages).values({
-      id: "package-invariants",
+    const firstFixture = candidate("package-one");
+    const secondFixture = candidate("package-two");
+    const first = await ingestion.persist(mutationFence("skills-sh", run), firstFixture);
+    const second = await ingestion.persist(mutationFence("skills-sh", run), secondFixture);
+    await insertPackageFixture(connection, {
+      packageId: "package-invariants",
       slug: "invariants",
       title: "Invariants",
-      description: "Inert fixture package.",
-      published: true,
-      createdAt: now,
-      updatedAt: now,
+      summary: "Inert fixture package used by repository invariant tests.",
+      versionId: "package-invariants-v1",
+      draftVersionId: "package-invariants-draft",
+      members: [
+        {
+          skillId: first.skillId!,
+          revisionId: first.revisionId!,
+          position: 0,
+          fixture: firstFixture,
+        },
+        {
+          skillId: second.skillId!,
+          revisionId: second.revisionId!,
+          position: 1,
+          fixture: secondFixture,
+        },
+      ],
     });
-    await connection.db.insert(packageVersions).values([
-      {
-        id: "package-invariants-v1",
-        packageId: "package-invariants",
-        version: 1,
-        publishedAt: now,
-        createdAt: now,
-      },
-      {
-        id: "package-invariants-draft",
-        packageId: "package-invariants",
-        version: 2,
-        publishedAt: null,
-        createdAt: now,
-      },
-    ]);
     await expect(
       connection.db.insert(packageMembers).values({
         packageVersionId: "package-invariants-v1",
@@ -699,36 +821,18 @@ describe("CatalogRepository invariants", () => {
         position: 0,
       }),
     ).rejects.toThrow();
-    await connection.db.insert(packageMembers).values([
-      {
-        packageVersionId: "package-invariants-v1",
-        skillId: first.skillId!,
-        revisionId: first.revisionId!,
-        position: 0,
-      },
-      {
-        packageVersionId: "package-invariants-v1",
-        skillId: second.skillId!,
-        revisionId: second.revisionId!,
-        position: 1,
-      },
-      {
-        packageVersionId: "package-invariants-draft",
-        skillId: first.skillId!,
-        revisionId: first.revisionId!,
-        position: 0,
-      },
-    ]);
     expect(await repository.resolvePackage("invariants", 2)).toEqual([]);
     await connection.db
       .update(skills)
       .set({ license: "unknown" })
       .where(eq(skills.id, first.skillId!));
+    await finishCertifiedRun(repository, run, 2);
     const resolved = await repository.resolvePackage("invariants", 1);
     expect(resolved).toHaveLength(2);
     expect(resolved.every((entry) => entry.license === "MIT")).toBe(true);
+    const trustRun = await repository.acquireSyncRun("skills-sh");
     await repository.recordTrustAssessment({
-      fence: mutationFence("skills-sh", run),
+      fence: mutationFence("skills-sh", trustRun),
       revisionId: second.revisionId!,
       immutableRef: candidate("package-two").immutableRef!,
       contentHash: candidate("package-two").contentHash!,
@@ -753,40 +857,25 @@ describe("CatalogRepository invariants", () => {
     const run = await repository.acquireSyncRun("skills-sh");
     const fixture = candidate("unresolved-package", { sourceRecordId: "unresolved-package" });
     const persisted = await ingestion.persist(mutationFence("skills-sh", run), fixture);
-    const now = new Date();
-    await connection.db.insert(packages).values({
-      id: "unresolved-package",
+    await insertPackageFixture(connection, {
+      packageId: "unresolved-package",
       slug: "unresolved-package",
       title: "Unresolved package",
-      description: "Inert unresolved-listing fixture.",
-      published: true,
-      createdAt: now,
-      updatedAt: now,
+      summary: "Inert unresolved listing fixture used by repository tests.",
+      versionId: "unresolved-package-v1",
+      members: [{
+        skillId: persisted.skillId!,
+        revisionId: persisted.revisionId!,
+        position: 0,
+        fixture,
+      }],
     });
-    await connection.db.insert(packageVersions).values({
-      id: "unresolved-package-v1",
-      packageId: "unresolved-package",
-      version: 1,
-      publishedAt: now,
-      createdAt: now,
-    });
-    await connection.db.insert(packageMembers).values({
-      packageVersionId: "unresolved-package-v1",
-      skillId: persisted.skillId!,
-      revisionId: persisted.revisionId!,
-      position: 0,
-    });
+    await finishCertifiedRun(repository, run, 1);
     expect(await repository.resolvePackage("unresolved-package")).toHaveLength(1);
 
-    await repository.failSyncRun({
-      runId: run.id,
-      leaseToken: run.leaseToken,
-      sourceId: "skills-sh",
-      message: "Advance to an unseen sync observation.",
-    });
     const unseenRun = await repository.acquireSyncRun("skills-sh");
     await repository.markCompleteCrawlMisses(mutationFence("skills-sh", unseenRun), 2);
-    expect(await repository.resolvePackage("unresolved-package")).toHaveLength(1);
+    expect(await repository.resolvePackage("unresolved-package")).toEqual([]);
 
     const unresolved = { ...fixture, artifact: null };
     expect(
@@ -836,29 +925,22 @@ describe("CatalogRepository invariants", () => {
       immutableRef: fixture.immutableRef!,
     };
     const persisted = await ingestion.persist(mutationFence("skills-sh", run), fixture);
-    const now = new Date();
-    await connection.db.insert(packages).values({
-      id: "root-license-package",
+    await insertPackageFixture(connection, {
+      packageId: "root-license-package",
       slug: "root-license-package",
       title: "Root license package",
-      description: "Inert repository-root license fixture.",
-      published: true,
-      createdAt: now,
-      updatedAt: now,
+      summary: "Inert repository root license fixture used by package tests.",
+      versionId: "root-license-package-v1",
+      members: [{
+        skillId: persisted.skillId!,
+        revisionId: persisted.revisionId!,
+        position: 0,
+        fixture,
+        licenseEvidenceClass: "repository-license",
+        licenseEvidencePath: "LICENSE",
+      }],
     });
-    await connection.db.insert(packageVersions).values({
-      id: "root-license-package-v1",
-      packageId: "root-license-package",
-      version: 1,
-      publishedAt: now,
-      createdAt: now,
-    });
-    await connection.db.insert(packageMembers).values({
-      packageVersionId: "root-license-package-v1",
-      skillId: persisted.skillId!,
-      revisionId: persisted.revisionId!,
-      position: 0,
-    });
+    await finishCertifiedRun(repository, run, 1);
 
     expect(await repository.resolvePackage("root-license-package")).toEqual([
       expect.objectContaining({

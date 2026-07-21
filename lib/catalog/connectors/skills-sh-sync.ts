@@ -49,6 +49,27 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function isSqliteBusy(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    (error as { code?: unknown }).code === "SQLITE_BUSY"
+  );
+}
+
+async function retrySqliteBusy(operation: () => Promise<void>): Promise<void> {
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    try {
+      await operation();
+      return;
+    } catch (error) {
+      if (!isSqliteBusy(error) || attempt === 7) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 25 * (attempt + 1)));
+    }
+  }
+}
+
 type SkillsShListingSummary = Extract<
   PersistedSkillRaw,
   { kind: "skills-sh-listing" }
@@ -123,6 +144,7 @@ export class SkillsShSync {
   private readonly leaseDurationMs: number;
   private readonly heartbeatIntervalMs: number;
   private readonly ingestion?: CatalogIngestionService;
+  private repositoryWriteQueue: Promise<void> = Promise.resolve();
 
   constructor(
     private readonly repository: CatalogRepository,
@@ -138,6 +160,20 @@ export class SkillsShSync {
       Math.max(Math.floor(this.leaseDurationMs / 2), 10),
     );
     this.ingestion = options.ingestion;
+  }
+
+  private async withRepositoryWrite<T>(operation: () => Promise<T>): Promise<T> {
+    const previous = this.repositoryWriteQueue;
+    let release: () => void = () => undefined;
+    this.repositoryWriteQueue = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await previous.catch(() => undefined);
+    try {
+      return await operation();
+    } finally {
+      release();
+    }
   }
 
   async run(): Promise<SkillsShSyncResult> {
@@ -236,6 +272,11 @@ export class SkillsShSync {
               if (error instanceof SkillsShAuthenticationError) {
                 throw error;
               }
+              await this.repository.markSourceRecordUnresolved(
+                fence,
+                listing.id,
+                listing.hash ?? null,
+              );
               return `${listing.id}: ${errorMessage(error)}`;
             }
           },
@@ -284,6 +325,7 @@ export class SkillsShSync {
         recordCount,
         partialFailures: failures,
         completeCrawl: true,
+        observationSweepComplete: failures.length === 0,
       });
       return {
         status: failures.length ? "partial" : "current",
@@ -299,15 +341,17 @@ export class SkillsShSync {
       const authenticationFailure = error instanceof SkillsShAuthenticationError;
       const retryAfterMs = error instanceof SkillsShHttpError ? error.retryAfterMs : null;
       if (!(error instanceof CatalogSyncLeaseLostError)) {
-        await this.repository.failSyncRun({
-          runId: run.id,
-          leaseToken: run.leaseToken,
-          sourceId: this.sourceId,
-          message: errorMessage(error),
-          retryCount: error instanceof SkillsShHttpError ? 1 : 0,
-          nextRetryAt: retryAfterMs === null ? null : new Date(Date.now() + retryAfterMs),
-          authMissing: authenticationFailure,
-        });
+        await retrySqliteBusy(() =>
+          this.repository.failSyncRun({
+            runId: run.id,
+            leaseToken: run.leaseToken,
+            sourceId: this.sourceId,
+            message: errorMessage(error),
+            retryCount: error instanceof SkillsShHttpError ? 1 : 0,
+            nextRetryAt: retryAfterMs === null ? null : new Date(Date.now() + retryAfterMs),
+            authMissing: authenticationFailure,
+          }),
+        );
       }
       return {
         status: authenticationFailure ? "credentials-required" : "partial",
@@ -326,19 +370,20 @@ export class SkillsShSync {
     listing: SkillsShSkill,
   ): Promise<void> {
     const listingHash = listing.hash ?? undefined;
-    const stored = await this.repository.upsertSourceListing({
+    const stored = await this.withRepositoryWrite(() => this.repository.upsertSourceListing({
       fence,
       upstreamId: listing.id,
       sourceType: listing.sourceType,
       installUrl: listing.installUrl,
       sourceHash: listingHash,
+      preserveSourceHash: Boolean(listingHash),
       installs: listing.installs,
       duplicateIndicator: listing.duplicate ?? listing.isDuplicate ?? false,
       raw: createPersistedSkillRaw({
         kind: "skills-sh-listing",
         listing: persistedListingSummary(listing),
       }),
-    });
+    }));
 
     let observedContentHash = listingHash ?? stored.previousHash;
     const listingHashChanged = stored.previousHash !== (listingHash ?? null);
@@ -353,25 +398,25 @@ export class SkillsShSync {
         if (hashChanged) {
           throw new Error("skills.sh returned 304 after the listing hash changed");
         }
-        await this.repository.updateSourceListingHydration({
+        await this.withRepositoryWrite(() => this.repository.updateSourceListingHydration({
           fence,
           listingId: stored.id,
           hash: stored.previousHash,
           etag: detail.etag ?? stored.detailEtag,
           lastModified: detail.lastModified ?? stored.detailLastModified,
-        });
+        }));
       } else {
         if (detail.data.id !== listing.id) {
           throw new Error(`skills.sh detail id ${detail.data.id} did not match ${listing.id}`);
         }
         observedContentHash = detail.data.hash;
-        await this.repository.updateSourceListingHydration({
+        await this.withRepositoryWrite(() => this.repository.updateSourceListingHydration({
           fence,
           listingId: stored.id,
           hash: detail.data.hash,
           etag: detail.etag,
           lastModified: detail.lastModified,
-        });
+        }));
         if (this.ingestion) {
           const sourceUrl =
             listing.installUrl ??
@@ -432,7 +477,7 @@ export class SkillsShSync {
             ? computeArtifactContentHash(artifactFiles)
             : null;
           const github = /^https:\/\/github\.com\/([^/]+)\/([^/#?]+)/i.exec(sourceUrl);
-          await this.ingestion.persist(fence, {
+          await this.withRepositoryWrite(() => this.ingestion!.persist(fence, {
             sourceRecordId: listing.id,
             provider: "skills-sh",
             sourceType: listing.sourceType,
@@ -488,7 +533,7 @@ export class SkillsShSync {
                 artifactContentHash,
               },
             }),
-          }, { installs: listing.installs });
+          }, { installs: listing.installs }));
         }
       }
     }
@@ -500,7 +545,7 @@ export class SkillsShSync {
     if (audit.data.id !== listing.id) {
       throw new Error(`skills.sh audit id ${audit.data.id} did not match ${listing.id}`);
     }
-    await this.repository.recordObservedAudits({
+    await this.withRepositoryWrite(() => this.repository.recordObservedAudits({
       fence,
       listingId: stored.id,
       // skills.sh audits do not identify a revision. This hash is only the
@@ -515,7 +560,7 @@ export class SkillsShSync {
         auditedAt: entry.auditedAt,
         raw: createPersistedAuditRaw(persistedAuditSummary(entry)),
       })),
-    });
+    }));
 
     // `detail.data.files` is intentionally discarded. Aisle stores only provenance
     // metadata here and never executes or permanently mirrors upstream files.
