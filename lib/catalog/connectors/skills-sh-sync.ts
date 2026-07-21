@@ -11,6 +11,7 @@ import {
 } from "../artifact-fingerprint";
 import { startSyncLeaseHeartbeat } from "../lease-heartbeat";
 import type { CatalogIngestionService } from "../ingestion";
+import { normalizeSkillPath } from "../normalization";
 import {
   createPersistedAuditRaw,
   createPersistedSkillRaw,
@@ -364,17 +365,25 @@ export class SkillsShSync {
           const skillPath = listing.id.startsWith(`${listing.source}/`)
             ? listing.id.slice(listing.source.length + 1)
             : listing.slug;
+          const normalizedSkillPath = normalizeSkillPath(skillPath);
           const upstreamTextFiles = (detail.data.files ?? []).map((file) => ({
             path: normalizeArtifactFilePath(file.path),
             contents: file.contents,
             sha256: createHash("sha256").update(file.contents).digest("hex"),
           }));
           const exactManifest = upstreamTextFiles.find((file) => file.path === "SKILL.md");
-          const nestedManifests = upstreamTextFiles.filter((file) =>
-            file.path.endsWith("/SKILL.md"),
+          const nestedManifestPath = normalizedSkillPath === "."
+            ? "SKILL.md"
+            : `${normalizedSkillPath}/SKILL.md`;
+          const nestedManifest = upstreamTextFiles.find(
+            (file) => file.path === nestedManifestPath,
           );
-          const upstreamManifest = exactManifest ??
-            (nestedManifests.length === 1 ? nestedManifests[0] : undefined);
+          const hasOtherNestedManifest = upstreamTextFiles.some(
+            (file) => file.path.endsWith("/SKILL.md") && file.path !== nestedManifestPath,
+          );
+          const upstreamManifest = exactManifest
+            ? hasOtherNestedManifest ? undefined : exactManifest
+            : nestedManifest;
           const artifactPrefix = upstreamManifest && upstreamManifest.path !== "SKILL.md"
             ? upstreamManifest.path.slice(0, -"SKILL.md".length)
             : "";
@@ -402,7 +411,7 @@ export class SkillsShSync {
             provider: "skills-sh",
             sourceType: listing.sourceType,
             sourceUrl,
-            skillPath,
+            skillPath: normalizedSkillPath,
             upstreamName: listing.name,
             upstreamDescription: null,
             compatibility: null,
