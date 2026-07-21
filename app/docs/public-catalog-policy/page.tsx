@@ -63,7 +63,7 @@ export default function PublicCatalogPolicyPage() {
         <aside className="policy-page__coverage">
           <strong>A precise coverage promise</strong>
           <p>
-            Aisle will report all eligible entries discoverable from each configured enumerable source at its displayed last-successful-sync time, plus clearly labeled federated or on-demand results. It will never claim to contain every skill on the internet.
+            Aisle reports every observed entry inside each configured source’s displayed coverage boundary, then distinguishes unresolved, blocked, and install-eligible records. Federated and on-demand results stay clearly labeled. It will never claim to contain every skill on the internet.
           </p>
         </aside>
         <section aria-labelledby="attribution-heading" className="policy-attribution">

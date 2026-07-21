@@ -29,7 +29,7 @@ const coverageModes = [
   {
     icon: DatabaseZap,
     mode: "Full",
-    body: "Enumerates every eligible entry the configured source exposes at a recorded point in time.",
+    body: "Enumerates entries inside the source's declared, count-consistent snapshot boundary.",
   },
   {
     icon: ListRestart,
@@ -159,7 +159,7 @@ export default async function CoveragePage() {
           <Activity aria-hidden="true" size={22} />
           <div>
             <span className="eyebrow">The coverage promise</span>
-            <h2>All eligible entries discoverable from each configured enumerable source at its displayed last-successful-sync time.</h2>
+            <h2>All observed entries inside each configured source’s displayed coverage boundary at its last successful sync.</h2>
             <p>
               Federated and on-demand results are added only with their mode clearly labeled. Aisle will not shorten this promise to “every skill on the internet.”
             </p>

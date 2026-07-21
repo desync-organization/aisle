@@ -71,7 +71,7 @@ export default async function CategoriesPage() {
                     <h2><Link href={`/categories/${category.slug}`}>{category.name}</Link></h2>
                     <p>{category.description}</p>
                     <dl>
-                      <div><dt>Catalog ready</dt><dd>{liveCount ?? "—"}</dd></div>
+                      <div><dt>Catalog records</dt><dd>{liveCount ?? "—"}</dd></div>
                       <div><dt>Curated refs</dt><dd>{curatedReferences || "—"}</dd></div>
                     </dl>
                     <Link className="category-card__link" href={`/categories/${category.slug}`}>

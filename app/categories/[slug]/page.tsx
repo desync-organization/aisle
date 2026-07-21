@@ -66,11 +66,11 @@ export default async function CategoryPage({ params }: CategoryPageProps) {
           <section aria-labelledby="category-live-skills" className="market-section category-live-section">
             <div className="market-section__heading">
               <div>
-                <span>01 / Catalog-ready</span>
-                <h2 id="category-live-skills">Eligible skills in this aisle.</h2>
+                <span>01 / Catalog observations</span>
+                <h2 id="category-live-skills">Public skills observed in this aisle.</h2>
               </div>
               <div className="category-live-section__action">
-                <p>Only current records that passed the catalog’s selectable boundary appear here.</p>
+                <p>Current and retained public records appear here; each card explains when selection is blocked.</p>
                 <ButtonLink href={`/skills?category=${category.slug}`} variant="secondary">
                   Open full explorer <ArrowRight aria-hidden="true" size={15} />
                 </ButtonLink>
