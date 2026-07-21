@@ -270,38 +270,67 @@ export const skillCategories = sqliteTable(
 );
 
 /**
- * Exact source-observation evidence used to derive the source-attributed rows
- * in `skill_categories`. Evidence is deliberately separate from the public
- * materialization so independent sources cannot overwrite one another.
+ * One exact, possibly empty category-classification snapshot for a listing in
+ * a sync run. Keeping the header separate makes an empty classification
+ * distinguishable from a run that never reached category classification.
+ */
+export const skillCategoryObservations = sqliteTable(
+  "skill_category_observations",
+  {
+    sourceListingId: text("source_listing_id").notNull(),
+    observedRunId: text("observed_run_id")
+      .notNull()
+      .references(() => syncRuns.id, { onDelete: "cascade" }),
+    skillId: text("skill_id").notNull(),
+    revisionId: text("revision_id").notNull(),
+    sourceHash: text("source_hash").notNull(),
+    observedAt: integer("observed_at", { mode: "timestamp_ms" }).notNull(),
+  },
+  (table) => [
+    primaryKey({
+      columns: [table.sourceListingId, table.observedRunId],
+    }),
+    foreignKey({
+      columns: [table.sourceListingId, table.skillId],
+      foreignColumns: [sourceListings.id, sourceListings.skillId],
+      name: "skill_category_observations_listing_skill_fk",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.revisionId, table.skillId],
+      foreignColumns: [skillRevisions.id, skillRevisions.skillId],
+      name: "skill_category_observations_revision_skill_fk",
+    }).onDelete("cascade"),
+    index("skill_category_observations_skill_idx").on(table.skillId),
+    index("skill_category_observations_run_idx").on(table.observedRunId),
+  ],
+);
+
+/**
+ * Categories belonging to a versioned source observation. Evidence remains
+ * separate from the public materialization so independent sources and running
+ * syncs cannot overwrite one another.
  */
 export const skillCategoryEvidence = sqliteTable(
   "skill_category_evidence",
   {
     sourceListingId: text("source_listing_id").notNull(),
-    skillId: text("skill_id").notNull(),
-    revisionId: text("revision_id").notNull(),
+    observedRunId: text("observed_run_id").notNull(),
     categoryId: text("category_id")
       .notNull()
       .references(() => categories.id, { onDelete: "cascade" }),
-    sourceHash: text("source_hash").notNull(),
-    observedRunId: text("observed_run_id").notNull(),
-    observedAt: integer("observed_at", { mode: "timestamp_ms" }).notNull(),
   },
   (table) => [
     primaryKey({
-      columns: [table.sourceListingId, table.revisionId, table.categoryId],
+      columns: [table.sourceListingId, table.observedRunId, table.categoryId],
     }),
     foreignKey({
-      columns: [table.sourceListingId, table.skillId],
-      foreignColumns: [sourceListings.id, sourceListings.skillId],
-      name: "skill_category_evidence_listing_skill_fk",
+      columns: [table.sourceListingId, table.observedRunId],
+      foreignColumns: [
+        skillCategoryObservations.sourceListingId,
+        skillCategoryObservations.observedRunId,
+      ],
+      name: "skill_category_evidence_observation_fk",
     }).onDelete("cascade"),
-    foreignKey({
-      columns: [table.revisionId, table.skillId],
-      foreignColumns: [skillRevisions.id, skillRevisions.skillId],
-      name: "skill_category_evidence_revision_skill_fk",
-    }).onDelete("cascade"),
-    index("skill_category_evidence_skill_idx").on(table.skillId),
     index("skill_category_evidence_listing_idx").on(table.sourceListingId),
   ],
 );
@@ -449,6 +478,7 @@ export const schema = {
   skillAliases,
   skillCategories,
   skillCategoryEvidence,
+  skillCategoryObservations,
   skillDuplicates,
   skillRevisions,
   skills,
