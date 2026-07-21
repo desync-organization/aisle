@@ -24,23 +24,34 @@ A selection is rejected unless all of these facts are present and valid:
 - the selection has no duplicate revision, canonical-revision conflict, or
   normalized-name collision with another source.
 
-The API integration starts with durable catalog state in the same transaction
-that resolves revision IDs, but persisted connector metadata is only a
-candidate. Both preflight and resolve refetch the current branch HEAD and one
-bounded recursive GitHub tree. The observed HEAD must still equal the stored
-commit, the tree must be complete and non-truncated, and the selected discovery
-scope must contain exactly one non-symlink `SKILL.md` at the persisted skill
-path. Equality with the immutable Git commit then binds the already-scanned
-artifact, license evidence, and selector name to that live tree. Unavailable
-verification, a moved branch, or an ambiguous scope fails closed. Browser-
-provided sources, refs, paths, flags, shell fragments, observed hashes, and
-eligibility assertions are never passed through.
+The API first snapshots durable candidate identities in a short database
+transaction, closes that transaction, and then performs live verification.
+Both preflight and resolve refetch the current branch HEAD and one bounded
+recursive GitHub tree. Repository checks use bounded concurrency and an overall
+deadline; any group that cannot finish becomes unavailable. The observed HEAD
+must still equal the stored commit, the tree must be complete and non-truncated,
+and the selected discovery scope must contain exactly one non-symlink
+`SKILL.md` at the persisted skill path.
+
+After the network work, the API opens a fresh transaction and rereads every
+catalog row and warning. A verified result is accepted only when its selection,
+owner, repository, branch, path, and persisted HEAD identity exactly reproduce
+the initial candidate. Equality with the immutable Git commit then binds the
+already-scanned artifact, license evidence, and selector name to that live
+tree. Unavailable verification, a moved branch, an identity change, or an
+ambiguous scope fails closed. Browser-provided sources, refs, paths, flags,
+shell fragments, observed hashes, and eligibility assertions are never passed
+through.
 
 Current source observations are also completion-bound. A listing last seen by
 a still-running crawl cannot make a revision selectable; its run must have a
 finished `succeeded` or `partial` state. Sources using latest-completed-
 observation freshness additionally require the catalog's completed-observation
-certificate after the catalog freshness migration is integrated.
+certificate after the catalog freshness migration is integrated. The merge
+hook is explicit: require `last_completed_observation_run_id` to equal the
+latest run for that source whose `observation_sweep_complete = 1`,
+`finished_at is not null`, and status is `succeeded` or `partial`. The base
+branch cannot reference those columns before that migration lands.
 
 ### Backend evidence shape
 

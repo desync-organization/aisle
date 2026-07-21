@@ -8,6 +8,8 @@ import {
 } from "@/lib/install-plan/contracts";
 
 const DEFAULT_TIMEOUT_MS = 10_000;
+const DEFAULT_OVERALL_TIMEOUT_MS = 25_000;
+const DEFAULT_CONCURRENCY = 4;
 const DEFAULT_MAXIMUM_TREE_BYTES = 8 * 1_024 * 1_024;
 const DEFAULT_MAXIMUM_TREE_ENTRIES = 50_000;
 const MAXIMUM_COMMIT_BYTES = 64 * 1_024;
@@ -32,7 +34,7 @@ const treeEntrySchema = z.object({
 });
 const treeResponseSchema = z.object({
   truncated: z.boolean(),
-  tree: z.array(treeEntrySchema).max(DEFAULT_MAXIMUM_TREE_ENTRIES),
+  tree: z.array(treeEntrySchema),
 });
 
 export type StackGithubVerificationCandidate = Readonly<{
@@ -45,7 +47,7 @@ export type StackGithubVerificationCandidate = Readonly<{
 }>;
 
 export type StackGithubVerificationResult =
-  | Readonly<{ state: "verified"; headSha: string }>
+  | Readonly<{ state: "verified"; headSha: string; candidateKey: string }>
   | Readonly<{ state: "unavailable" }>
   | Readonly<{ state: "changed" }>
   | Readonly<{ state: "ambiguous" }>;
@@ -54,6 +56,8 @@ export type StackGithubRevalidationOptions = Readonly<{
   fetch?: typeof globalThis.fetch;
   token?: string | null;
   timeoutMs?: number;
+  overallTimeoutMs?: number;
+  concurrency?: number;
   maximumTreeBytes?: number;
   maximumTreeEntries?: number;
 }>;
@@ -84,6 +88,17 @@ function groupKey(candidate: VerifiedCandidate): string {
     candidate.owner.toLowerCase(),
     candidate.repository.toLowerCase(),
     candidate.branch,
+  ]);
+}
+
+export function stackGithubCandidateKey(candidate: StackGithubVerificationCandidate): string {
+  return JSON.stringify([
+    candidate.selectionId,
+    candidate.owner.toLowerCase(),
+    candidate.repository.toLowerCase(),
+    candidate.branch,
+    candidate.skillPath,
+    candidate.persistedHeadSha,
   ]);
 }
 
@@ -139,13 +154,19 @@ async function verifyGroup(
   candidates: readonly VerifiedCandidate[],
   options: Required<
     Pick<StackGithubRevalidationOptions, "fetch" | "timeoutMs" | "maximumTreeBytes" | "maximumTreeEntries">
-  > & Readonly<{ token: string | null }>,
+  > & Readonly<{ token: string | null; deadlineMs: number }>,
 ): Promise<Map<string, StackGithubVerificationResult>> {
   const results = new Map<string, StackGithubVerificationResult>();
   const first = candidates[0]!;
   const owner = encodeURIComponent(first.owner);
   const repository = encodeURIComponent(first.repository);
   const branch = encodeURIComponent(first.branch);
+
+  const remainingTimeout = (): number => {
+    const remaining = options.deadlineMs - Date.now();
+    if (remaining <= 0) throw new Error("GitHub verification deadline elapsed");
+    return Math.min(options.timeoutMs, remaining);
+  };
 
   try {
     const commit = commitResponseSchema.parse(
@@ -154,7 +175,7 @@ async function verifyGroup(
         `https://api.github.com/repos/${owner}/${repository}/commits/${branch}`,
         {
           maximumBytes: MAXIMUM_COMMIT_BYTES,
-          timeoutMs: options.timeoutMs,
+          timeoutMs: remainingTimeout(),
           token: options.token,
         },
       ),
@@ -171,7 +192,7 @@ async function verifyGroup(
         `https://api.github.com/repos/${owner}/${repository}/git/trees/${liveHeadSha}?recursive=1`,
         {
           maximumBytes: options.maximumTreeBytes,
-          timeoutMs: options.timeoutMs,
+          timeoutMs: remainingTimeout(),
           token: options.token,
         },
       ),
@@ -187,7 +208,11 @@ async function verifyGroup(
       results.set(
         candidate.selectionId,
         manifests.length === 1 && manifests[0] === expected
-          ? { state: "verified", headSha: liveHeadSha }
+          ? {
+              state: "verified",
+              headSha: liveHeadSha,
+              candidateKey: stackGithubCandidateKey(candidate),
+            }
           : { state: "ambiguous" },
       );
     }
@@ -238,6 +263,12 @@ export async function revalidateGithubStackCandidates(
       ? process.env.GITHUB_TOKEN ?? process.env.GH_TOKEN ?? null
       : input.token,
     timeoutMs: boundedInteger(input.timeoutMs, DEFAULT_TIMEOUT_MS, 30_000),
+    overallTimeoutMs: boundedInteger(
+      input.overallTimeoutMs,
+      DEFAULT_OVERALL_TIMEOUT_MS,
+      60_000,
+    ),
+    concurrency: boundedInteger(input.concurrency, DEFAULT_CONCURRENCY, 8),
     maximumTreeBytes: boundedInteger(
       input.maximumTreeBytes,
       DEFAULT_MAXIMUM_TREE_BYTES,
@@ -250,11 +281,29 @@ export async function revalidateGithubStackCandidates(
     ),
   } as const;
 
-  // Sequential repository verification keeps remote and memory pressure
-  // bounded even for the maximum 64-source stack.
-  for (const members of groups.values()) {
-    const groupResults = await verifyGroup(members, options);
-    for (const [selectionId, result] of groupResults) results.set(selectionId, result);
+  const groupedCandidates = [...groups.values()];
+  const deadlineMs = Date.now() + options.overallTimeoutMs;
+  let nextGroup = 0;
+  const worker = async (): Promise<void> => {
+    while (nextGroup < groupedCandidates.length) {
+      const index = nextGroup;
+      nextGroup += 1;
+      const members = groupedCandidates[index]!;
+      if (Date.now() >= deadlineMs) return;
+      const groupResults = await verifyGroup(members, { ...options, deadlineMs });
+      for (const [selectionId, result] of groupResults) results.set(selectionId, result);
+    }
+  };
+  await Promise.all(
+    Array.from(
+      { length: Math.min(options.concurrency, groupedCandidates.length) },
+      () => worker(),
+    ),
+  );
+  for (const candidate of valid) {
+    if (!results.has(candidate.selectionId)) {
+      results.set(candidate.selectionId, { state: "unavailable" });
+    }
   }
   return results;
 }

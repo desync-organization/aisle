@@ -26,6 +26,7 @@ import {
 import { ApiError } from "../errors";
 import {
   revalidateGithubStackCandidates,
+  stackGithubCandidateKey,
   type StackGithubRevalidationOptions,
   type StackGithubVerificationCandidate,
   type StackGithubVerificationResult,
@@ -136,6 +137,11 @@ const trustStateExpression = sql<RawTrustState>`case
   else 'unreviewed'
 end`;
 
+// Catalog-core integration hook: once the latest-completed-observation columns
+// land, retain this finished-run fence and additionally require the listing's
+// last_completed_observation_run_id to equal that source's latest certified
+// observation_sweep_complete run. Referencing those columns on this branch
+// would precede their migration.
 const currentObservationExpression = sql<boolean>`exists (
   select 1
   from source_listings stack_listing
@@ -610,11 +616,10 @@ function resolveSelection(
   };
 }
 
-async function resolveSelectionSet(
+async function loadPersistedSelectionRows(
   transaction: CatalogTransaction,
   selectionIds: readonly string[],
-  github: StackGithubRevalidationOptions,
-): Promise<ResolvedStackSelection[]> {
+): Promise<PersistedStackSelection[]> {
   const persistedRows = (await transaction
     .select(selectionProjection())
     .from(skills)
@@ -648,16 +653,63 @@ async function resolveSelectionSet(
     );
   }
 
-  const verificationCandidates = persistedRows
-    .map(githubVerificationCandidate)
-    .filter((candidate): candidate is StackGithubVerificationCandidate => candidate !== null);
-  const [evidence, verification] = await Promise.all([
-    warningEvidence(transaction, persistedRows),
-    revalidateGithubStackCandidates(verificationCandidates, github),
-  ]);
-  return selectionIds.map((id) =>
-    resolveSelection(byId.get(id)!, evidence, verification.get(id))
-  );
+  return persistedRows;
+}
+
+function bindVerificationToFreshRow(
+  row: PersistedStackSelection,
+  verification: StackGithubVerificationResult | undefined,
+): StackGithubVerificationResult | undefined {
+  if (verification?.state !== "verified") return verification;
+  const candidate = githubVerificationCandidate(row);
+  if (
+    !candidate ||
+    stackGithubCandidateKey(candidate) !== verification.candidateKey
+  ) {
+    return { state: "changed" };
+  }
+  return verification;
+}
+
+async function resolveSelectionSet(
+  transaction: CatalogTransaction,
+  selectionIds: readonly string[],
+  verification: ReadonlyMap<string, StackGithubVerificationResult>,
+): Promise<ResolvedStackSelection[]> {
+  const persistedRows = await loadPersistedSelectionRows(transaction, selectionIds);
+  const byId = new Map(persistedRows.map((row) => [row.id, row]));
+  const evidence = await warningEvidence(transaction, persistedRows);
+  return selectionIds.map((id) => {
+    const row = byId.get(id)!;
+    return resolveSelection(
+      row,
+      evidence,
+      bindVerificationToFreshRow(row, verification.get(id)),
+    );
+  });
+}
+
+async function withLiveVerifiedSelections<T>(
+  database: CatalogDatabase,
+  selectionIds: readonly string[],
+  github: StackGithubRevalidationOptions,
+  operation: (
+    transaction: CatalogTransaction,
+    selections: readonly ResolvedStackSelection[],
+  ) => T | Promise<T>,
+): Promise<T> {
+  const verificationCandidates = await database.transaction(async (transaction) => {
+    const initialRows = await loadPersistedSelectionRows(transaction, selectionIds);
+    return initialRows
+      .map(githubVerificationCandidate)
+      .filter((candidate): candidate is StackGithubVerificationCandidate => candidate !== null);
+  });
+  const verification = await revalidateGithubStackCandidates(verificationCandidates, github);
+
+  return database.transaction(async (transaction) => {
+    const selections = await resolveSelectionSet(transaction, selectionIds, verification);
+    return operation(transaction, selections);
+  });
 }
 
 export type StackResolutionDependencies = Readonly<{
@@ -669,14 +721,12 @@ export async function preflightStackSelections(
   selectionIds: readonly string[],
   dependencies: StackResolutionDependencies = {},
 ) {
-  return database.transaction(async (transaction) => {
-    const selections = await resolveSelectionSet(
-      transaction,
-      selectionIds,
-      dependencies.github ?? {},
-    );
-    return selections.map((selection) => selection.publicRow);
-  });
+  return withLiveVerifiedSelections(
+    database,
+    selectionIds,
+    dependencies.github ?? {},
+    (_transaction, selections) => selections.map((selection) => selection.publicRow),
+  );
 }
 
 function assertAcknowledgements(
@@ -734,74 +784,74 @@ export async function resolveStackInstallPlan(
   request: StackResolveRequest,
   dependencies: StackResolutionDependencies = {},
 ) {
-  return database.transaction(async (transaction) => {
-    const selections = await resolveSelectionSet(
-      transaction,
-      request.selectionIds,
-      dependencies.github ?? {},
-    );
-    const blocked = selections
-      .map((selection, index) => ({ selection, index }))
-      .filter(({ selection }) => !selection.publicRow.selectable || !selection.plannerSkill);
-    if (blocked.length > 0) {
-      throw new ApiError(
-        409,
-        "SELECTION_NOT_ELIGIBLE",
-        "One or more selected skills are not currently eligible for installation.",
-        blocked.map(({ selection, index }) => ({
-          path: `selectionIds.${index}`,
-          message: selection.publicRow.gateReasons.join(", ") || "Selection is not eligible.",
-        })),
-      );
-    }
-    assertAcknowledgements(selections, request.acknowledgements);
-
-    let plan: ReturnType<typeof createInstallPlan>;
-    try {
-      plan = createInstallPlan({
-        selections: selections.map((selection) => selection.plannerSkill!),
-        options: request.options,
-      });
-    } catch (error) {
-      if (error instanceof InstallPlanError) {
+  return withLiveVerifiedSelections(
+    database,
+    request.selectionIds,
+    dependencies.github ?? {},
+    async (_transaction, selections) => {
+      const blocked = selections
+        .map((selection, index) => ({ selection, index }))
+        .filter(({ selection }) => !selection.publicRow.selectable || !selection.plannerSkill);
+      if (blocked.length > 0) {
         throw new ApiError(
           409,
-          `INSTALL_PLAN_${error.code}`,
-          error.message,
-          error.fieldIssues,
+          "SELECTION_NOT_ELIGIBLE",
+          "One or more selected skills are not currently eligible for installation.",
+          blocked.map(({ selection, index }) => ({
+            path: `selectionIds.${index}`,
+            message: selection.publicRow.gateReasons.join(", ") || "Selection is not eligible.",
+          })),
         );
       }
-      throw error;
-    }
+      assertAcknowledgements(selections, request.acknowledgements);
 
-    return {
-      id: plan.id,
-      command: plan.command,
-      selectionCount: plan.selectionCount,
-      sourceCount: plan.sourceCount,
-      runtime: {
-        package: plan.runtime.package,
-        minimumNodeVersion: plan.runtime.minimumNodeVersion,
-      },
-      semantics: {
-        atomic: false as const,
-        runtimeCompletenessVerified: false as const,
-        sourceRevisionEnforced: false as const,
-        pathScopeEnforced: true as const,
-        partialInstallPossible: true as const,
-        agentFailureMayExitZero: true as const,
-        mutableSourceRacePossible: true as const,
-      },
-      warnings: [...plan.warnings],
-      resolvedSkills: selections.map((selection) => ({
-        id: selection.publicRow.id,
-        name: selection.publicRow.name,
-        compatibilityAdvisory: selection.publicRow.compatibilityAdvisory,
-        source: selection.publicRow.sourceUrl,
-        revision: selection.publicRow.immutableRef!,
-        license: selection.publicRow.license,
-        trust: selection.publicRow.trust as "pass" | "warn",
-      })),
-    };
-  });
+      let plan: ReturnType<typeof createInstallPlan>;
+      try {
+        plan = createInstallPlan({
+          selections: selections.map((selection) => selection.plannerSkill!),
+          options: request.options,
+        });
+      } catch (error) {
+        if (error instanceof InstallPlanError) {
+          throw new ApiError(
+            409,
+            `INSTALL_PLAN_${error.code}`,
+            error.message,
+            error.fieldIssues,
+          );
+        }
+        throw error;
+      }
+
+      return {
+        id: plan.id,
+        command: plan.command,
+        selectionCount: plan.selectionCount,
+        sourceCount: plan.sourceCount,
+        runtime: {
+          package: plan.runtime.package,
+          minimumNodeVersion: plan.runtime.minimumNodeVersion,
+        },
+        semantics: {
+          atomic: false as const,
+          runtimeCompletenessVerified: false as const,
+          sourceRevisionEnforced: false as const,
+          pathScopeEnforced: true as const,
+          partialInstallPossible: true as const,
+          agentFailureMayExitZero: true as const,
+          mutableSourceRacePossible: true as const,
+        },
+        warnings: [...plan.warnings],
+        resolvedSkills: selections.map((selection) => ({
+          id: selection.publicRow.id,
+          name: selection.publicRow.name,
+          compatibilityAdvisory: selection.publicRow.compatibilityAdvisory,
+          source: selection.publicRow.sourceUrl,
+          revision: selection.publicRow.immutableRef!,
+          license: selection.publicRow.license,
+          trust: selection.publicRow.trust as "pass" | "warn",
+        })),
+      };
+    },
+  );
 }
