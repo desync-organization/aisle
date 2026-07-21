@@ -24,15 +24,17 @@ export const askSkillSourceDescriptor = {
   name: "AskSkill",
   baseUrl: "https://askill.sh/api/v1/skills",
   mode: "federated",
+  freshnessPolicy: "retain",
   upstreamIdentifier: "AskSkill public v1 skills API",
   termsUrl: "https://askill.sh",
   enabled: false,
+  resumePartialRuns: false,
   initialCoverageState: "not-configured",
   knownExclusions: [
-    "The client contract is implemented, but catalog hydration and synchronization are not connected; no records are claimed.",
-    "Provider totals may be estimated and the page window may be limited; AskSkill is never presented as exhaustive source-wide coverage.",
-    "Provider badges, rankings, and AI scores are observations only and never Aisle trust evidence.",
-    "Raw skill text is transient validation input; exact public GitHub revision, artifact, and license evidence are required before selection.",
+    "Synchronization is an explicit opt-in and requires a public-only GitHub API token for exact repository hydration.",
+    "Page numbers, totals, and reachable windows are mutable, so every sweep is partial, non-retiring federated coverage and cannot safely resume an earlier run.",
+    "Every provider identity is rebound to its observed exact public GitHub repository and SKILL.md path; hydration failures are excluded.",
+    "Provider names, descriptions, badges, rankings, AI scores, raw instructions, and totals are not persisted as Aisle trust or completeness evidence.",
   ],
 } satisfies CatalogSourceDescriptor;
 

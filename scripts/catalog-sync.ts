@@ -1,4 +1,5 @@
 import { AgentSkillsInConnector } from "../lib/catalog/adapters/agentskills-in";
+import { AskSkillConnector } from "../lib/catalog/adapters/askskill";
 import { ClawHubAdapter } from "../lib/catalog/adapters/clawhub";
 import { GitHubPublicRepositoryAdapter } from "../lib/catalog/adapters/github-public";
 import { providerApprovedRegistryStubs } from "../lib/catalog/adapters/registry-stubs";
@@ -43,6 +44,10 @@ async function main(): Promise<void> {
       new SkillMdAdapter({ githubToken: process.env.GITHUB_TOKEN }),
       new AgentSkillsInConnector({
         enabled: explicitlyEnabled("AISLE_AGENTSKILLS_IN_ENABLED"),
+        githubToken: process.env.GITHUB_TOKEN,
+      }),
+      new AskSkillConnector({
+        enabled: explicitlyEnabled("AISLE_ASKSKILL_ENABLED"),
         githubToken: process.env.GITHUB_TOKEN,
       }),
       ...providerApprovedRegistryStubs,

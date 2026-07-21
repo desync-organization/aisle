@@ -27,6 +27,7 @@ const serverEnvironmentSchema = z.object({
   SKILLS_SH_OIDC_TOKEN: z.string().min(1).optional(),
   GITHUB_TOKEN: optionalValue,
   AISLE_AGENTSKILLS_IN_ENABLED: explicitBoolean,
+  AISLE_ASKSKILL_ENABLED: explicitBoolean,
 });
 
 const publicEnvironmentSchema = z.object({
@@ -41,6 +42,7 @@ export const serverEnvironment = serverEnvironmentSchema.parse({
   SKILLS_SH_OIDC_TOKEN: process.env.SKILLS_SH_OIDC_TOKEN,
   GITHUB_TOKEN: process.env.GITHUB_TOKEN,
   AISLE_AGENTSKILLS_IN_ENABLED: process.env.AISLE_AGENTSKILLS_IN_ENABLED,
+  AISLE_ASKSKILL_ENABLED: process.env.AISLE_ASKSKILL_ENABLED,
 });
 
 export const publicEnvironment = publicEnvironmentSchema.parse({

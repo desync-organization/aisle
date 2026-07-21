@@ -36,6 +36,9 @@ export const providerApprovedRegistryStubs: CatalogSourceConnector[] = [
     ],
   }),
   ...widerPublicSourceDescriptors
-    .filter((descriptor) => descriptor.id !== "agentskills-in")
+    .filter(
+      (descriptor) =>
+        descriptor.id !== "agentskills-in" && descriptor.id !== "askskill",
+    )
     .map((descriptor) => new ProviderApprovedStub(descriptor)),
 ];
