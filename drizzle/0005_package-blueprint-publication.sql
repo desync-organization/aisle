@@ -1,3 +1,6 @@
+-- PENDING HISTORY RECONCILIATION: after catalog-core's source-observation
+-- migration lands as 0005, rename this migration to 0006 and add its journal
+-- entry and exact schema snapshot. It is intentionally not journaled here.
 ALTER TABLE `package_versions` ADD `blueprint_schema_version` integer DEFAULT 1 NOT NULL;
 --> statement-breakpoint
 ALTER TABLE `package_versions` ADD `blueprint_digest` text DEFAULT '' NOT NULL;
