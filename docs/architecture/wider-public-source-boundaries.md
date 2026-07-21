@@ -30,12 +30,12 @@ rechecks repository visibility and accepts a commit only after a bounded,
 non-recursive tree walk finds the same blob at the same path. Oversized,
 truncated, missing, private, or conflicting origins remain unresolved.
 
-## Remaining orchestration work
+## Intentionally unresolved boundary
 
-- Reuse the exact GitHub artifact/license hydrator for future registry connectors
-  rather than trusting registry payloads.
-- Keep GetSkillary observations unresolved unless a future authoritative upstream
-  origin and license can be proved independently.
+The registry connectors already share one exact GitHub artifact/license hydrator;
+registry payloads nominate identities but do not become provenance. GetSkillary
+observations must remain unresolved unless a future authoritative upstream origin
+and license can be proved independently.
 
 No connector may create, rewrite, vendor, or infer a `SKILL.md` on Aisle's behalf.
 

@@ -56,6 +56,21 @@ The catalog CLI reads its process environment. Use the names documented in `.env
 
 The command prints a per-connector JSON result. A fulfilled command is not a claim that every source is current: read each source's stored mode, coverage state, record count, last successful sync, failures, and exclusions before presenting coverage.
 
+## Curated package publication
+
+After the required public GitHub sources have completed and every pinned member has
+current provenance, license, inventory, and trust evidence, publish the eight launch
+packages with:
+
+```powershell
+npm run packages:publish
+```
+
+Publication is transactional and fail-closed: if one requested member no longer
+matches its exact upstream revision or eligibility evidence, no partial package set
+is published. Pass one or more package slugs after `--` to publish a subset, for
+example `npm run packages:publish -- frontend-foundations security-surface`.
+
 ### Coverage semantics
 
 There is no universal registry of every public Agent Skill. Aisle can only claim eligible records proven from configured sources at their displayed sync state:
