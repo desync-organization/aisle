@@ -1155,7 +1155,7 @@ const blueprintInputs = [
     slug: "data-and-ai",
     editorial: {
       title: "Data & AI Systems",
-      summary: "A data engineering set spanning Postgres design, serverless databases, Firebase, datasets, and model training.",
+      summary: "A data engineering set spanning Postgres design, Firebase, datasets, and model training.",
       outcome: "Design dependable application data layers and carry curated datasets into reproducible model-training workflows.",
       audience: ["Data engineers", "AI engineers", "Backend product teams"],
       category: "data-ai",
@@ -1166,11 +1166,10 @@ const blueprintInputs = [
     },
     members: [
       member(1, "supabasePostgresBestPractices", "Adds Supabase-authored Postgres performance, schema, and operational best practices."),
-      member(2, "neonPostgres", "Provides first-party Neon workflows for serverless Postgres development and platform operations."),
-      member(3, "firebaseFirestore", "Adds first-party Firestore guidance for modeling, querying, and securing Firebase application data."),
-      member(4, "firebaseAiLogicBasics", "Adds official Firebase AI Logic guidance for safely connecting model capabilities to applications."),
-      member(5, "huggingfaceDatasets", "Covers dataset creation, transformation, and publication in the Hugging Face ecosystem."),
-      member(6, "huggingfaceLlmTrainer", "Extends the workflow into reproducible language-model training with first-party tooling guidance."),
+      member(2, "firebaseFirestore", "Adds first-party Firestore guidance for modeling, querying, and securing Firebase application data."),
+      member(3, "firebaseAiLogicBasics", "Adds official Firebase AI Logic guidance for safely connecting model capabilities to applications."),
+      member(4, "huggingfaceDatasets", "Covers dataset creation, transformation, and publication in the Hugging Face ecosystem."),
+      member(5, "huggingfaceLlmTrainer", "Extends the workflow into reproducible language-model training with first-party tooling guidance."),
     ],
   },
   {
@@ -1234,9 +1233,9 @@ export const launchPackageRepositoryUrls: readonly string[] = Object.freeze(
   )].sort(),
 );
 
-if (launchPackageRepositoryUrls.length !== 15) {
+if (launchPackageRepositoryUrls.length !== 14) {
   throw new Error(
-    `Launch package repository inventory changed: expected 15 public origins, found ${launchPackageRepositoryUrls.length}.`,
+    `Launch package repository inventory changed: expected 14 public origins, found ${launchPackageRepositoryUrls.length}.`,
   );
 }
 
