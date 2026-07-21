@@ -70,7 +70,7 @@ npm run packages:publish
 Publication is transactional and fail-closed: if one requested member no longer
 matches its exact upstream revision or eligibility evidence, no partial package set
 is published. Pass one or more package slugs after `--` to publish a subset, for
-example `npm run packages:publish -- frontend-foundations security-surface`.
+example `npm run packages:publish -- frontend-foundations cybersecurity`.
 
 ### Coverage semantics
 
