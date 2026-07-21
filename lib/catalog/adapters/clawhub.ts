@@ -454,7 +454,13 @@ export class ClawHubAdapter implements CatalogSourceConnector {
       effectiveModeration?.isRemoved
     ) {
       exclusions.push(`${identity}: no longer publicly eligible under ClawHub moderation.`);
-      return null;
+      return this.unresolvedRecord(
+        item,
+        detail,
+        "explicit moderation tombstone",
+        effectiveModeration,
+        scan,
+      );
     }
 
     const encodedVersion = encodeURIComponent(version);
@@ -627,7 +633,13 @@ export class ClawHubAdapter implements CatalogSourceConnector {
     };
   }
 
-  private unresolvedRecord(item: ListItem, detail: Detail): DiscoveredSkillRecord {
+  private unresolvedRecord(
+    item: ListItem,
+    detail: Detail,
+    reason = "exact version unavailable",
+    moderation: Moderation | null = null,
+    scan: Scan | null = null,
+  ): DiscoveredSkillRecord {
     const owner = detail.owner!.handle;
     const identity = `@${owner}/${detail.skill.slug}`;
     return {
@@ -654,7 +666,9 @@ export class ClawHubAdapter implements CatalogSourceConnector {
         kind: "clawhub-skill",
         listing: persistedClawHubListing(item),
         detail: persistedClawHubDetail(detail),
-        unresolved: "exact version unavailable",
+        moderation: persistedModerationSummary(moderation),
+        scan: persistedScanSummary(scan),
+        unresolved: reason,
       }),
     };
   }
