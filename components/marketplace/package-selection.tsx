@@ -71,8 +71,10 @@ export function PackageSelection({
     if (!isComplete || !assertion) return;
 
     if (allSelected) {
-      skillIds.forEach((id) => actions.remove(id));
-      setFeedback(`${memberCount} package skills removed from your stack.`);
+      actions.removePackage(packageSlug);
+      setFeedback(
+        "Package receipt removed; independently selected or shared skills were kept.",
+      );
       return;
     }
 
