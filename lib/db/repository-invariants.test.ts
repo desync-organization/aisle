@@ -208,6 +208,101 @@ describe("CatalogRepository invariants", () => {
     ).rejects.toThrow(/lease/i);
   });
 
+  it("keeps the last certified categories while a newer sweep is running or incomplete", async () => {
+    await repository.upsertSource({
+      id: "skills-sh",
+      name: "skills.sh",
+      baseUrl: "https://skills.sh/api/v1",
+      mode: "full",
+      freshnessPolicy: "latest-completed-observation",
+      upstreamIdentifier: "skills.sh API v1",
+      termsUrl: "https://skills.sh",
+    });
+    const fixture = candidate("category-certificate");
+    fixture.categoryHints = { categories: ["Cybersecurity"], tags: [] };
+    const firstRun = await repository.acquireSyncRun("skills-sh", undefined, {
+      resumePartial: false,
+    });
+    await ingestion.persist(mutationFence("skills-sh", firstRun), fixture);
+    await repository.finishSyncRun({
+      runId: firstRun.id,
+      leaseToken: firstRun.leaseToken,
+      sourceId: "skills-sh",
+      sourceTotal: 1,
+      recordCount: 1,
+      completeCrawl: true,
+      observationSweepComplete: true,
+    });
+
+    const assignedSlugs = async () => connection.db
+      .select({ slug: categories.slug })
+      .from(skillCategories)
+      .innerJoin(categories, eq(categories.id, skillCategories.categoryId));
+    expect(await assignedSlugs()).toEqual([{ slug: "security" }]);
+
+    const secondRun = await repository.acquireSyncRun("skills-sh", undefined, {
+      resumePartial: false,
+    });
+    fixture.categoryHints = { categories: ["Frontend"], tags: [] };
+    await ingestion.persist(mutationFence("skills-sh", secondRun), fixture);
+    expect(await assignedSlugs()).toEqual([{ slug: "security" }]);
+
+    await repository.failSyncRun({
+      runId: secondRun.id,
+      leaseToken: secondRun.leaseToken,
+      sourceId: "skills-sh",
+      message: "Inert incomplete observation fixture.",
+    });
+    expect(await assignedSlugs()).toEqual([{ slug: "security" }]);
+  });
+
+  it("promotes an empty retain snapshot and retains categories for stale listings", async () => {
+    const fixture = candidate("category-retain");
+    fixture.categoryHints = { categories: ["Cybersecurity"], tags: [] };
+    const firstRun = await repository.acquireSyncRun("skills-sh", undefined, {
+      resumePartial: false,
+    });
+    await ingestion.persist(mutationFence("skills-sh", firstRun), fixture);
+    await repository.finishSyncRun({
+      runId: firstRun.id,
+      leaseToken: firstRun.leaseToken,
+      sourceId: "skills-sh",
+      sourceTotal: 1,
+      recordCount: 1,
+      completeCrawl: true,
+    });
+    expect(await connection.db.select().from(skillCategories)).toHaveLength(1);
+
+    const staleRun = await repository.acquireSyncRun("skills-sh", undefined, {
+      resumePartial: false,
+    });
+    await repository.finishSyncRun({
+      runId: staleRun.id,
+      leaseToken: staleRun.leaseToken,
+      sourceId: "skills-sh",
+      sourceTotal: 0,
+      recordCount: 1,
+      completeCrawl: true,
+    });
+    expect(await connection.db.select().from(skillCategories)).toHaveLength(1);
+
+    const emptyRun = await repository.acquireSyncRun("skills-sh", undefined, {
+      resumePartial: false,
+    });
+    fixture.categoryHints = { categories: [], tags: [] };
+    await ingestion.persist(mutationFence("skills-sh", emptyRun), fixture);
+    expect(await connection.db.select().from(skillCategories)).toHaveLength(1);
+    await repository.finishSyncRun({
+      runId: emptyRun.id,
+      leaseToken: emptyRun.leaseToken,
+      sourceId: "skills-sh",
+      sourceTotal: 1,
+      recordCount: 1,
+      completeCrawl: true,
+    });
+    expect(await connection.db.select().from(skillCategories)).toEqual([]);
+  });
+
   it("atomically detaches a formerly valid listing when a new observation is invalid", async () => {
     const run = await repository.acquireSyncRun("skills-sh");
     const first = await ingestion.persist(mutationFence("skills-sh", run), candidate("detach"));

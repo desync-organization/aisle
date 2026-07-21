@@ -41,6 +41,7 @@ import {
   skillAliases,
   skillCategories,
   skillCategoryEvidence,
+  skillCategoryObservations,
   skillDuplicates,
   skillRevisions,
   skills,
@@ -94,6 +95,7 @@ const packageEligibleLicenses = [
   "CC0-1.0",
   "Unlicense",
 ] as const;
+const CATEGORY_OBSERVATION_HISTORY_LIMIT = 4;
 
 function stableId(namespace: string, value: string): string {
   return `${namespace}_${createHash("sha256").update(value).digest("hex").slice(0, 24)}`;
@@ -349,43 +351,81 @@ export class CatalogRepository {
       const chunk = orderedSkillIds.slice(offset, offset + chunkSize);
       const eligible = await transaction
         .selectDistinct({
-          skillId: skillCategoryEvidence.skillId,
+          skillId: skillCategoryObservations.skillId,
           categoryId: skillCategoryEvidence.categoryId,
           categoryOrder: categories.sortOrder,
           categorySlug: categories.slug,
         })
         .from(skillCategoryEvidence)
         .innerJoin(
+          skillCategoryObservations,
+          and(
+            eq(
+              skillCategoryObservations.sourceListingId,
+              skillCategoryEvidence.sourceListingId,
+            ),
+            eq(
+              skillCategoryObservations.observedRunId,
+              skillCategoryEvidence.observedRunId,
+            ),
+          ),
+        )
+        .innerJoin(
           sourceListings,
           and(
-            eq(sourceListings.id, skillCategoryEvidence.sourceListingId),
-            eq(sourceListings.skillId, skillCategoryEvidence.skillId),
-            eq(sourceListings.sourceHash, skillCategoryEvidence.sourceHash),
-            eq(sourceListings.lastSeenRunId, skillCategoryEvidence.observedRunId),
+            eq(sourceListings.id, skillCategoryObservations.sourceListingId),
+            eq(sourceListings.skillId, skillCategoryObservations.skillId),
+            eq(sourceListings.sourceHash, skillCategoryObservations.sourceHash),
           ),
         )
         .innerJoin(catalogSources, eq(catalogSources.id, sourceListings.sourceId))
         .innerJoin(
           skillRevisions,
           and(
-            eq(skillRevisions.id, skillCategoryEvidence.revisionId),
-            eq(skillRevisions.skillId, skillCategoryEvidence.skillId),
-            eq(skillRevisions.upstreamHash, skillCategoryEvidence.sourceHash),
+            eq(skillRevisions.id, skillCategoryObservations.revisionId),
+            eq(skillRevisions.skillId, skillCategoryObservations.skillId),
+            eq(skillRevisions.upstreamHash, skillCategoryObservations.sourceHash),
             eq(skillRevisions.isCurrent, true),
+          ),
+        )
+        .innerJoin(
+          syncRuns,
+          and(
+            eq(syncRuns.id, skillCategoryObservations.observedRunId),
+            eq(syncRuns.sourceId, catalogSources.id),
           ),
         )
         .innerJoin(categories, eq(categories.id, skillCategoryEvidence.categoryId))
         .where(
           and(
-            inArray(skillCategoryEvidence.skillId, chunk),
-            eq(sourceListings.status, "current"),
+            inArray(skillCategoryObservations.skillId, chunk),
+            inArray(sourceListings.status, ["current", "stale"]),
             eq(catalogSources.enabled, true),
             inArray(catalogSources.coverageState, ["current", "partial"]),
             sql<boolean>`(
-              ${catalogSources.freshnessPolicy} = 'retain'
+              (
+                ${catalogSources.freshnessPolicy} = 'retain'
+                and ${skillCategoryObservations.observedRunId} = (
+                  select retain_category_observation.observed_run_id
+                  from skill_category_observations retain_category_observation
+                  join sync_runs retain_category_run
+                    on retain_category_run.id = retain_category_observation.observed_run_id
+                  where retain_category_observation.source_listing_id = ${sourceListings.id}
+                    and retain_category_observation.skill_id = ${sourceListings.skillId}
+                    and retain_category_observation.revision_id = ${skillRevisions.id}
+                    and retain_category_observation.source_hash = ${sourceListings.sourceHash}
+                    and retain_category_run.source_id = ${catalogSources.id}
+                    and retain_category_run.finished_at is not null
+                    and retain_category_run.status in ('succeeded', 'partial')
+                  order by retain_category_run.finished_at desc,
+                    retain_category_run.started_at desc,
+                    retain_category_run.id desc
+                  limit 1
+                )
+              )
               or (
                 ${catalogSources.freshnessPolicy} = 'latest-completed-observation'
-                and ${skillCategoryEvidence.observedRunId} = ${sourceListings.lastCompletedObservationRunId}
+                and ${skillCategoryObservations.observedRunId} = ${sourceListings.lastCompletedObservationRunId}
                 and ${sourceListings.lastCompletedObservationRunId} = (
                   select completed_category_observation.id
                   from sync_runs completed_category_observation
@@ -403,7 +443,7 @@ export class CatalogRepository {
           ),
         )
         .orderBy(
-          asc(skillCategoryEvidence.skillId),
+          asc(skillCategoryObservations.skillId),
           asc(categories.sortOrder),
           asc(categories.slug),
           asc(skillCategoryEvidence.categoryId),
@@ -432,6 +472,93 @@ export class CatalogRepository {
     }
   }
 
+  private async recomputeSourceCategoryMaterializationInTransaction(
+    transaction: CatalogTransaction,
+    sourceId: string,
+  ): Promise<void> {
+    const affected = await transaction
+      .selectDistinct({ skillId: sourceListings.skillId })
+      .from(sourceListings)
+      .where(
+        and(
+          eq(sourceListings.sourceId, sourceId),
+          isNotNull(sourceListings.skillId),
+        ),
+      );
+    await this.recomputeSkillCategoryMaterializationInTransaction(
+      transaction,
+      affected.flatMap(({ skillId }) => skillId ? [skillId] : []),
+    );
+  }
+
+  private async pruneSkillCategoryObservationHistoryInTransaction(
+    transaction: CatalogTransaction,
+    sourceId: string,
+  ): Promise<void> {
+    const observations = await transaction
+      .select({
+        sourceListingId: skillCategoryObservations.sourceListingId,
+        observedRunId: skillCategoryObservations.observedRunId,
+        lastCompletedObservationRunId: sourceListings.lastCompletedObservationRunId,
+        runStatus: syncRuns.status,
+        runFinishedAt: syncRuns.finishedAt,
+      })
+      .from(skillCategoryObservations)
+      .innerJoin(
+        sourceListings,
+        eq(sourceListings.id, skillCategoryObservations.sourceListingId),
+      )
+      .innerJoin(syncRuns, eq(syncRuns.id, skillCategoryObservations.observedRunId))
+      .where(eq(sourceListings.sourceId, sourceId))
+      .orderBy(
+        asc(skillCategoryObservations.sourceListingId),
+        desc(syncRuns.finishedAt),
+        desc(syncRuns.startedAt),
+        desc(syncRuns.id),
+      );
+
+    const terminalCounts = new Map<string, number>();
+    const removable: Array<{ sourceListingId: string; observedRunId: string }> = [];
+    for (const observation of observations) {
+      const preserveCertificate =
+        observation.observedRunId === observation.lastCompletedObservationRunId;
+      const preserveRunning = observation.runStatus === "running";
+      const terminal =
+        observation.runFinishedAt !== null &&
+        ["succeeded", "partial"].includes(observation.runStatus);
+      const retainedTerminalCount = terminalCounts.get(observation.sourceListingId) ?? 0;
+      const preserveRecentTerminal =
+        terminal && retainedTerminalCount < CATEGORY_OBSERVATION_HISTORY_LIMIT;
+      if (terminal) {
+        terminalCounts.set(observation.sourceListingId, retainedTerminalCount + 1);
+      }
+      if (preserveCertificate || preserveRunning || preserveRecentTerminal) continue;
+      removable.push({
+        sourceListingId: observation.sourceListingId,
+        observedRunId: observation.observedRunId,
+      });
+    }
+
+    const chunkSize = 25;
+    for (let offset = 0; offset < removable.length; offset += chunkSize) {
+      const chunk = removable.slice(offset, offset + chunkSize);
+      const condition = or(
+        ...chunk.map((observation) =>
+          and(
+            eq(
+              skillCategoryObservations.sourceListingId,
+              observation.sourceListingId,
+            ),
+            eq(
+              skillCategoryObservations.observedRunId,
+              observation.observedRunId,
+            ),
+          )),
+      );
+      if (condition) await transaction.delete(skillCategoryObservations).where(condition);
+    }
+  }
+
   private async markListingUnresolvedInTransaction(
     transaction: CatalogTransaction,
     fence: CatalogMutationFence,
@@ -451,8 +578,8 @@ export class CatalogRepository {
       .limit(1);
     if (!listing) return false;
     await transaction
-      .delete(skillCategoryEvidence)
-      .where(eq(skillCategoryEvidence.sourceListingId, listingId));
+      .delete(skillCategoryObservations)
+      .where(eq(skillCategoryObservations.sourceListingId, listingId));
     await transaction
       .update(sourceListings)
       .set({
@@ -651,21 +778,30 @@ export class CatalogRepository {
       }
 
       await transaction
-        .delete(skillCategoryEvidence)
-        .where(eq(skillCategoryEvidence.sourceListingId, input.listingId));
+        .delete(skillCategoryObservations)
+        .where(
+          and(
+            eq(skillCategoryObservations.sourceListingId, input.listingId),
+            eq(skillCategoryObservations.observedRunId, input.fence.runId),
+          ),
+        );
+      const observedAt = new Date();
+      await transaction.insert(skillCategoryObservations).values({
+        sourceListingId: input.listingId,
+        observedRunId: input.fence.runId,
+        skillId: input.skillId,
+        revisionId: input.revisionId,
+        sourceHash: input.sourceHash,
+        observedAt,
+      });
       if (resolved.length) {
-        const observedAt = new Date();
         await transaction
           .insert(skillCategoryEvidence)
           .values(
             resolved.map((category) => ({
               sourceListingId: input.listingId,
-              skillId: input.skillId,
-              revisionId: input.revisionId,
-              categoryId: category.id,
-              sourceHash: input.sourceHash,
               observedRunId: input.fence.runId,
-              observedAt,
+              categoryId: category.id,
             })),
           );
       }
@@ -1086,6 +1222,10 @@ export class CatalogRepository {
               leaseExpiresAt,
             })
             .where(eq(syncRuns.id, resumable.id));
+          await this.recomputeSourceCategoryMaterializationInTransaction(
+            transaction,
+            sourceId,
+          );
           return {
             ...resumable,
             status: "running" as const,
@@ -1105,6 +1245,12 @@ export class CatalogRepository {
         leaseToken,
         leaseExpiresAt,
       });
+      if (active) {
+        await this.recomputeSourceCategoryMaterializationInTransaction(
+          transaction,
+          sourceId,
+        );
+      }
       return {
         id,
         sourceId,
@@ -1370,18 +1516,13 @@ export class CatalogRepository {
           updatedAt: now,
         })
         .where(eq(catalogSources.id, input.sourceId));
-      const categoryAffected = await transaction
-        .selectDistinct({ skillId: sourceListings.skillId })
-        .from(sourceListings)
-        .where(
-          and(
-            eq(sourceListings.sourceId, input.sourceId),
-            isNotNull(sourceListings.skillId),
-          ),
-        );
-      await this.recomputeSkillCategoryMaterializationInTransaction(
+      await this.recomputeSourceCategoryMaterializationInTransaction(
         transaction,
-        categoryAffected.flatMap(({ skillId }) => skillId ? [skillId] : []),
+        input.sourceId,
+      );
+      await this.pruneSkillCategoryObservationHistoryInTransaction(
+        transaction,
+        input.sourceId,
       );
     });
   }
@@ -1429,18 +1570,13 @@ export class CatalogRepository {
           updatedAt: now,
         })
         .where(eq(catalogSources.id, input.sourceId));
-      const categoryAffected = await transaction
-        .selectDistinct({ skillId: sourceListings.skillId })
-        .from(sourceListings)
-        .where(
-          and(
-            eq(sourceListings.sourceId, input.sourceId),
-            isNotNull(sourceListings.skillId),
-          ),
-        );
-      await this.recomputeSkillCategoryMaterializationInTransaction(
+      await this.recomputeSourceCategoryMaterializationInTransaction(
         transaction,
-        categoryAffected.flatMap(({ skillId }) => skillId ? [skillId] : []),
+        input.sourceId,
+      );
+      await this.pruneSkillCategoryObservationHistoryInTransaction(
+        transaction,
+        input.sourceId,
       );
     });
   }
@@ -1497,10 +1633,10 @@ export class CatalogRepository {
         previous.sourceHash === input.sourceHash,
       );
 
-      if (previous) {
+      if (invalidatesExistingBinding) {
         await transaction
-          .delete(skillCategoryEvidence)
-          .where(eq(skillCategoryEvidence.sourceListingId, id));
+          .delete(skillCategoryObservations)
+          .where(eq(skillCategoryObservations.sourceListingId, id));
       }
 
       await transaction
@@ -1641,8 +1777,8 @@ export class CatalogRepository {
       const hashChanged = listing.sourceHash !== input.hash;
       if (hashChanged) {
         await transaction
-          .delete(skillCategoryEvidence)
-          .where(eq(skillCategoryEvidence.sourceListingId, input.listingId));
+          .delete(skillCategoryObservations)
+          .where(eq(skillCategoryObservations.sourceListingId, input.listingId));
       }
       const result = await transaction
         .update(sourceListings)
@@ -2042,8 +2178,8 @@ export class CatalogRepository {
         listingObservation.skillId !== skillId
       ) {
         await transaction
-          .delete(skillCategoryEvidence)
-          .where(eq(skillCategoryEvidence.sourceListingId, input.listingId));
+          .delete(skillCategoryObservations)
+          .where(eq(skillCategoryObservations.sourceListingId, input.listingId));
       }
       const listingLink = await transaction
         .update(sourceListings)
@@ -2255,8 +2391,8 @@ export class CatalogRepository {
         .limit(1);
       if (!listing) return;
       await transaction
-        .delete(skillCategoryEvidence)
-        .where(eq(skillCategoryEvidence.sourceListingId, listing.id));
+        .delete(skillCategoryObservations)
+        .where(eq(skillCategoryObservations.sourceListingId, listing.id));
       await transaction
         .update(sourceListings)
         .set({ status: "removed", lastCompletedObservationRunId: null })
