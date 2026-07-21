@@ -25,6 +25,7 @@ import { githubCodeSearchSourceDescriptor } from "./wider-public-sources";
 
 const FIXED_METADATA_QUERIES = ["name", "description"] as const;
 const MAX_QUERY_COUNT = 8;
+const MAX_CURSOR_LENGTH = 64;
 const QUERY_CURSOR = /^round:([1-9]\d*):query:(0|[1-9]\d*):done:([0-9a-f]+)$/u;
 
 type GitHubCodeSearchObservation = RegistryGitHubObservation;
@@ -76,6 +77,9 @@ function allQueriesMask(queryCount: number): number {
 
 function positionFromCursor(cursor: string | null, queryCount: number): QueryPosition {
   if (cursor === null) return { round: 1, queryIndex: 0, doneMask: 0 };
+  if (cursor.length > MAX_CURSOR_LENGTH) {
+    throw new Error("GitHub Code Search cursor exceeded its bounded length");
+  }
   const match = QUERY_CURSOR.exec(cursor);
   const round = match ? Number(match[1]) : Number.NaN;
   const queryIndex = match ? Number(match[2]) : Number.NaN;
@@ -83,6 +87,7 @@ function positionFromCursor(cursor: string | null, queryCount: number): QueryPos
   if (
     !Number.isSafeInteger(round) ||
     round < 1 ||
+    round > GITHUB_CODE_SEARCH_RESULT_CAP ||
     !Number.isSafeInteger(queryIndex) ||
     queryIndex < 0 ||
     queryIndex >= queryCount ||

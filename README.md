@@ -49,7 +49,7 @@ The catalog CLI reads its process environment. Use the names documented in `.env
 - `AISLE_AGENTSKILLS_IN_ENABLED` defaults to `false`. Setting it to `true` opts into bounded AgentSkills.in discovery plus exact public-GitHub hydration; a missing GitHub token leaves the source honestly `not-configured` and performs no provider fetch.
 - `AISLE_ASKSKILL_ENABLED` defaults to `false`. Setting it to `true` opts into bounded AskSkill page discovery plus exact public-GitHub hydration. Missing either the flag or GitHub token keeps the source `not-configured` without requesting AskSkill.
 - `AISLE_GITHUB_CODE_SEARCH_ENABLED` defaults to `false`. Setting it to `true` opts into bounded searches for the required `SKILL.md` metadata terms `name` and `description`, followed by independent exact public-default-branch hydration. The source remains query-scoped and partial.
-- `AISLE_GITHUB_CODE_SEARCH_QUERIES` optionally adds at most six comma-separated plain-text search terms. They extend coverage samples only; qualifiers, operators, empty terms, and oversized terms are rejected.
+- `AISLE_GITHUB_CODE_SEARCH_QUERIES` optionally adds at most six comma-separated plain-text search terms. They extend coverage samples only; qualifiers, operators, and oversized terms are rejected, while empty comma-separated entries are ignored.
 - `AISLE_GITHUB_REPOSITORIES` is a comma-separated allowlist of public GitHub repository URLs to inspect for `SKILL.md` files at exact commits.
 - `AISLE_WELL_KNOWN_ORIGINS` is a comma-separated administrator allowlist, but these connectors remain `not-configured` and perform no fetch until hostname traffic is IP-pinned or egress-contained against DNS rebinding. Setting the variable alone does not bypass that guard.
 
