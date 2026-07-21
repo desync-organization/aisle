@@ -86,15 +86,34 @@ describe("launch package blueprints", () => {
     expect(presentForbiddenFields).toEqual([]);
   });
 
-  it("excludes unlicensed candidates and retains the corrected Firebase skill", () => {
+  it("excludes unlicensed candidates and retains verified upstream selectors", () => {
     const upstreamNames = launchPackageBlueprints.flatMap((blueprint) =>
       blueprint.members.map((member) => member.locator.upstreamSkillName),
     );
 
     expect(upstreamNames).not.toContain("vercel-react-view-transitions");
     expect(upstreamNames).not.toContain("vercel-react-native-skills");
-    expect(upstreamNames).not.toContain("firebase-data-connect");
-    expect(upstreamNames).toContain("firebase-data-connect-basics");
+    expect(upstreamNames).toContain("firebase-data-connect");
+    expect(upstreamNames).not.toContain("firebase-data-connect-basics");
+  });
+
+  it("keeps repository paths separate from verified frontmatter selectors", () => {
+    const dataPackage = launchPackageBlueprints.find(
+      (blueprint) => blueprint.slug === "data-and-ai",
+    );
+    const dataConnect = dataPackage?.members.find(
+      (member) => member.locator.skillPath === "skills/firebase-data-connect-basics/SKILL.md",
+    );
+
+    expect(dataConnect?.locator).toMatchObject({
+      owner: "firebase",
+      repository: "agent-skills",
+      skillPath: "skills/firebase-data-connect-basics/SKILL.md",
+      upstreamSkillName: "firebase-data-connect",
+    });
+    expect(dataConnect?.observedSource?.headSha).toBe(
+      "538130c39402a40d9c2586ede87def5914641a33",
+    );
   });
 
   it("covers every launch category with useful multi-skill packages", () => {
@@ -132,6 +151,14 @@ describe("launch package blueprints", () => {
       "expo-native-ui",
       "expo-tailwind-setup",
       "expo-upgrade",
+    ]);
+    expect(packages.get("data-and-ai")).toEqual([
+      "supabase-postgres-best-practices",
+      "neon-postgres",
+      "firebase-data-connect",
+      "firebase-ai-logic-basics",
+      "huggingface-datasets",
+      "huggingface-llm-trainer",
     ]);
   });
 
