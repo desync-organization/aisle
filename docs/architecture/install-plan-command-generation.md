@@ -12,8 +12,9 @@ A selection is rejected unless all of these facts are present and valid:
 - the exact catalog revision is current and confirmed public;
 - validation passed and the revision is neither blocked nor quarantined;
 - license evidence is verified;
-- every requested agent is both supported by `skills@1.5.19` and compatible
-  with the revision;
+- every requested agent is a destination supported by the pinned
+  `skills@1.5.19` release; the upstream freeform `compatibility` text is shown
+  as an advisory and is not treated as an agent allowlist;
 - the GitHub owner/repository, single-segment branch, relative discovery path,
   and observed branch-head SHA form an explicit verified discovery scope;
 - the CLI `--skill` selector is proven unique within that exact scope at the
@@ -23,14 +24,23 @@ A selection is rejected unless all of these facts are present and valid:
 - the selection has no duplicate revision, canonical-revision conflict, or
   normalized-name collision with another source.
 
-The API integration must produce this evidence from durable catalog state in
-the same transaction that resolves revision IDs. Immediately before calling
-the planner, the backend must refetch the branch HEAD, the scoped skill
-artifact and digest, and its license evidence. It must reject the request if
-any observation is stale or if selector uniqueness no longer holds within the
-exact branch/path scope. Browser-provided sources, refs, paths, flags, shell
-fragments, observed hashes, and eligibility assertions must never be passed
-through.
+The API integration starts with durable catalog state in the same transaction
+that resolves revision IDs, but persisted connector metadata is only a
+candidate. Both preflight and resolve refetch the current branch HEAD and one
+bounded recursive GitHub tree. The observed HEAD must still equal the stored
+commit, the tree must be complete and non-truncated, and the selected discovery
+scope must contain exactly one non-symlink `SKILL.md` at the persisted skill
+path. Equality with the immutable Git commit then binds the already-scanned
+artifact, license evidence, and selector name to that live tree. Unavailable
+verification, a moved branch, or an ambiguous scope fails closed. Browser-
+provided sources, refs, paths, flags, shell fragments, observed hashes, and
+eligibility assertions are never passed through.
+
+Current source observations are also completion-bound. A listing last seen by
+a still-running crawl cannot make a revision selectable; its run must have a
+finished `succeeded` or `partial` state. Sources using latest-completed-
+observation freshness additionally require the catalog's completed-observation
+certificate after the catalog freshness migration is integrated.
 
 ### Backend evidence shape
 
@@ -41,7 +51,9 @@ Each resolved selection now requires both `source.discoveryScope` and
 { branch, path, branchHeadSha }
 ```
 
-`observed.commitSha` must equal `branchHeadSha`. The former
+`observed.commitSha` must equal `branchHeadSha`. The persisted branch-head value
+is not sufficient by itself; the API supplies it to the live verifier as the
+expected value and rejects any mismatch. The former
 `installer.verifiedAtCommitSha` field is no longer accepted because a commit
 alone did not prove which branch/path boundary was searched. The backend must
 persist and supply the complete scope evidence; the planner derives
@@ -64,13 +76,16 @@ the contract deliberately accepts only safe single-segment branch names.
 Paths are safe relative POSIX directory paths; traversal, backslashes,
 encoded separators, URL punctuation, and absolute paths are rejected.
 
-Selections are grouped only when lower-cased owner/repository, case-sensitive
-branch and path, and `branchHeadSha` all match. Each exact scope gets one CLI
-process. Scopes, skills, and agents are sorted deterministically. Every process
-uses `--full-depth`; `--skill` and `--agent` are always explicit, and `--all`
-is forbidden. Global scope adds `--global`. Project scope is the CLI default
-and therefore adds no flag. Copy mode adds `--copy`; symlink mode is the pinned
-CLI default and there is no supported `--symlink` flag.
+Live checks are grouped by lower-cased owner/repository and case-sensitive
+branch so one bounded GitHub HEAD/tree observation can validate multiple
+selected paths. Install selections are grouped only when lower-cased
+owner/repository, case-sensitive branch and path, and `branchHeadSha` all
+match. Each exact scope gets one CLI process. Scopes, skills, and agents are
+sorted deterministically. Every process uses `--full-depth`; `--skill` and
+`--agent` are always explicit, and `--all` is forbidden. Global scope adds
+`--global`. Project scope is the CLI default and therefore adds no flag. Copy
+mode adds `--copy`; symlink mode is the pinned CLI default and there is no
+supported `--symlink` flag.
 
 The planner caps skills, discovery scopes, agents, and the final command length.
 The discovery-scope ceiling equals the 64-skill ceiling because every selected
@@ -102,8 +117,8 @@ The output makes these semantics machine-readable:
   the CLI process;
 - `sourceRevisionEnforced: false` — observed commits and content digests are
   provenance, not a pin enforced by the generated command; and
-- `mutableSourceRacePossible: true` — the verified branch may advance after
-  backend preflight and before the CLI clone starts.
+- `mutableSourceRacePossible: true` — even after the backend confirms the live
+  branch HEAD, the verified branch may advance before the CLI clone starts.
 
 The CLI package and branch name are explicit, but the source revision remains
 mutable. Commit-shaped branch tokens are rejected and the planner never emits

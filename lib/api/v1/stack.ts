@@ -24,6 +24,12 @@ import {
 } from "@/lib/install-plan";
 
 import { ApiError } from "../errors";
+import {
+  revalidateGithubStackCandidates,
+  type StackGithubRevalidationOptions,
+  type StackGithubVerificationCandidate,
+  type StackGithubVerificationResult,
+} from "./github-revalidation";
 import type {
   StackGateReason,
   StackResolveRequest,
@@ -36,6 +42,7 @@ type PublicStackTrust = "pass" | "warn" | "unreviewed" | "blocked";
 type PersistedStackSelection = Readonly<{
   id: string;
   name: string;
+  compatibility: string | null;
   sourceUrl: string;
   skillPath: string;
   lifecycle: "current" | "stale" | "unavailable" | "removed";
@@ -59,7 +66,6 @@ type PersistedStackSelection = Readonly<{
   hasCurrentObservation: boolean;
   hasLatestAuditFailure: boolean;
   duplicateOfSkillId: string | null;
-  selectorCount: number;
 }>;
 
 type WarningEvidenceRow = Readonly<{
@@ -85,6 +91,7 @@ type ResolvedStackSelection = Readonly<{
   publicRow: Readonly<{
     id: string;
     name: string;
+    compatibilityAdvisory: string | null;
     sourceUrl: string;
     license: string;
     trust: PublicStackTrust;
@@ -133,11 +140,16 @@ const currentObservationExpression = sql<boolean>`exists (
   select 1
   from source_listings stack_listing
   join catalog_sources stack_source on stack_source.id = stack_listing.source_id
+  join sync_runs stack_observation_run
+    on stack_observation_run.id = stack_listing.last_seen_run_id
+    and stack_observation_run.source_id = stack_listing.source_id
   where stack_listing.skill_id = ${skills.id}
-    and stack_listing.status = 'current'
+    and stack_listing.status in ('current', 'stale')
     and stack_listing.source_hash = ${skillRevisions.upstreamHash}
     and stack_source.enabled = 1
-    and stack_source.coverage_state = 'current'
+    and stack_source.coverage_state in ('current', 'partial')
+    and stack_observation_run.status in ('succeeded', 'partial')
+    and stack_observation_run.finished_at is not null
 )`;
 
 const latestAuditFailureExpression = sql<boolean>`exists (
@@ -165,25 +177,11 @@ const latestAuditFailureExpression = sql<boolean>`exists (
     )
 )`;
 
-const selectorCountExpression = sql<number>`(
-  select count(*)
-  from skills stack_peer
-  where stack_peer.repository_id = ${skills.repositoryId}
-    and stack_peer.public = 1
-    and stack_peer.internal = 0
-    and stack_peer.lifecycle = 'current'
-    and lower(stack_peer.upstream_name) = lower(${skills.upstreamName})
-    and (
-      ${skills.skillPath} = '.'
-      or stack_peer.skill_path = ${skills.skillPath}
-      or substr(stack_peer.skill_path, 1, length(${skills.skillPath}) + 1) = ${skills.skillPath} || '/'
-    )
-)`;
-
 function selectionProjection() {
   return {
     id: skills.id,
     name: skills.upstreamName,
+    compatibility: skills.compatibility,
     sourceUrl: skills.sourceUrl,
     skillPath: skills.skillPath,
     lifecycle: skills.lifecycle,
@@ -207,7 +205,6 @@ function selectionProjection() {
     hasCurrentObservation: currentObservationExpression,
     hasLatestAuditFailure: latestAuditFailureExpression,
     duplicateOfSkillId: skillDuplicates.duplicateOfSkillId,
-    selectorCount: selectorCountExpression,
   };
 }
 
@@ -223,6 +220,15 @@ function normalizedSkillName(name: string): string {
     .replaceAll("_", "-")
     .replace(/\s+/g, "-")
     .replace(/-+/g, "-");
+}
+
+function compatibilityAdvisory(value: string | null): string | null {
+  if (!value) return null;
+  const bounded = value
+    .replace(/[\u0000-\u001f\u007f]+/gu, " ")
+    .trim()
+    .slice(0, 500);
+  return bounded || null;
 }
 
 function hasCompleteArtifact(row: PersistedStackSelection): boolean {
@@ -348,7 +354,32 @@ function exactGithubBinding(row: PersistedStackSelection): boolean {
   }
 }
 
-function plannerSkill(row: PersistedStackSelection): ResolvedGithubSkill | null {
+function githubVerificationCandidate(
+  row: PersistedStackSelection,
+): StackGithubVerificationCandidate | null {
+  const observed = branchHeadEvidence(row);
+  if (
+    !observed ||
+    !row.repositoryOwner ||
+    !row.repositoryName ||
+    !exactGithubBinding(row)
+  ) {
+    return null;
+  }
+  return {
+    selectionId: row.id,
+    owner: row.repositoryOwner,
+    repository: row.repositoryName,
+    branch: observed.branch,
+    persistedHeadSha: observed.headSha,
+    skillPath: row.skillPath,
+  };
+}
+
+function plannerSkill(
+  row: PersistedStackSelection,
+  verification: StackGithubVerificationResult | undefined,
+): ResolvedGithubSkill | null {
   const license = row.revisionLicense ?? row.catalogLicense;
   const observedBranchHead = branchHeadEvidence(row);
   if (
@@ -360,8 +391,9 @@ function plannerSkill(row: PersistedStackSelection): ResolvedGithubSkill | null 
     !row.upstreamHash ||
     !row.contentHash ||
     !observedBranchHead ||
+    verification?.state !== "verified" ||
+    verification.headSha !== observedBranchHead.headSha ||
     !exactGithubBinding(row) ||
-    row.selectorCount !== 1 ||
     !githubBranchSchema.safeParse(row.repositoryDefaultBranch).success ||
     !githubDiscoveryPathSchema.safeParse(row.skillPath).success
   ) {
@@ -388,6 +420,9 @@ function plannerSkill(row: PersistedStackSelection): ResolvedGithubSkill | null 
     availability: "current",
     license: { status: "verified", expression: license },
     trust: { validation: "passed", blocked: false, quarantined: false },
+    // This list describes destinations supported by the pinned installer. The
+    // upstream freeform compatibility field is surfaced separately as an
+    // advisory and is never interpreted as an agent allowlist.
     compatibleAgents: [...SUPPORTED_AGENTS],
     observed: {
       commitSha: observedBranchHead.headSha,
@@ -516,6 +551,7 @@ function resolvePublicTrust(
 function resolveSelection(
   row: PersistedStackSelection,
   evidenceRows: readonly WarningEvidenceRow[],
+  verification: StackGithubVerificationResult | undefined,
 ): ResolvedStackSelection {
   const reasons = new Set<StackGateReason>();
   const license = row.revisionLicense ?? row.catalogLicense;
@@ -523,7 +559,7 @@ function resolveSelection(
     ? warningFingerprint(row, evidenceRows)
     : null;
   const trust = resolvePublicTrust(row.trustState, fingerprint);
-  const candidate = plannerSkill(row);
+  const candidate = plannerSkill(row, verification);
 
   if (row.lifecycle !== "current") reasons.add("lifecycle-not-current");
   if (
@@ -538,6 +574,11 @@ function resolveSelection(
     reasons.add("revision-evidence-missing");
   }
   if (!candidate || row.duplicateOfSkillId) reasons.add("install-unresolved");
+  if (verification?.state === "unavailable") {
+    reasons.add("source-verification-unavailable");
+  }
+  if (verification?.state === "changed") reasons.add("source-revision-changed");
+  if (verification?.state === "ambiguous") reasons.add("selector-scope-ambiguous");
   if (!row.hasCurrentObservation) reasons.add("source-inactive");
   if (!eligibleLicense(license)) reasons.add("license-not-eligible");
   if (!hasVerifiedLicenseEvidence(row)) reasons.add("license-evidence-missing");
@@ -556,6 +597,7 @@ function resolveSelection(
     publicRow: {
       id: row.id,
       name: row.name,
+      compatibilityAdvisory: compatibilityAdvisory(row.compatibility),
       sourceUrl: row.sourceUrl,
       license,
       trust,
@@ -571,6 +613,7 @@ function resolveSelection(
 async function resolveSelectionSet(
   transaction: CatalogTransaction,
   selectionIds: readonly string[],
+  github: StackGithubRevalidationOptions,
 ): Promise<ResolvedStackSelection[]> {
   const persistedRows = (await transaction
     .select(selectionProjection())
@@ -605,16 +648,33 @@ async function resolveSelectionSet(
     );
   }
 
-  const evidence = await warningEvidence(transaction, persistedRows);
-  return selectionIds.map((id) => resolveSelection(byId.get(id)!, evidence));
+  const verificationCandidates = persistedRows
+    .map(githubVerificationCandidate)
+    .filter((candidate): candidate is StackGithubVerificationCandidate => candidate !== null);
+  const [evidence, verification] = await Promise.all([
+    warningEvidence(transaction, persistedRows),
+    revalidateGithubStackCandidates(verificationCandidates, github),
+  ]);
+  return selectionIds.map((id) =>
+    resolveSelection(byId.get(id)!, evidence, verification.get(id))
+  );
 }
+
+export type StackResolutionDependencies = Readonly<{
+  github?: StackGithubRevalidationOptions;
+}>;
 
 export async function preflightStackSelections(
   database: CatalogDatabase,
   selectionIds: readonly string[],
+  dependencies: StackResolutionDependencies = {},
 ) {
   return database.transaction(async (transaction) => {
-    const selections = await resolveSelectionSet(transaction, selectionIds);
+    const selections = await resolveSelectionSet(
+      transaction,
+      selectionIds,
+      dependencies.github ?? {},
+    );
     return selections.map((selection) => selection.publicRow);
   });
 }
@@ -672,9 +732,14 @@ function assertAcknowledgements(
 export async function resolveStackInstallPlan(
   database: CatalogDatabase,
   request: StackResolveRequest,
+  dependencies: StackResolutionDependencies = {},
 ) {
   return database.transaction(async (transaction) => {
-    const selections = await resolveSelectionSet(transaction, request.selectionIds);
+    const selections = await resolveSelectionSet(
+      transaction,
+      request.selectionIds,
+      dependencies.github ?? {},
+    );
     const blocked = selections
       .map((selection, index) => ({ selection, index }))
       .filter(({ selection }) => !selection.publicRow.selectable || !selection.plannerSkill);
@@ -731,6 +796,7 @@ export async function resolveStackInstallPlan(
       resolvedSkills: selections.map((selection) => ({
         id: selection.publicRow.id,
         name: selection.publicRow.name,
+        compatibilityAdvisory: selection.publicRow.compatibilityAdvisory,
         source: selection.publicRow.sourceUrl,
         revision: selection.publicRow.immutableRef!,
         license: selection.publicRow.license,
