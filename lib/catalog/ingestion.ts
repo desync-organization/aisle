@@ -1,5 +1,6 @@
 import { normalizeDiscoveredSkill } from "./normalization";
 import { createPersistedFileInventory } from "./artifact-fingerprint";
+import { classifySkillCategories } from "./categories";
 import {
   discoveredSkillRecordSchema,
   type DiscoveredSkillRecord,
@@ -186,6 +187,18 @@ export class CatalogIngestionService {
       trustAssessment: validation.trustAssessment,
       upstreamAudits: validation.upstreamAudits,
     });
+    const categorySlugs = classifySkillCategories({
+      upstreamName: normalized.upstreamName ?? validation.metadata.name,
+      upstreamDescription:
+        normalized.upstreamDescription ?? validation.metadata.description,
+      skillPath: normalized.skillPath,
+      categoryHints: decoded.categoryHints,
+    });
+    await this.repository.replaceSkillCategories(
+      fence,
+      persisted.skillId,
+      categorySlugs,
+    );
     return {
       listingId: listing.id,
       skillId: persisted.skillId,

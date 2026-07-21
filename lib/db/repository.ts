@@ -23,6 +23,11 @@ import {
   type PersistedAuditRaw,
   type PersistedSkillRaw,
 } from "../catalog/provider-raw";
+import {
+  CANONICAL_CATEGORY_SLUGS,
+  SOURCE_CATEGORY_ATTRIBUTION,
+  type CanonicalCategorySlug,
+} from "../catalog/categories";
 import { installSpecSchema } from "../catalog/source-contract";
 import type { CatalogDatabase } from "./client";
 import {
@@ -486,6 +491,69 @@ export class CatalogRepository {
           sortOrder: input.sortOrder ?? fallbackOrder,
         },
       });
+  }
+
+  async replaceSkillCategories(
+    fence: CatalogMutationFence,
+    skillId: string,
+    categorySlugs: readonly CanonicalCategorySlug[],
+  ): Promise<void> {
+    const requested = [...new Set(categorySlugs)];
+    const allowed = new Set<string>(CANONICAL_CATEGORY_SLUGS);
+    if (requested.some((slug) => !allowed.has(slug))) {
+      throw new Error("Category assignment referenced a non-canonical taxonomy slug");
+    }
+
+    await this.db.transaction(async (transaction) => {
+      await this.assertActiveSyncLease(transaction, fence);
+      const [binding] = await transaction
+        .select({ id: sourceListings.id })
+        .from(sourceListings)
+        .where(
+          and(
+            eq(sourceListings.sourceId, fence.sourceId),
+            eq(sourceListings.lastSeenRunId, fence.runId),
+            eq(sourceListings.skillId, skillId),
+            eq(sourceListings.status, "current"),
+            isNotNull(sourceListings.sourceHash),
+          ),
+        )
+        .limit(1);
+      if (!binding) {
+        throw new Error("Category assignment was not bound to the active source observation");
+      }
+
+      const resolved = requested.length
+        ? await transaction
+            .select({ id: categories.id, slug: categories.slug })
+            .from(categories)
+            .where(inArray(categories.slug, requested))
+        : [];
+      if (resolved.length !== requested.length) {
+        throw new Error("Canonical category taxonomy is not fully seeded");
+      }
+
+      await transaction
+        .delete(skillCategories)
+        .where(
+          and(
+            eq(skillCategories.skillId, skillId),
+            eq(skillCategories.attribution, SOURCE_CATEGORY_ATTRIBUTION),
+          ),
+        );
+      if (resolved.length) {
+        await transaction
+          .insert(skillCategories)
+          .values(
+            resolved.map((category) => ({
+              skillId,
+              categoryId: category.id,
+              attribution: SOURCE_CATEGORY_ATTRIBUTION,
+            })),
+          )
+          .onConflictDoNothing();
+      }
+    });
   }
 
   async upsertSource(input: SourceDescriptorInput): Promise<void> {

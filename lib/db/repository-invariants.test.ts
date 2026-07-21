@@ -27,10 +27,12 @@ import {
   type CatalogMutationFence,
 } from "./repository";
 import {
+  categories,
   packageMembers,
   packageVersions,
   packages,
   skillDuplicates,
+  skillCategories,
   skillRevisions,
   skills,
   sourceListings,
@@ -145,6 +147,55 @@ describe("CatalogRepository invariants", () => {
   });
 
   afterEach(() => connection.client.close());
+
+  it("fences deterministic category replacement without bypassing trust", async () => {
+    const run = await repository.acquireSyncRun("skills-sh");
+    const untrustedIngestion = new CatalogIngestionService(repository, async () => ({
+      valid: true,
+      metadata: {
+        name: "fixture-safe",
+        description: "Inert categorized fixture.",
+        compatibility: null,
+        license: "MIT",
+      },
+      trustAssessment: {
+        scanner: "fixture",
+        scannerVersion: "1",
+        state: "fail",
+        quarantineReason: "Inert test-only rejection.",
+        findings: [],
+      },
+    }));
+    const categorized = candidate("categorized-untrusted");
+    categorized.categoryHints = { categories: ["Cybersecurity"], tags: [] };
+    const persisted = await untrustedIngestion.persist(
+      mutationFence("skills-sh", run),
+      categorized,
+    );
+    const assigned = await connection.db
+      .select({ slug: categories.slug, attribution: skillCategories.attribution })
+      .from(skillCategories)
+      .innerJoin(categories, eq(categories.id, skillCategories.categoryId));
+
+    expect(assigned).toEqual([
+      { slug: "security", attribution: "aisle:source-metadata-v1" },
+    ]);
+    expect(await repository.search()).toEqual([]);
+
+    await repository.failSyncRun({
+      runId: run.id,
+      leaseToken: run.leaseToken,
+      sourceId: "skills-sh",
+      message: "Inert fixture transition.",
+    });
+    await expect(
+      repository.replaceSkillCategories(
+        mutationFence("skills-sh", run),
+        persisted.skillId!,
+        ["frontend"],
+      ),
+    ).rejects.toThrow(/lease/i);
+  });
 
   it("atomically detaches a formerly valid listing when a new observation is invalid", async () => {
     const run = await repository.acquireSyncRun("skills-sh");
