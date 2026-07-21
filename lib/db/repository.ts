@@ -5,6 +5,7 @@ import {
   asc,
   desc,
   eq,
+  gt,
   inArray,
   isNull,
   isNotNull,
@@ -277,6 +278,7 @@ export class CatalogRepository {
           eq(syncRuns.sourceId, fence.sourceId),
           eq(syncRuns.status, "running"),
           eq(syncRuns.leaseToken, fence.leaseToken),
+          gt(syncRuns.leaseExpiresAt, new Date()),
           eq(catalogSources.enabled, true),
           ne(catalogSources.coverageState, "not-configured"),
         ),
@@ -866,6 +868,7 @@ export class CatalogRepository {
     reportedTotalKnown?: boolean;
     leaseDurationMs?: number;
   }): Promise<void> {
+    const now = new Date();
     const result = await this.db
       .update(syncRuns)
       .set({
@@ -878,13 +881,14 @@ export class CatalogRepository {
           nextPage: input.nextPage,
           reportedTotalKnown: input.reportedTotalKnown ?? false,
         },
-        leaseExpiresAt: new Date(Date.now() + Math.max(input.leaseDurationMs ?? 300_000, 100)),
+        leaseExpiresAt: new Date(now.getTime() + Math.max(input.leaseDurationMs ?? 300_000, 100)),
       })
       .where(
         and(
           eq(syncRuns.id, input.runId),
           eq(syncRuns.status, "running"),
           eq(syncRuns.leaseToken, input.leaseToken),
+          gt(syncRuns.leaseExpiresAt, now),
         ),
       );
     if (result.rowsAffected !== 1) {
@@ -897,14 +901,16 @@ export class CatalogRepository {
     leaseToken: string,
     leaseDurationMs = 300_000,
   ): Promise<void> {
+    const now = new Date();
     const result = await this.db
       .update(syncRuns)
-      .set({ leaseExpiresAt: new Date(Date.now() + Math.max(leaseDurationMs, 100)) })
+      .set({ leaseExpiresAt: new Date(now.getTime() + Math.max(leaseDurationMs, 100)) })
       .where(
         and(
           eq(syncRuns.id, runId),
           eq(syncRuns.status, "running"),
           eq(syncRuns.leaseToken, leaseToken),
+          gt(syncRuns.leaseExpiresAt, now),
         ),
       );
     if (result.rowsAffected !== 1) {
@@ -942,6 +948,7 @@ export class CatalogRepository {
             eq(syncRuns.sourceId, input.sourceId),
             eq(syncRuns.status, "running"),
             eq(syncRuns.leaseToken, input.leaseToken),
+            gt(syncRuns.leaseExpiresAt, now),
           ),
         )
         .limit(1);
@@ -986,6 +993,7 @@ export class CatalogRepository {
             inArray(sourceListings.status, ["unavailable", "removed"]),
           ),
         );
+      const completionFenceTime = new Date();
       const result = await transaction
         .update(syncRuns)
         .set({
@@ -1004,6 +1012,7 @@ export class CatalogRepository {
             eq(syncRuns.sourceId, input.sourceId),
             eq(syncRuns.status, "running"),
             eq(syncRuns.leaseToken, input.leaseToken),
+            gt(syncRuns.leaseExpiresAt, completionFenceTime),
           ),
         );
       if (result.rowsAffected !== 1) {
@@ -1052,6 +1061,7 @@ export class CatalogRepository {
             eq(syncRuns.sourceId, input.sourceId),
             eq(syncRuns.status, "running"),
             eq(syncRuns.leaseToken, input.leaseToken),
+            gt(syncRuns.leaseExpiresAt, now),
           ),
         );
       if (result.rowsAffected !== 1) {
