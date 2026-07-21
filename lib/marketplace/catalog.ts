@@ -76,6 +76,31 @@ export type MarketplaceSkillSnapshot = Readonly<{
   skill: MarketplaceSkillDetail | null;
 }>;
 
+export type MarketplaceCoverageSource = Readonly<{
+  id: string;
+  name: string;
+  upstreamIdentifier: string;
+  mode: string;
+  state: string;
+  recordCount: number;
+  unavailableCount: number;
+  lastSuccessfulSyncAt: string | null;
+  lagMs: number | null;
+  degraded: boolean;
+  exclusions: ReadonlyArray<string>;
+}>;
+
+export type MarketplaceCoverageSnapshot = Readonly<{
+  availability: "ready" | "not-configured" | "unavailable";
+  sources: ReadonlyArray<MarketplaceCoverageSource>;
+  summary: Readonly<{
+    sourceCount: number;
+    currentSourceCount: number;
+    observedRecordCount: number;
+    latestSuccessfulSyncAt: string | null;
+  }>;
+}>;
+
 function hasConfiguredDatabase(): boolean {
   if (process.env.DATABASE_URL) return true;
   return existsSync(resolve(process.cwd(), "data", "aisle.db"));
@@ -167,6 +192,60 @@ export async function loadMarketplaceCatalog(
       connectedSources: 0,
       pagination,
     };
+  } finally {
+    connection.client.close();
+  }
+}
+
+export async function loadMarketplaceCoverage(): Promise<MarketplaceCoverageSnapshot> {
+  const emptySummary = {
+    sourceCount: 0,
+    currentSourceCount: 0,
+    observedRecordCount: 0,
+    latestSuccessfulSyncAt: null,
+  } as const;
+  if (!hasConfiguredDatabase()) {
+    return { availability: "not-configured", sources: [], summary: emptySummary };
+  }
+
+  const connection = createCatalogDatabase();
+  const repository = new CatalogRepository(connection.db);
+  try {
+    const rows = await repository.coverage(new Date());
+    const sources = rows.map((row) => ({
+      id: row.sourceId,
+      name: row.name,
+      upstreamIdentifier: row.upstreamIdentifier,
+      mode: row.mode,
+      state: row.state,
+      recordCount: row.recordCount,
+      unavailableCount: row.unavailableCount,
+      lastSuccessfulSyncAt: row.lastSuccessfulSyncAt?.toISOString() ?? null,
+      lagMs: row.lagMs,
+      degraded: Boolean(row.error) || !["current", "not-configured"].includes(row.state),
+      exclusions: Array.isArray(row.exclusions)
+        ? row.exclusions.filter((value): value is string => typeof value === "string")
+        : [],
+    }));
+    const successful = sources
+      .map((source) => source.lastSuccessfulSyncAt)
+      .filter((value): value is string => value !== null)
+      .sort();
+    return {
+      availability: "ready",
+      sources,
+      summary: {
+        sourceCount: sources.length,
+        currentSourceCount: sources.filter((source) => source.state === "current").length,
+        observedRecordCount: sources.reduce(
+          (total, source) => total + source.recordCount,
+          0,
+        ),
+        latestSuccessfulSyncAt: successful.at(-1) ?? null,
+      },
+    };
+  } catch {
+    return { availability: "unavailable", sources: [], summary: emptySummary };
   } finally {
     connection.client.close();
   }
