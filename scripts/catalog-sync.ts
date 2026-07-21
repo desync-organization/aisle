@@ -1,6 +1,7 @@
 import { AgentSkillsInConnector } from "../lib/catalog/adapters/agentskills-in";
 import { AskSkillConnector } from "../lib/catalog/adapters/askskill";
 import { ClawHubAdapter } from "../lib/catalog/adapters/clawhub";
+import { GetSkillaryConnector } from "../lib/catalog/adapters/getskillary";
 import { GitHubCodeSearchConnector } from "../lib/catalog/adapters/github-code-search";
 import { GitHubPublicRepositoryAdapter } from "../lib/catalog/adapters/github-public";
 import { providerApprovedRegistryStubs } from "../lib/catalog/adapters/registry-stubs";
@@ -50,6 +51,9 @@ async function main(): Promise<void> {
       new AskSkillConnector({
         enabled: explicitlyEnabled("AISLE_ASKSKILL_ENABLED"),
         githubToken: process.env.GITHUB_TOKEN,
+      }),
+      new GetSkillaryConnector({
+        enabled: explicitlyEnabled("AISLE_GETSKILLARY_ENABLED"),
       }),
       new GitHubCodeSearchConnector({
         enabled: explicitlyEnabled("AISLE_GITHUB_CODE_SEARCH_ENABLED"),

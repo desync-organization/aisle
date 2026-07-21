@@ -2,9 +2,10 @@
 
 Aisle has bounded client contracts for the sources below. AgentSkills.in, AskSkill,
 and GitHub Code Search have explicitly configured connectors that rebind discovery
-identities to exact public GitHub artifacts. GetSkillary remains a disabled descriptor
-until equivalent hydration and synchronization boundaries are implemented. A disabled
-source claims zero current records; the presence of a client is not a coverage claim.
+identities to exact public GitHub artifacts. GetSkillary has a separate coverage-only
+connector because its snapshot does not prove an authoritative repository or license.
+A disabled source claims zero current records; the presence of a client is not a
+coverage claim.
 
 | Source | Discovery mode | What the client can observe | Coverage boundary |
 | --- | --- | --- | --- |
@@ -31,13 +32,38 @@ truncated, missing, private, or conflicting origins remain unresolved.
 
 ## Remaining orchestration work
 
-- Wrap GetSkillary in the current `CatalogSourceConnector` page contract.
 - Reuse the exact GitHub artifact/license hydrator for future registry connectors
   rather than trusting registry payloads.
-- Persist GetSkillary rows as unresolved provenance unless an authoritative
-  upstream origin can be proved.
+- Keep GetSkillary observations unresolved unless a future authoritative upstream
+  origin and license can be proved independently.
 
 No connector may create, rewrite, vendor, or infer a `SKILL.md` on Aisle's behalf.
+
+## GetSkillary configuration and limits
+
+GetSkillary performs no request unless `AISLE_GETSKILLARY_ENABLED=true`. It needs no
+credential because the selected-public snapshot is public. A disabled connector stays
+`not-configured` and claims zero current records.
+
+One sync requests only the bounded `skills.json` snapshot. It does not request any
+provider ZIP URL or archive. A successful count-consistent terminal response may be
+complete only inside the provider's explicit selected-public boundary, and its displayed
+count is therefore source-relative. Aisle caps the response at four MiB and accepts at
+most 5,000 observations; exceeding either limit fails the run without a new current
+coverage claim.
+
+Each persisted listing contains a stable provider ID, canonical GetSkillary page,
+bounded title/summary/category/tag observations, snapshot attribution, and the provider's
+declared archive hash and size as typed raw metadata. The download URL is discarded.
+Repository, license, artifact, immutable reference, content hash, install URL, and
+install specification remain null. Ingestion consequently keeps every row unresolved:
+it cannot become a canonical skill, package member, selectable item, or install command.
+
+Because each accepted response is a single declared-boundary snapshot rather than a
+mutable pagination sweep, GetSkillary uses latest-completed-observation freshness. An
+absent provider identity stops contributing to the displayed current count only after a
+newer count-consistent snapshot has completed; unresolved listing history may remain for
+audit. A failed, oversized, or malformed response does not replace the last current count.
 
 ## AgentSkills.in configuration and limits
 
