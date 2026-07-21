@@ -137,25 +137,58 @@ const trustStateExpression = sql<RawTrustState>`case
   else 'unreviewed'
 end`;
 
-// Catalog-core integration hook: once the latest-completed-observation columns
-// land, retain this finished-run fence and additionally require the listing's
-// last_completed_observation_run_id to equal that source's latest certified
-// observation_sweep_complete run. Referencing those columns on this branch
-// would precede their migration.
 const currentObservationExpression = sql<boolean>`exists (
   select 1
   from source_listings stack_listing
   join catalog_sources stack_source on stack_source.id = stack_listing.source_id
-  join sync_runs stack_observation_run
-    on stack_observation_run.id = stack_listing.last_seen_run_id
-    and stack_observation_run.source_id = stack_listing.source_id
   where stack_listing.skill_id = ${skills.id}
     and stack_listing.status in ('current', 'stale')
     and stack_listing.source_hash = ${skillRevisions.upstreamHash}
     and stack_source.enabled = 1
     and stack_source.coverage_state in ('current', 'partial')
-    and stack_observation_run.status in ('succeeded', 'partial')
-    and stack_observation_run.finished_at is not null
+    and (
+      (
+        stack_source.freshness_policy = 'retain'
+        and exists (
+          select 1
+          from skill_category_observations stack_observation
+          join sync_runs stack_observation_run
+            on stack_observation_run.id = stack_observation.observed_run_id
+            and stack_observation_run.source_id = stack_listing.source_id
+          where stack_observation.source_listing_id = stack_listing.id
+            and stack_observation.skill_id = ${skills.id}
+            and stack_observation.revision_id = ${skillRevisions.id}
+            and stack_observation.source_hash = stack_listing.source_hash
+            and stack_observation_run.status in ('succeeded', 'partial')
+            and stack_observation_run.finished_at is not null
+        )
+      )
+      or (
+        stack_source.freshness_policy = 'latest-completed-observation'
+        and stack_listing.last_completed_observation_run_id is not null
+        and exists (
+          select 1
+          from skill_category_observations stack_certified_observation
+          where stack_certified_observation.source_listing_id = stack_listing.id
+            and stack_certified_observation.observed_run_id = stack_listing.last_completed_observation_run_id
+            and stack_certified_observation.skill_id = ${skills.id}
+            and stack_certified_observation.revision_id = ${skillRevisions.id}
+            and stack_certified_observation.source_hash = stack_listing.source_hash
+        )
+        and stack_listing.last_completed_observation_run_id = (
+          select stack_completed_run.id
+          from sync_runs stack_completed_run
+          where stack_completed_run.source_id = stack_listing.source_id
+            and stack_completed_run.observation_sweep_complete = 1
+            and stack_completed_run.finished_at is not null
+            and stack_completed_run.status in ('succeeded', 'partial')
+          order by stack_completed_run.finished_at desc,
+            stack_completed_run.started_at desc,
+            stack_completed_run.id desc
+          limit 1
+        )
+      )
+    )
 )`;
 
 const latestAuditFailureExpression = sql<boolean>`exists (
