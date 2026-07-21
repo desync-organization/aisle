@@ -8,6 +8,7 @@ import { eq, sql } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { createCatalogDatabase, type CatalogDatabaseConnection } from "./client";
+import type { PersistedAuditRaw } from "../catalog/provider-raw";
 import { migrateCatalogDatabase } from "./migrate";
 import { CatalogRepository } from "./repository";
 import {
@@ -23,6 +24,22 @@ import {
   trustAssessments,
 } from "./schema";
 import { seedCatalog, sourceDescriptorSeed, taxonomySeed } from "./seed";
+
+function fixtureAuditRaw(
+  status: "pass" | "warn" | "fail",
+  summary: string,
+  auditedAt: string,
+): PersistedAuditRaw {
+  return {
+    kind: "skills-sh-audit",
+    provider: "Fixture upstream",
+    slug: "fixture-upstream",
+    status,
+    summary,
+    auditedAt,
+    riskLevel: null,
+  };
+}
 
 describe("catalog database and repository", () => {
   let connection: CatalogDatabaseConnection;
@@ -249,7 +266,11 @@ describe("catalog database and repository", () => {
           status: "fail",
           summary: "First inert observation failed.",
           auditedAt: "2026-07-20T10:00:00.000Z",
-          raw: {},
+          raw: fixtureAuditRaw(
+            "fail",
+            "First inert observation failed.",
+            "2026-07-20T10:00:00.000Z",
+          ),
         },
       ],
     });
@@ -267,7 +288,11 @@ describe("catalog database and repository", () => {
           status: "pass",
           summary: "Later inert observation passed.",
           auditedAt: "2026-07-20T11:00:00.000Z",
-          raw: {},
+          raw: fixtureAuditRaw(
+            "pass",
+            "Later inert observation passed.",
+            "2026-07-20T11:00:00.000Z",
+          ),
         },
       ],
     });
@@ -285,7 +310,11 @@ describe("catalog database and repository", () => {
           status: "fail",
           summary: "Newest inert observation failed.",
           auditedAt: "2026-07-20T12:00:00.000Z",
-          raw: {},
+          raw: fixtureAuditRaw(
+            "fail",
+            "Newest inert observation failed.",
+            "2026-07-20T12:00:00.000Z",
+          ),
         },
       ],
     });
@@ -303,7 +332,11 @@ describe("catalog database and repository", () => {
           status: "pass",
           summary: "Final inert observation passed before local blocking test.",
           auditedAt: "2026-07-20T13:00:00.000Z",
-          raw: {},
+          raw: fixtureAuditRaw(
+            "pass",
+            "Final inert observation passed before local blocking test.",
+            "2026-07-20T13:00:00.000Z",
+          ),
         },
       ],
     });

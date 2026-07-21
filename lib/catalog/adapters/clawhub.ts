@@ -7,6 +7,7 @@ import {
   normalizeArtifactFilePath,
 } from "../artifact-fingerprint";
 import { cancelBestEffort, readBoundedResponse, requestTimeout } from "../http-safety";
+import { createPersistedSkillRaw } from "../provider-raw";
 import type {
   CatalogSourceConnector,
   ConnectorContext,
@@ -612,7 +613,8 @@ export class ClawHubAdapter implements CatalogSourceConnector {
             files: artifactFiles,
           }
         : null,
-      raw: {
+      raw: createPersistedSkillRaw({
+        kind: "clawhub-skill",
         listing: persistedClawHubListing(item),
         detail: persistedClawHubDetail(detail),
         inventoryHash,
@@ -621,7 +623,7 @@ export class ClawHubAdapter implements CatalogSourceConnector {
         moderation: persistedModerationSummary(effectiveModeration),
         scan: persistedScanSummary(scan),
         verification: persistedVerificationSummary(verification),
-      },
+      }),
     };
   }
 
@@ -648,11 +650,12 @@ export class ClawHubAdapter implements CatalogSourceConnector {
       aliases: [identity],
       repository: null,
       artifact: null,
-      raw: {
+      raw: createPersistedSkillRaw({
+        kind: "clawhub-skill",
         listing: persistedClawHubListing(item),
         detail: persistedClawHubDetail(detail),
         unresolved: "exact version unavailable",
-      },
+      }),
     };
   }
 

@@ -529,6 +529,7 @@ license: MIT
     });
     expect(storedAudits).toHaveLength(1);
     expect(storedAudits[0]?.rawJson).toEqual({
+      kind: "skills-sh-audit",
       provider: "Fixture Auditor",
       slug: "fixture-auditor",
       status: "pass",

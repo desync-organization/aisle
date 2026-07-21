@@ -72,7 +72,12 @@ function candidate(source = "orchestrator-fixture"): DiscoveredSkillRecord {
       textFiles,
       files,
     },
-    raw: {},
+    raw: {
+      kind: "github-skill",
+      repository: `example/${source}`,
+      manifestPath: "fixture-safe/SKILL.md",
+      commit: immutableRef,
+    },
   };
 }
 

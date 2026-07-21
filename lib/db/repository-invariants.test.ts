@@ -14,6 +14,10 @@ import {
   PERSISTED_FILE_INVENTORY_ENTRY_LIMIT,
 } from "../catalog/artifact-fingerprint";
 import { CatalogIngestionService } from "../catalog/ingestion";
+import type {
+  PersistedAuditRaw,
+  PersistedSkillRaw,
+} from "../catalog/provider-raw";
 import { createAgentSkillValidator } from "../catalog/security";
 import type { DiscoveredSkillRecord } from "../catalog/source-contract";
 import { createCatalogDatabase, type CatalogDatabaseConnection } from "./client";
@@ -47,6 +51,36 @@ function mutationFence(
   run: { id: string; leaseToken: string },
 ): CatalogMutationFence {
   return { sourceId, runId: run.id, leaseToken: run.leaseToken };
+}
+
+function skillsShListingRaw(id: string): PersistedSkillRaw {
+  return {
+    kind: "skills-sh-listing",
+    listing: {
+      id,
+      slug: id,
+      name: id,
+      source: "example/fixture",
+      sourceType: "github",
+      installs: 1,
+      installUrl: "https://github.com/example/fixture",
+      url: "https://skills.sh/example/fixture",
+      hash: null,
+      duplicate: false,
+    },
+  };
+}
+
+function fixtureAuditRaw(): PersistedAuditRaw {
+  return {
+    kind: "skills-sh-audit",
+    provider: "fixture-auditor",
+    slug: "fixture",
+    status: "fail",
+    summary: "Inert failure fixture.",
+    auditedAt: null,
+    riskLevel: null,
+  };
 }
 
 function candidate(
@@ -85,7 +119,12 @@ function candidate(
       textFiles,
       files,
     },
-    raw: {},
+    raw: {
+      kind: "github-skill",
+      repository: `example/${key}`,
+      manifestPath: "fixture-safe/SKILL.md",
+      commit: immutableRef,
+    },
   };
 }
 
@@ -334,7 +373,7 @@ describe("CatalogRepository invariants", () => {
         providerSlug: "fixture",
         status: "fail" as const,
         summary: "Inert failure fixture.",
-        raw: {},
+        raw: fixtureAuditRaw(),
       }],
     });
 
@@ -365,7 +404,7 @@ describe("CatalogRepository invariants", () => {
       sourceType: "github",
       sourceHash: fixture.upstreamHash,
       installs: 1,
-      raw: {},
+      raw: skillsShListingRaw("reappearance"),
     });
     [listing] = await connection.db.select().from(sourceListings);
     expect(listing?.status).toBe("current");
@@ -384,7 +423,7 @@ describe("CatalogRepository invariants", () => {
       sourceType: "github",
       sourceHash: fixture.upstreamHash,
       installs: 1,
-      raw: {},
+      raw: skillsShListingRaw("reappearance"),
     });
     [listing] = await connection.db.select().from(sourceListings);
     const [skill] = await connection.db

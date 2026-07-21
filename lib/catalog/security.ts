@@ -13,6 +13,7 @@ import type {
   DiscoveryValidationResult,
   TrustFindingInput,
 } from "./ingestion";
+import { createPersistedAuditRaw } from "./provider-raw";
 import type { DiscoveredSkillRecord } from "./source-contract";
 
 export const AISLE_SCANNER = "aisle-static";
@@ -339,28 +340,16 @@ function upstreamPolicyFindings(record: DiscoveredSkillRecord): {
   upstreamAudits: DiscoveryValidationResult["upstreamAudits"];
 } {
   if (record.provider !== "clawhub") return { findings: [], upstreamAudits: [] };
-  const raw = record.raw as {
-    verification?: { ok?: unknown; decision?: unknown } | null;
-    scan?: {
-      security?: { status?: unknown } | null;
-      moderation?: { isSuspicious?: unknown; isMalwareBlocked?: unknown } | null;
-    } | null;
-    moderation?: { isSuspicious?: unknown; isMalwareBlocked?: unknown } | null;
-    version?: { security?: { status?: unknown } | null } | null;
-  };
-  const decision = typeof raw.verification?.decision === "string" ? raw.verification.decision : null;
-  const ok = typeof raw.verification?.ok === "boolean" ? raw.verification.ok : null;
+  const raw = record.raw.kind === "clawhub-skill" ? record.raw : null;
+  const decision = raw?.verification?.decision ?? null;
+  const ok = raw?.verification?.ok ?? null;
   const securityStatus =
-    typeof raw.scan?.security?.status === "string"
-      ? raw.scan.security.status
-      : typeof raw.version?.security?.status === "string"
-        ? raw.version.security.status
-        : null;
+    raw?.scan?.security?.status ?? raw?.version?.security?.status ?? null;
   const suspicious =
-    raw.scan?.moderation?.isSuspicious === true ||
-    raw.moderation?.isSuspicious === true ||
-    raw.scan?.moderation?.isMalwareBlocked === true ||
-    raw.moderation?.isMalwareBlocked === true;
+    raw?.scan?.moderation?.isSuspicious === true ||
+    raw?.moderation?.isSuspicious === true ||
+    raw?.scan?.moderation?.isMalwareBlocked === true ||
+    raw?.moderation?.isMalwareBlocked === true;
   const explicitPass =
     ok === true &&
     ["pass", "allow"].includes(decision?.toLowerCase() ?? "") &&
@@ -374,7 +363,12 @@ function upstreamPolicyFindings(record: DiscoveredSkillRecord): {
           status: explicitPass ? ("pass" as const) : ("fail" as const),
           summary: `Exact-version verification decision=${decision ?? "unavailable"}; security=${securityStatus ?? "unavailable"}; moderationSuspicious=${suspicious}.`,
           scannerVersion: null,
-          raw: { decision, ok, securityStatus },
+          raw: createPersistedAuditRaw({
+            kind: "clawhub-audit",
+            decision,
+            ok,
+            securityStatus,
+          }),
         },
       ]
     : [];

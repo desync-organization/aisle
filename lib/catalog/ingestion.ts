@@ -8,6 +8,7 @@ import type {
   CatalogMutationFence,
   CatalogRepository,
 } from "../db/repository";
+import type { PersistedAuditRaw } from "./provider-raw";
 
 export interface PersistedDiscovery {
   listingId: string;
@@ -55,7 +56,7 @@ export interface DiscoveryValidationResult {
     status: "pass" | "warn" | "fail";
     summary: string;
     scannerVersion: string | null;
-    raw: Record<string, unknown>;
+    raw: PersistedAuditRaw;
   }>;
 }
 

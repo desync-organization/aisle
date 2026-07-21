@@ -12,6 +12,12 @@ import {
 import { startSyncLeaseHeartbeat } from "../lease-heartbeat";
 import type { CatalogIngestionService } from "../ingestion";
 import {
+  createPersistedAuditRaw,
+  createPersistedSkillRaw,
+  type PersistedAuditRaw,
+  type PersistedSkillRaw,
+} from "../provider-raw";
+import {
   SkillsShAuthenticationError,
   SkillsShClient,
   SkillsShHttpError,
@@ -42,7 +48,16 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function persistedListingSummary(listing: SkillsShSkill): Record<string, unknown> {
+type SkillsShListingSummary = Extract<
+  PersistedSkillRaw,
+  { kind: "skills-sh-listing" }
+>["listing"];
+type SkillsShAuditSummary = Extract<
+  PersistedAuditRaw,
+  { kind: "skills-sh-audit" }
+>;
+
+function persistedListingSummary(listing: SkillsShSkill): SkillsShListingSummary {
   return {
     id: listing.id,
     slug: listing.slug,
@@ -59,8 +74,9 @@ function persistedListingSummary(listing: SkillsShSkill): Record<string, unknown
 
 function persistedAuditSummary(
   entry: SkillsShAuditResponse["audits"][number],
-): Record<string, unknown> {
+): SkillsShAuditSummary {
   return {
+    kind: "skills-sh-audit",
     provider: entry.provider,
     slug: entry.slug,
     status: entry.status,
@@ -301,7 +317,10 @@ export class SkillsShSync {
       sourceHash: listingHash,
       installs: listing.installs,
       duplicateIndicator: listing.duplicate ?? listing.isDuplicate ?? false,
-      raw: persistedListingSummary(listing),
+      raw: createPersistedSkillRaw({
+        kind: "skills-sh-listing",
+        listing: persistedListingSummary(listing),
+      }),
     });
 
     let observedContentHash = listingHash ?? stored.previousHash;
@@ -422,7 +441,8 @@ export class SkillsShSync {
                   files: artifactFiles,
                 }
               : null,
-            raw: {
+            raw: createPersistedSkillRaw({
+              kind: "skills-sh-skill",
               listing: persistedListingSummary(listing),
               detail: {
                 id: detail.data.id,
@@ -432,7 +452,7 @@ export class SkillsShSync {
                 fileCount: detail.data.files?.length ?? null,
                 artifactContentHash,
               },
-            },
+            }),
           }, { installs: listing.installs });
         }
       }
@@ -458,7 +478,7 @@ export class SkillsShSync {
         summary: entry.summary,
         riskLevel: entry.riskLevel,
         auditedAt: entry.auditedAt,
-        raw: persistedAuditSummary(entry),
+        raw: createPersistedAuditRaw(persistedAuditSummary(entry)),
       })),
     });
 

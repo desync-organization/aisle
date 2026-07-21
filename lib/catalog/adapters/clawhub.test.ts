@@ -324,6 +324,7 @@ describe("ClawHubAdapter", () => {
       });
       expect(storedAudits).toHaveLength(1);
       expect(storedAudits[0]?.rawJson).toEqual({
+        kind: "clawhub-audit",
         decision: "pass",
         ok: true,
         securityStatus: "clean",

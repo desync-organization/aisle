@@ -9,6 +9,7 @@ import {
   normalizeArtifactFilePath,
 } from "../artifact-fingerprint";
 import { cancelBestEffort, readBoundedResponse, requestTimeout } from "../http-safety";
+import { createPersistedSkillRaw } from "../provider-raw";
 import type {
   CatalogSourceConnector,
   ConnectorContext,
@@ -208,7 +209,11 @@ export class WellKnownSkillsAdapter implements CatalogSourceConnector {
     }
 
     const entries = current.success
-      ? current.data.skills.map((entry) => ({ ...entry, legacyFiles: null, raw: entry }))
+      ? current.data.skills.map((entry) => ({
+          ...entry,
+          legacyFiles: null,
+          schemaVersion: "current" as const,
+        }))
       : legacy && legacy.success
         ? legacy.data.skills.map((entry) => {
           const manifest = entry.files.find(
@@ -221,7 +226,7 @@ export class WellKnownSkillsAdapter implements CatalogSourceConnector {
             url: manifest ?? "",
             digest: null,
             legacyFiles: entry.files,
-            raw: entry,
+            schemaVersion: "legacy" as const,
           };
         })
         : [];
@@ -300,7 +305,18 @@ export class WellKnownSkillsAdapter implements CatalogSourceConnector {
         aliases: [entry.name],
         repository: null,
         artifact: null,
-        raw: { ...entry.raw, artifactUrl: artifactUrl.toString(), unresolved: reason },
+        raw: createPersistedSkillRaw({
+          kind: "well-known-skill",
+          schemaVersion: entry.schemaVersion,
+          name: entry.name,
+          type: entry.type,
+          description: entry.description,
+          url: entry.url,
+          digest: entry.digest,
+          files: entry.legacyFiles,
+          artifactUrl: artifactUrl.toString(),
+          unresolved: reason,
+        }),
       });
 
       let artifact: DiscoveredSkillRecord["artifact"] = {
@@ -411,7 +427,17 @@ export class WellKnownSkillsAdapter implements CatalogSourceConnector {
         aliases: [entry.name],
         repository: null,
         artifact,
-        raw: { ...entry.raw, artifactUrl: artifactUrl.toString() },
+        raw: createPersistedSkillRaw({
+          kind: "well-known-skill",
+          schemaVersion: entry.schemaVersion,
+          name: entry.name,
+          type: entry.type,
+          description: entry.description,
+          url: entry.url,
+          digest: entry.digest,
+          files: entry.legacyFiles,
+          artifactUrl: artifactUrl.toString(),
+        }),
       });
       } catch (error) {
         degraded = true;

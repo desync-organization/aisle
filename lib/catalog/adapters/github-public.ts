@@ -4,6 +4,7 @@ import { z } from "zod";
 
 import { computeArtifactContentHash } from "../artifact-fingerprint";
 import { cancelBestEffort, readBoundedResponse, requestTimeout } from "../http-safety";
+import { createPersistedSkillRaw } from "../provider-raw";
 import { normalizeSkillPath, normalizeSourceUrl } from "../normalization";
 import type {
   CatalogSourceConnector,
@@ -185,7 +186,13 @@ export class GitHubPublicRepositoryAdapter implements CatalogSourceConnector {
           defaultBranch: repository.default_branch,
         },
         artifact: null,
-        raw: { repository: repository.full_name, manifestPath: manifest.path, commit: commit.sha, reason },
+        raw: createPersistedSkillRaw({
+          kind: "github-skill",
+          repository: repository.full_name,
+          manifestPath: manifest.path,
+          commit: commit.sha,
+          reason,
+        }),
       });
       const manifestUrl = `/repos/${this.coordinates.owner}/${this.coordinates.repository}/contents/${manifest.path
         .split("/")
@@ -339,12 +346,13 @@ export class GitHubPublicRepositoryAdapter implements CatalogSourceConnector {
           textFiles,
           files: artifactFiles,
         },
-        raw: {
+        raw: createPersistedSkillRaw({
+          kind: "github-skill",
           repository: repository.full_name,
           manifestPath: manifest.path,
           commit: commit.sha,
           tree: tree.sha,
-        },
+        }),
       });
     }
 

@@ -16,6 +16,12 @@ import {
   sql,
 } from "drizzle-orm";
 
+import {
+  persistedAuditRawSchema,
+  persistedSkillRawSchema,
+  type PersistedAuditRaw,
+  type PersistedSkillRaw,
+} from "../catalog/provider-raw";
 import { installSpecSchema } from "../catalog/source-contract";
 import type { CatalogDatabase } from "./client";
 import {
@@ -223,7 +229,7 @@ export interface CanonicalSkillInput {
     status: "pass" | "warn" | "fail";
     summary: string;
     scannerVersion: string | null;
-    raw: Record<string, unknown>;
+    raw: PersistedAuditRaw;
   }>;
 }
 
@@ -1071,7 +1077,7 @@ export class CatalogRepository {
     installs: number;
     duplicateIndicator?: boolean;
     preserveSourceHash?: boolean;
-    raw: Record<string, unknown>;
+    raw: PersistedSkillRaw;
   }): Promise<{
     id: string;
     previousHash: string | null;
@@ -1080,6 +1086,7 @@ export class CatalogRepository {
     detailLastModified: string | null;
   }> {
     const now = new Date();
+    const raw = persistedSkillRawSchema.parse(input.raw);
     const id = stableId("listing", `${input.fence.sourceId}:${input.upstreamId}`);
     return this.db.transaction(async (transaction) => {
       await this.assertActiveSyncLease(transaction, input.fence);
@@ -1122,7 +1129,7 @@ export class CatalogRepository {
           installs: input.installs,
           duplicateIndicator: input.duplicateIndicator ?? false,
           status: "unresolved",
-          rawJson: input.raw,
+          rawJson: raw,
           lastSeenRunId: input.fence.runId,
           firstSeenAt: now,
           lastSeenAt: now,
@@ -1137,7 +1144,7 @@ export class CatalogRepository {
             duplicateIndicator: invalidatesExistingBinding
               ? false
               : input.duplicateIndicator ?? false,
-            rawJson: input.raw,
+            rawJson: raw,
             lastSeenRunId: input.fence.runId,
             lastSeenAt: now,
             missedCompleteCrawls: 0,
@@ -1251,7 +1258,7 @@ export class CatalogRepository {
       summary: string;
       riskLevel?: string;
       auditedAt?: string;
-      raw: Record<string, unknown>;
+      raw: PersistedAuditRaw;
     }>;
     observedAt?: Date;
   }): Promise<void> {
@@ -1273,6 +1280,7 @@ export class CatalogRepository {
         throw new Error("Audit target did not belong to the active sync observation");
       }
       for (const audit of input.audits) {
+        const raw = persistedAuditRawSchema.parse(audit.raw);
         const auditTime = audit.auditedAt ? new Date(audit.auditedAt) : observedAt;
         const id = stableId(
           "audit",
@@ -1293,7 +1301,7 @@ export class CatalogRepository {
             upstreamContentHash: input.upstreamContentHash,
             scannerVersion: null,
             observedAt: auditTime,
-            rawJson: audit.raw,
+            rawJson: raw,
           })
           .onConflictDoUpdate({
             target: auditRecords.id,
@@ -1302,7 +1310,7 @@ export class CatalogRepository {
               summary: audit.summary,
               riskLevel: audit.riskLevel ?? null,
               upstreamContentHash: input.upstreamContentHash,
-              rawJson: audit.raw,
+              rawJson: raw,
             },
           });
       }
@@ -1319,7 +1327,7 @@ export class CatalogRepository {
       status: "pass" | "warn" | "fail";
       summary: string;
       scannerVersion: string | null;
-      raw: Record<string, unknown>;
+      raw: PersistedAuditRaw;
     }>;
     observedAt?: Date;
   }): Promise<void> {
@@ -1327,6 +1335,7 @@ export class CatalogRepository {
     await this.db.transaction(async (transaction) => {
       await this.assertActiveSyncLease(transaction, input.fence);
       for (const audit of input.audits) {
+        const raw = persistedAuditRawSchema.parse(audit.raw);
         const id = stableId(
           "audit",
           `${input.revisionId}:${audit.provider}:${audit.providerSlug}:${observedAt.toISOString()}`,
@@ -1344,7 +1353,7 @@ export class CatalogRepository {
           upstreamContentHash: input.upstreamContentHash,
           scannerVersion: audit.scannerVersion,
           observedAt,
-          rawJson: audit.raw,
+          rawJson: raw,
         });
       }
     });
@@ -1676,6 +1685,7 @@ export class CatalogRepository {
         });
       }
       for (const audit of input.upstreamAudits ?? []) {
+        const raw = persistedAuditRawSchema.parse(audit.raw);
         await transaction.insert(auditRecords).values({
           id: stableId(
             "audit",
@@ -1692,7 +1702,7 @@ export class CatalogRepository {
           upstreamContentHash: input.upstreamHash,
           scannerVersion: audit.scannerVersion,
           observedAt: now,
-          rawJson: audit.raw,
+          rawJson: raw,
         });
       }
 

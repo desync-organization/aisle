@@ -4,6 +4,7 @@ import { z } from "zod";
 
 import { computeArtifactContentHash, normalizeArtifactFilePath } from "../artifact-fingerprint";
 import { cancelBestEffort, readBoundedResponse, requestTimeout } from "../http-safety";
+import { createPersistedSkillRaw } from "../provider-raw";
 import { normalizeSkillPath, normalizeSourceUrl } from "../normalization";
 import type {
   CatalogSourceConnector,
@@ -442,12 +443,13 @@ export class SkillMdAdapter implements CatalogSourceConnector {
             files: artifactFiles,
           }
         : null,
-      raw: {
+      raw: createPersistedSkillRaw({
+        kind: "skillmd-skill",
         listing: persistedSkillMdListing(item),
         detail: persistedSkillMdDetail(detail),
         sourceTreeSha: snapshot.tree.sha,
         providerVerifiedScope: detail.verified_scope,
-      },
+      }),
     };
   }
 
@@ -476,11 +478,12 @@ export class SkillMdAdapter implements CatalogSourceConnector {
       aliases: [item.slug],
       repository: null,
       artifact: null,
-      raw: {
+      raw: createPersistedSkillRaw({
+        kind: "skillmd-skill",
         listing: persistedSkillMdListing(item),
         detail: persistedSkillMdDetail(detail),
         unresolved: boundedUnresolvedReason(reason),
-      },
+      }),
     };
   }
 

@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { sourceModes } from "../db/schema";
+import { persistedSkillRawSchema } from "./provider-raw";
 
 export const installSpecSchema = z.discriminatedUnion("kind", [
   z.object({
@@ -84,7 +85,26 @@ export const discoveredSkillRecordSchema = z.object({
     })
     .nullable()
     .default(null),
-  raw: z.record(z.string(), z.unknown()),
+  raw: persistedSkillRawSchema,
+}).superRefine((record, context) => {
+  const expectedKind = record.provider === "skills-sh"
+    ? "skills-sh-skill"
+    : record.provider === "clawhub"
+      ? "clawhub-skill"
+      : record.provider === "skillmd"
+        ? "skillmd-skill"
+        : record.provider === "github"
+          ? "github-skill"
+          : record.provider === "well-known"
+            ? "well-known-skill"
+            : null;
+  if (!expectedKind || record.raw.kind !== expectedKind) {
+    context.addIssue({
+      code: "custom",
+      path: ["raw", "kind"],
+      message: `Provider ${record.provider} cannot persist raw kind ${record.raw.kind}`,
+    });
+  }
 });
 
 export type DiscoveredSkillRecord = z.infer<typeof discoveredSkillRecordSchema>;

