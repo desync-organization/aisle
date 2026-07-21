@@ -224,7 +224,13 @@ function createArgs(
   selections: readonly ResolvedGithubSkill[],
   options: Readonly<{ agents: readonly SupportedAgent[]; scope: InstallScope; mode: InstallMode }>,
 ): readonly string[] {
-  const args: string[] = ["--yes", SKILLS_CLI_PACKAGE, "add", source];
+  const args: string[] = [
+    "--yes",
+    SKILLS_CLI_PACKAGE,
+    "add",
+    source,
+    "--full-depth",
+  ];
 
   for (const selection of selections) {
     args.push("--skill", selection.name);
