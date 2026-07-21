@@ -123,8 +123,12 @@ function hasSelectableTrust() {
 function hasActiveSourceListing() {
   return sql<boolean>`exists (
     select 1 from source_listings active_listing
+    join catalog_sources active_source on active_source.id = active_listing.source_id
     where active_listing.skill_id = ${skills.id}
       and active_listing.status in ('current', 'stale')
+      and active_listing.source_hash = ${skillRevisions.upstreamHash}
+      and active_source.enabled = 1
+      and active_source.coverage_state <> 'not-configured'
   )`;
 }
 
