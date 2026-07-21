@@ -1,3 +1,4 @@
+import { AgentSkillsInConnector } from "../lib/catalog/adapters/agentskills-in";
 import { ClawHubAdapter } from "../lib/catalog/adapters/clawhub";
 import { GitHubPublicRepositoryAdapter } from "../lib/catalog/adapters/github-public";
 import { providerApprovedRegistryStubs } from "../lib/catalog/adapters/registry-stubs";
@@ -21,6 +22,14 @@ function configuredValues(name: string): string[] {
     .filter(Boolean);
 }
 
+function explicitlyEnabled(name: string): boolean {
+  const value = (process.env[name] ?? "false").trim().toLowerCase();
+  if (value !== "true" && value !== "false") {
+    throw new Error(`${name} must be explicitly set to true or false`);
+  }
+  return value === "true";
+}
+
 async function main(): Promise<void> {
   const connection = createCatalogDatabase();
   try {
@@ -32,6 +41,10 @@ async function main(): Promise<void> {
     const connectors: CatalogSourceConnector[] = [
       new ClawHubAdapter(),
       new SkillMdAdapter({ githubToken: process.env.GITHUB_TOKEN }),
+      new AgentSkillsInConnector({
+        enabled: explicitlyEnabled("AISLE_AGENTSKILLS_IN_ENABLED"),
+        githubToken: process.env.GITHUB_TOKEN,
+      }),
       ...providerApprovedRegistryStubs,
       ...configuredValues("AISLE_WELL_KNOWN_ORIGINS").map((origin, _index, origins) =>
         new WellKnownSkillsAdapter({ origin, adminApprovedOrigins: origins }),

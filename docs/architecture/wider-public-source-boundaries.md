@@ -1,13 +1,14 @@
 # Wider public-source boundaries
 
-Aisle has bounded client contracts for the sources below. They are registered as
-disabled source descriptors until catalog connectors can hydrate exact upstream
-artifacts, license evidence, and revision-scoped trust results. A disabled source
-claims zero current records; the presence of a client is not a coverage claim.
+Aisle has bounded client contracts for the sources below. AgentSkills.in has an
+explicitly configured connector that rebinds registry identities to exact public
+GitHub artifacts. The other sources remain disabled descriptors until equivalent
+hydration and synchronization boundaries are implemented. A disabled source claims
+zero current records; the presence of a client is not a coverage claim.
 
 | Source | Discovery mode | What the client can observe | Coverage boundary |
 | --- | --- | --- | --- |
-| AgentSkills.in | Full sweep target | Empty-search offset pages and public GitHub identity hints | Pages are mutable and have no snapshot token. A sweep stays partial until stable-sweep orchestration exists. |
+| AgentSkills.in | Opt-in partial sweep | Empty-search offset pages nominate exact public GitHub repository and `SKILL.md` paths | Pages are mutable and have no snapshot token. Every sweep is degraded, non-retiring partial coverage even when a terminal offset is observed. |
 | AskSkill | Federated | Bounded pages, details, and transient raw validation text | Totals may be estimated and the provider may limit the reachable page window. It is never exhaustive. |
 | GetSkillary | Full within declared boundary | A bounded JSON snapshot with declared count and package hash observations | Completeness covers only the provider's selected-public boundary. Missing upstream repository/license evidence keeps records non-installable. |
 | GitHub Code Search | Federated, query-only | Server-authenticated `SKILL.md` search results and bounded exact-commit tree resolution | Results depend on the query, are capped at 1,000, may be incomplete, and never prove global GitHub coverage. |
@@ -30,14 +31,34 @@ truncated, missing, private, or conflicting origins remain unresolved.
 
 ## Remaining orchestration work
 
-- Wrap each client in the current `CatalogSourceConnector` page contract.
-- Add exact GitHub artifact/license hydration shared with the existing public
-  repository adapter rather than trusting registry payloads.
-- Define stable repeated-sweep checkpoints for AgentSkills.in and non-retiring
-  partial semantics for AskSkill.
+- Wrap AskSkill and GetSkillary in the current `CatalogSourceConnector` page contract.
+- Reuse the exact GitHub artifact/license hydrator for future registry connectors
+  rather than trusting registry payloads.
+- Define non-retiring partial semantics for AskSkill.
 - Persist GetSkillary rows as unresolved provenance unless an authoritative
   upstream origin can be proved.
 - Expose GitHub Code Search only as a labeled query result set; never feed it into
   full-source retirement or source-wide totals.
 
 No connector may create, rewrite, vendor, or infer a `SKILL.md` on Aisle's behalf.
+
+## AgentSkills.in configuration and limits
+
+AgentSkills.in performs no request unless `AISLE_AGENTSKILLS_IN_ENABLED=true` and
+`GITHUB_TOKEN` is present. The token must be public-only. Missing either setting
+keeps the source `not-configured` with its reason in the coverage ledger.
+
+The connector persists no registry instruction body. It keeps only a bounded raw
+attribution to the provider record ID and exact repository/manifest identity, plus
+bounded category hints. Names, descriptions, totals, rankings, and availability
+flags remain discovery observations. The GitHub adapter supplies the public
+repository check, exact head, artifact inventory, hashes, license evidence, and
+install binding; those hydrated fields are preserved instead of reconstructed from
+registry metadata.
+
+Each run is capped by provider page bytes and records, page count, distinct
+repositories, exact paths per repository, total hydration attempts, GitHub tree
+entries, artifact files, and dynamic exclusion entries. A failed or omitted item
+produces a bounded exclusion and no synthetic catalog record. Because offset pages
+are mutable, the connector reports no source-wide total, never declares a complete
+snapshot, and never uses absence to retire a previously observed record.
