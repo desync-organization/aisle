@@ -1,0 +1,121 @@
+name: Catalog sync
+
+on:
+  workflow_dispatch:
+    inputs:
+      source:
+        description: Exact source ID to sync, or all for every configured source
+        required: true
+        default: all
+        type: string
+  schedule:
+    - cron: "17 2 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-catalog-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: Sync public catalog
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    env:
+      DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
+      DATABASE_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
+      GITHUB_TOKEN: ${{ secrets.AISLE_PUBLIC_GITHUB_TOKEN }}
+      SKILLS_SH_OIDC_TOKEN: ${{ secrets.SKILLS_SH_OIDC_TOKEN }}
+      AISLE_AGENTSKILLS_IN_ENABLED: "true"
+      AISLE_ASKSKILL_ENABLED: "true"
+      AISLE_GETSKILLARY_ENABLED: "true"
+      AISLE_SKILLS_RE_ENABLED: "true"
+      AISLE_GITHUB_CODE_SEARCH_ENABLED: "true"
+      AISLE_GITHUB_CODE_SEARCH_QUERIES: ${{ vars.AISLE_GITHUB_CODE_SEARCH_QUERIES }}
+      AISLE_GITHUB_REPOSITORIES: ${{ vars.AISLE_GITHUB_REPOSITORIES }}
+      AISLE_WELL_KNOWN_ORIGINS: ${{ vars.AISLE_WELL_KNOWN_ORIGINS }}
+      REQUESTED_SOURCE: ${{ inputs.source || 'all' }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Validate production database configuration
+        shell: bash
+        run: |
+          if [[ -z "$DATABASE_URL" || -z "$DATABASE_AUTH_TOKEN" ]]; then
+            echo "::error::TURSO_DATABASE_URL and TURSO_AUTH_TOKEN repository secrets are required."
+            exit 1
+          fi
+
+      - name: Apply migrations and seed catalog descriptors
+        run: npm run db:setup
+
+      - name: Sync sources independently
+        shell: bash
+        run: |
+          set -uo pipefail
+
+          if ! source_output=$(npm run --silent catalog:sync -- --list-sources --format lines); then
+            echo "::error::Could not enumerate catalog sources."
+            exit 1
+          fi
+          mapfile -t available_sources <<< "$source_output"
+          if [[ ${#available_sources[@]} -eq 0 || -z "${available_sources[0]}" ]]; then
+            echo "::error::The catalog source inventory was empty."
+            exit 1
+          fi
+
+          if [[ "$REQUESTED_SOURCE" == "all" ]]; then
+            sources=("${available_sources[@]}")
+          else
+            source_found=0
+            for available_source in "${available_sources[@]}"; do
+              if [[ "$REQUESTED_SOURCE" == "$available_source" ]]; then
+                source_found=1
+                break
+              fi
+            done
+            if [[ "$source_found" -ne 1 ]]; then
+              echo "::error::The requested catalog source is not in the application source inventory."
+              exit 1
+            fi
+            sources=("$REQUESTED_SOURCE")
+          fi
+
+          failures=0
+          for source in "${sources[@]}"; do
+            echo "::group::Catalog source: $source"
+            if timeout --foreground --signal=TERM --kill-after=30s 30m \
+              npm run --silent catalog:sync -- --source "$source"; then
+              echo "Completed catalog source: $source"
+            else
+              exit_code=$?
+              echo "::error::Catalog source $source exited with status $exit_code; continuing with later sources."
+              failures=1
+            fi
+            echo "::endgroup::"
+          done
+
+          echo "::group::Publish eligible curated packages"
+          if timeout --foreground --signal=TERM --kill-after=30s 30m \
+            npm run --silent packages:publish; then
+            echo "Published eligible curated packages."
+          else
+            exit_code=$?
+            echo "::error::Package publication exited with status $exit_code."
+            failures=1
+          fi
+          echo "::endgroup::"
+
+          exit "$failures"

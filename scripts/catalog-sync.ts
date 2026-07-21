@@ -23,6 +23,70 @@ import { CatalogRepository } from "../lib/db/repository";
 import { seedCatalog } from "../lib/db/seed";
 import { launchPackageRepositoryUrls } from "../lib/packages/launch-blueprints";
 
+type CatalogSyncCliOptions = {
+  listSources: boolean;
+  listFormat: "json" | "lines";
+  sourceId: string | null;
+};
+
+type RunnableSource = {
+  id: string;
+  run: () => Promise<unknown>;
+};
+
+function readOptionValue(args: readonly string[], index: number, option: string): string {
+  const value = args[index + 1];
+  if (!value || value.startsWith("--")) {
+    throw new Error(`${option} requires a value`);
+  }
+  return value;
+}
+
+function parseCliOptions(args: readonly string[]): CatalogSyncCliOptions {
+  let listSources = false;
+  let listFormat: CatalogSyncCliOptions["listFormat"] = "json";
+  let sourceId: string | null = null;
+
+  for (let index = 0; index < args.length; index += 1) {
+    const argument = args[index]!;
+    if (argument === "--list-sources") {
+      listSources = true;
+      continue;
+    }
+    if (argument === "--source") {
+      if (sourceId !== null) throw new Error("--source may only be specified once");
+      sourceId = readOptionValue(args, index, argument);
+      index += 1;
+      continue;
+    }
+    if (argument.startsWith("--source=")) {
+      if (sourceId !== null) throw new Error("--source may only be specified once");
+      sourceId = argument.slice("--source=".length).trim();
+      if (!sourceId) throw new Error("--source requires a value");
+      continue;
+    }
+    if (argument === "--format") {
+      const value = readOptionValue(args, index, argument);
+      if (value !== "json" && value !== "lines") {
+        throw new Error("--format must be json or lines");
+      }
+      listFormat = value;
+      index += 1;
+      continue;
+    }
+    throw new Error(`Unknown catalog sync option: ${argument}`);
+  }
+
+  if (!listSources && listFormat !== "json") {
+    throw new Error("--format is only valid with --list-sources");
+  }
+  if (listSources && sourceId !== null) {
+    throw new Error("--list-sources cannot be combined with --source");
+  }
+
+  return { listSources, listFormat, sourceId };
+}
+
 function configuredValues(name: string): string[] {
   return (process.env[name] ?? "")
     .split(",")
@@ -53,11 +117,10 @@ function explicitlyEnabled(name: string): boolean {
 }
 
 async function main(): Promise<void> {
+  const options = parseCliOptions(process.argv.slice(2));
   const connection = createCatalogDatabase();
   try {
-    await migrateCatalogDatabase(connection.client);
     const repository = new CatalogRepository(connection.db);
-    await seedCatalog(repository);
     const validator = createAgentSkillValidator();
     const ingestion = new CatalogIngestionService(
       repository,
@@ -98,22 +161,57 @@ async function main(): Promise<void> {
           }),
       ),
     ];
-    const settle = async (operation: () => Promise<unknown>): Promise<PromiseSettledResult<unknown>> => {
+
+    const orchestrator = new CatalogSyncOrchestrator(repository, {
+      validateRecord: validator,
+      officialPublisherPolicy: isVerifiedOfficialPublisher,
+    });
+    const runnableSources: RunnableSource[] = [
+      {
+        id: "skills-sh",
+        run: () => new SkillsShSync(repository, new SkillsShClient(), { ingestion }).run(),
+      },
+      ...connectors.map((connector) => ({
+        id: connector.descriptor.id,
+        run: () => orchestrator.syncConnector(connector),
+      })),
+    ];
+    const sourceIds = runnableSources.map(({ id }) => id);
+    const duplicateSourceIds = sourceIds.filter(
+      (sourceId, index) => sourceIds.indexOf(sourceId) !== index,
+    );
+    if (duplicateSourceIds.length > 0) {
+      throw new Error(`Duplicate catalog source IDs: ${[...new Set(duplicateSourceIds)].join(", ")}`);
+    }
+
+    if (options.listSources) {
+      console.log(
+        options.listFormat === "lines" ? sourceIds.join("\n") : JSON.stringify(sourceIds),
+      );
+      return;
+    }
+
+    const selectedSources = options.sourceId === null
+      ? runnableSources
+      : runnableSources.filter(({ id }) => id === options.sourceId);
+    if (selectedSources.length === 0) {
+      throw new Error(
+        `Unknown catalog source ${JSON.stringify(options.sourceId)}. Available sources: ${sourceIds.join(", ")}`,
+      );
+    }
+
+    await migrateCatalogDatabase(connection.client);
+    await seedCatalog(repository);
+
+    const settle = async (
+      operation: () => Promise<unknown>,
+    ): Promise<PromiseSettledResult<unknown>> => {
       try {
         return { status: "fulfilled", value: await operation() };
       } catch (reason) {
         return { status: "rejected", reason };
       }
     };
-    const skillsSh = await settle(() =>
-      new SkillsShSync(repository, new SkillsShClient(), { ingestion }).run(),
-    );
-    const sources = await settle(() =>
-      new CatalogSyncOrchestrator(repository, {
-        validateRecord: validator,
-        officialPublisherPolicy: isVerifiedOfficialPublisher,
-      }).sync(connectors),
-    );
     const normalize = (result: PromiseSettledResult<unknown>) =>
       result.status === "fulfilled"
         ? { status: "fulfilled", value: result.value }
@@ -121,8 +219,12 @@ async function main(): Promise<void> {
             status: "rejected",
             reason: result.reason instanceof Error ? result.reason.message : String(result.reason),
           };
+    const results = [];
+    for (const source of selectedSources) {
+      results.push({ sourceId: source.id, ...normalize(await settle(source.run)) });
+    }
     console.log(
-      JSON.stringify({ skillsSh: normalize(skillsSh), sources: normalize(sources) }, null, 2),
+      JSON.stringify({ results }, null, 2),
     );
   } finally {
     connection.client.close();
