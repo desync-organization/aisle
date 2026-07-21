@@ -363,6 +363,16 @@ export const packageMembers = sqliteTable(
       .references(() => skillRevisions.id, { onDelete: "restrict" }),
     position: integer("position").notNull(),
     selectedByDefault: integer("selected_by_default", { mode: "boolean" }).notNull().default(true),
+    upstreamRepositoryUrl: text("upstream_repository_url").notNull().default(""),
+    upstreamSkillPath: text("upstream_skill_path").notNull().default(""),
+    upstreamSkillName: text("upstream_skill_name").notNull().default(""),
+    observedHead: text("observed_head").notNull().default(""),
+    observedLicense: text("observed_license").notNull().default(""),
+    licenseEvidenceClass: text("license_evidence_class").notNull().default(""),
+    licenseEvidencePath: text("license_evidence_path").notNull().default(""),
+    publisherClass: text("publisher_class", {
+      enum: ["official", "community", "legacy"],
+    }).notNull().default("legacy"),
   },
   (table) => [
     primaryKey({ columns: [table.packageVersionId, table.skillId] }),

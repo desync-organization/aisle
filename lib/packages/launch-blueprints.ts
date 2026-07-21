@@ -1231,6 +1231,21 @@ export const launchPackageBlueprints: ReadonlyArray<PackageBlueprint> = Object.f
   blueprintInputs.map((blueprint) => parsePackageBlueprint(blueprint)),
 );
 
+/** Public upstream repositories required to resolve every launch blueprint. */
+export const launchPackageRepositoryUrls: readonly string[] = Object.freeze(
+  [...new Set(
+    launchPackageBlueprints.flatMap((blueprint) =>
+      blueprint.members.map((member) => member.locator.repositoryUrl),
+    ),
+  )].sort(),
+);
+
+if (launchPackageRepositoryUrls.length !== 17) {
+  throw new Error(
+    `Launch package repository inventory changed: expected 17 public origins, found ${launchPackageRepositoryUrls.length}.`,
+  );
+}
+
 export function getLaunchPackageBlueprint(slug: string): PackageBlueprint | undefined {
   return launchPackageBlueprints.find((blueprint) => blueprint.slug === slug);
 }

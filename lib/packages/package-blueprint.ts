@@ -166,7 +166,7 @@ export const packageBlueprintMemberSchema = z
     }
   });
 
-const packageEditorialSchema = z.strictObject({
+export const packageEditorialSchema = z.strictObject({
   title: z.string().trim().min(4).max(80),
   summary: z.string().trim().min(40).max(220),
   outcome: z.string().trim().min(30).max(220),

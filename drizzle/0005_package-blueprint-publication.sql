@@ -4,6 +4,22 @@ ALTER TABLE `package_versions` ADD `blueprint_digest` text DEFAULT '' NOT NULL;
 --> statement-breakpoint
 ALTER TABLE `package_versions` ADD `editorial_json` text DEFAULT '{}' NOT NULL;
 --> statement-breakpoint
+ALTER TABLE `package_members` ADD `upstream_repository_url` text DEFAULT '' NOT NULL;
+--> statement-breakpoint
+ALTER TABLE `package_members` ADD `upstream_skill_path` text DEFAULT '' NOT NULL;
+--> statement-breakpoint
+ALTER TABLE `package_members` ADD `upstream_skill_name` text DEFAULT '' NOT NULL;
+--> statement-breakpoint
+ALTER TABLE `package_members` ADD `observed_head` text DEFAULT '' NOT NULL;
+--> statement-breakpoint
+ALTER TABLE `package_members` ADD `observed_license` text DEFAULT '' NOT NULL;
+--> statement-breakpoint
+ALTER TABLE `package_members` ADD `license_evidence_class` text DEFAULT '' NOT NULL;
+--> statement-breakpoint
+ALTER TABLE `package_members` ADD `license_evidence_path` text DEFAULT '' NOT NULL;
+--> statement-breakpoint
+ALTER TABLE `package_members` ADD `publisher_class` text DEFAULT 'legacy' NOT NULL;
+--> statement-breakpoint
 UPDATE `package_versions`
 SET `blueprint_schema_version` = 0,
 	`blueprint_digest` = 'legacy:' || `id`,

@@ -7,6 +7,7 @@ export {
   licenseEvidenceClassSchema,
   packageBlueprintMemberSchema,
   packageBlueprintSchema,
+  packageEditorialSchema,
   packageCategories,
   packageColorTokens,
   packageIconTokens,
@@ -17,4 +18,8 @@ export {
   type UnresolvedPackageLocatorPlan,
 } from "./package-blueprint";
 
-export { getLaunchPackageBlueprint, launchPackageBlueprints } from "./launch-blueprints";
+export {
+  getLaunchPackageBlueprint,
+  launchPackageBlueprints,
+  launchPackageRepositoryUrls,
+} from "./launch-blueprints";
