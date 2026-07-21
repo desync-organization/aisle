@@ -8,8 +8,13 @@ import {
   packageBindingIssueCopy,
   type PackageBindingIssue,
   type PublishedPackageBinding,
+  type PublishedPackageMemberBinding,
 } from "@/lib/marketplace/package-binding";
 import { useSelection } from "@/lib/selection/react";
+import {
+  canonicalizePackageSelectionAssertions,
+  type PackageSelectionAssertion,
+} from "@/lib/selection/contracts";
 
 export function PackageSelection({
   availability,
@@ -17,42 +22,66 @@ export function PackageSelection({
   expectedBlueprintDigest,
   expectedBlueprintSchemaVersion,
   memberCount,
+  members,
   mismatchReasons,
-  skillIds,
+  packageSlug,
 }: {
   availability: "resolved" | "pending" | "binding-mismatch" | "not-configured" | "unavailable";
   binding: PublishedPackageBinding | null;
   expectedBlueprintDigest: string;
   expectedBlueprintSchemaVersion: number;
   memberCount: number;
+  members: ReadonlyArray<PublishedPackageMemberBinding>;
   mismatchReasons: ReadonlyArray<PackageBindingIssue>;
-  skillIds: ReadonlyArray<string>;
+  packageSlug: string;
 }) {
   const { actions, meta, state } = useSelection();
   const [feedback, setFeedback] = useState("");
   const selected = useMemo(() => new Set<string>(state.ids), [state.ids]);
+  const skillIds = useMemo(() => members.map((member) => member.skillId), [members]);
   const isComplete = availability === "resolved" &&
     binding !== null &&
     binding.version > 0 &&
     binding.blueprintSchemaVersion === expectedBlueprintSchemaVersion &&
     binding.blueprintDigest === expectedBlueprintDigest &&
     skillIds.length === memberCount &&
-    new Set(skillIds).size === memberCount;
-  const allSelected = isComplete && skillIds.every((id) => selected.has(id));
+    new Set(skillIds).size === memberCount &&
+    new Set(members.map((member) => member.revisionId)).size === memberCount;
+  const assertion: PackageSelectionAssertion | null = isComplete && binding
+    ? {
+        packageSlug,
+        packageVersion: binding.version,
+        blueprintDigest: binding.blueprintDigest,
+        members: members.map((member) => ({
+          selectionId: member.skillId as PackageSelectionAssertion["members"][number]["selectionId"],
+          revisionId: member.revisionId,
+        })),
+      }
+    : null;
+  const activeAssertion = state.packageAssertions.find(
+    (candidate) => candidate.packageSlug === packageSlug,
+  );
+  const assertionMatches = assertion !== null && activeAssertion !== undefined &&
+    JSON.stringify(activeAssertion) ===
+      JSON.stringify(canonicalizePackageSelectionAssertions([assertion])[0]);
+  const allSelected = isComplete && assertionMatches &&
+    skillIds.every((id) => selected.has(id));
 
   function togglePackage() {
-    if (!isComplete) return;
+    if (!isComplete || !assertion) return;
 
     if (allSelected) {
-      skillIds.forEach((id) => actions.remove(id));
-      setFeedback(`${memberCount} package skills removed from your stack.`);
+      actions.removePackage(packageSlug);
+      setFeedback(
+        "Package receipt removed; independently selected or shared skills were kept.",
+      );
       return;
     }
 
-    const result = actions.addMany(skillIds);
+    const result = actions.addPackage(assertion);
     setFeedback(
       result.ok
-        ? `${memberCount} package skills added to your stack.`
+        ? `${memberCount} package skills and their immutable package receipt were added to your stack.`
         : `This package would exceed the ${meta.maxSelections}-skill stack limit. Remove a few skills and try again.`,
     );
   }

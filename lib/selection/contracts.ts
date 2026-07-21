@@ -1,10 +1,14 @@
 import { z } from "zod";
 
-export const SELECTION_STORAGE_VERSION = 1 as const;
-export const SELECTION_STORAGE_KEY = "aisle.selection.v1" as const;
+export const SELECTION_STORAGE_VERSION = 2 as const;
+export const SELECTION_STORAGE_KEY = "aisle.selection.v2" as const;
+export const LEGACY_SELECTION_STORAGE_KEY = "aisle.selection.v1" as const;
 export const SELECTION_QUERY_PARAMETER = "skills" as const;
 export const MAX_SELECTED_SKILLS = 64;
 export const MAX_CATALOG_SKILL_ID_LENGTH = 128;
+export const MAX_PACKAGE_SELECTION_ASSERTIONS = 16;
+export const MAX_PACKAGE_ASSERTION_MEMBER_REFERENCES = 128;
+export const MAX_PACKAGE_SLUG_LENGTH = 100;
 
 const unsafeSchemePattern = /^(?:https?|javascript|data|file|vbscript):/i;
 
@@ -32,14 +36,135 @@ export const catalogSkillIdListSchema = z
   .array(catalogSkillIdSchema)
   .max(MAX_SELECTED_SKILLS);
 
-export const persistedSelectionEnvelopeSchema = z.strictObject({
-  version: z.literal(SELECTION_STORAGE_VERSION),
+export const packageSelectionMemberAssertionSchema = z.strictObject({
+  selectionId: catalogSkillIdSchema,
+  revisionId: z.string().regex(/^revision_[a-f0-9]{24}$/),
+});
+
+export const packageSelectionSlugSchema = z
+  .string()
+  .min(1)
+  .max(MAX_PACKAGE_SLUG_LENGTH)
+  .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/);
+
+export const packageSelectionAssertionSchema = z.strictObject({
+  packageSlug: packageSelectionSlugSchema,
+  packageVersion: z.number().int().positive().max(2_147_483_647),
+  blueprintDigest: z.string().regex(/^sha256:[a-f0-9]{64}$/),
+  members: z
+    .array(packageSelectionMemberAssertionSchema)
+    .min(1)
+    .max(MAX_SELECTED_SKILLS)
+    .superRefine((members, context) => {
+      const seen = new Set<string>();
+      members.forEach((member, index) => {
+        if (seen.has(member.selectionId)) {
+          context.addIssue({
+            code: "custom",
+            path: [index, "selectionId"],
+            message: "Package member selection IDs must be unique.",
+          });
+        }
+        seen.add(member.selectionId);
+      });
+    }),
+});
+
+export const packageSelectionAssertionListSchema = z
+  .array(packageSelectionAssertionSchema)
+  .max(MAX_PACKAGE_SELECTION_ASSERTIONS)
+  .superRefine((assertions, context) => {
+    const seen = new Set<string>();
+    let memberReferences = 0;
+    assertions.forEach((assertion, index) => {
+      memberReferences += assertion.members.length;
+      if (seen.has(assertion.packageSlug)) {
+        context.addIssue({
+          code: "custom",
+          path: [index, "packageSlug"],
+          message: "A package can have only one selected version assertion.",
+        });
+      }
+      seen.add(assertion.packageSlug);
+    });
+    if (memberReferences > MAX_PACKAGE_ASSERTION_MEMBER_REFERENCES) {
+      context.addIssue({
+        code: "custom",
+        message: `Package assertions can contain at most ${MAX_PACKAGE_ASSERTION_MEMBER_REFERENCES} member references.`,
+      });
+    }
+  });
+
+export const persistedSelectionEnvelopeSchema = z
+  .strictObject({
+    version: z.literal(SELECTION_STORAGE_VERSION),
+    ids: catalogSkillIdListSchema,
+    individualIds: catalogSkillIdListSchema,
+    packageAssertions: packageSelectionAssertionListSchema,
+  })
+  .superRefine((envelope, context) => {
+    const canonicalIndividuals = sortAndDedupeCatalogSkillIds(envelope.individualIds);
+    if (
+      canonicalIndividuals.length !== envelope.individualIds.length ||
+      canonicalIndividuals.some((id, index) => id !== envelope.individualIds[index])
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["individualIds"],
+        message: "Individual selection IDs must be unique and canonically sorted.",
+      });
+    }
+
+    const canonicalAssertions = canonicalizePackageSelectionAssertions(
+      envelope.packageAssertions,
+    );
+    if (JSON.stringify(canonicalAssertions) !== JSON.stringify(envelope.packageAssertions)) {
+      context.addIssue({
+        code: "custom",
+        path: ["packageAssertions"],
+        message: "Package assertions and their members must be canonically sorted.",
+      });
+    }
+
+    const derivedIds = deriveSelectedCatalogSkillIds(
+      envelope.individualIds,
+      envelope.packageAssertions,
+    );
+    if (
+      derivedIds.length !== envelope.ids.length ||
+      derivedIds.some((id, index) => id !== envelope.ids[index])
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["ids"],
+        message: "Selected IDs must be the canonical exact union of individual and package selections.",
+      });
+    }
+  });
+
+export const legacyPersistedSelectionEnvelopeSchema = z.strictObject({
+  version: z.literal(1),
   ids: catalogSkillIdListSchema,
 });
 
 export type CatalogSkillId = z.infer<typeof catalogSkillIdSchema>;
-export type PersistedSelectionEnvelope = z.infer<
-  typeof persistedSelectionEnvelopeSchema
+export type PackageSelectionMemberAssertion = Readonly<
+  z.infer<typeof packageSelectionMemberAssertionSchema>
+>;
+export type PackageSelectionAssertion = Readonly<
+  Omit<z.infer<typeof packageSelectionAssertionSchema>, "members"> & {
+    members: readonly PackageSelectionMemberAssertion[];
+  }
+>;
+export type PersistedSelectionEnvelope = Readonly<
+  Omit<
+    z.infer<typeof persistedSelectionEnvelopeSchema>,
+    "ids" | "individualIds" | "packageAssertions"
+  > & {
+    ids: readonly CatalogSkillId[];
+    individualIds: readonly CatalogSkillId[];
+    packageAssertions: readonly PackageSelectionAssertion[];
+  }
 >;
 
 export function sortAndDedupeCatalogSkillIds(
@@ -48,4 +173,39 @@ export function sortAndDedupeCatalogSkillIds(
   return [...new Set(ids)].sort((left, right) =>
     left < right ? -1 : left > right ? 1 : 0,
   );
+}
+
+export function canonicalizePackageSelectionAssertions(
+  assertions: readonly PackageSelectionAssertion[],
+): readonly PackageSelectionAssertion[] {
+  return [...assertions]
+    .map((assertion) => ({
+      ...assertion,
+      members: [...assertion.members].sort((left, right) =>
+        left.selectionId < right.selectionId
+          ? -1
+          : left.selectionId > right.selectionId
+            ? 1
+            : 0,
+      ),
+    }))
+    .sort((left, right) =>
+      left.packageSlug < right.packageSlug
+        ? -1
+        : left.packageSlug > right.packageSlug
+          ? 1
+          : 0,
+    );
+}
+
+export function deriveSelectedCatalogSkillIds(
+  individualIds: readonly CatalogSkillId[],
+  assertions: readonly PackageSelectionAssertion[],
+): readonly CatalogSkillId[] {
+  return sortAndDedupeCatalogSkillIds([
+    ...individualIds,
+    ...assertions.flatMap((assertion) =>
+      assertion.members.map((member) => member.selectionId),
+    ),
+  ]);
 }

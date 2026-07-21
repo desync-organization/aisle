@@ -96,7 +96,10 @@ export function StackBuilder() {
   const preflightControllerRef = useRef<AbortController | null>(null);
   const resolveControllerRef = useRef<AbortController | null>(null);
 
-  const selectionKey = state.ids.join(",");
+  const selectionKey = JSON.stringify({
+    ids: state.ids,
+    packageAssertions: state.packageAssertions,
+  });
   const preflight = preflightState.status !== "idle" && preflightState.selectionKey !== selectionKey
     ? ({ status: "idle" } as const)
     : preflightState;
@@ -140,9 +143,13 @@ export function StackBuilder() {
     const controller = new AbortController();
     preflightControllerRef.current = controller;
     const selectionIds = [...state.ids];
+    const packageAssertions = [...state.packageAssertions];
     setPreflight({ status: "loading", selectionKey });
 
-    void preflightStack({ selectionIds }, { signal: controller.signal })
+    void preflightStack(
+      { selectionIds, packageAssertions },
+      { signal: controller.signal },
+    )
       .then((snapshot) => {
         if (!controller.signal.aborted) {
           setPreflight({ status: "success", selectionKey, snapshot });
@@ -170,7 +177,7 @@ export function StackBuilder() {
       });
 
     return () => controller.abort();
-  }, [preflightAttempt, selectionKey, state.count, state.hydrated, state.ids]);
+  }, [preflightAttempt, selectionKey, state.count, state.hydrated, state.ids, state.packageAssertions]);
 
   useEffect(() => () => {
     preflightControllerRef.current?.abort();
@@ -221,6 +228,7 @@ export function StackBuilder() {
     try {
       const plan = await resolveStack({
         selectionIds: preflight.snapshot.rows.map((row) => row.id),
+        packageAssertions: state.packageAssertions,
         acknowledgements: acknowledgedRows.map((row) => ({
           selectionId: row.id,
           revisionId: row.revisionId,

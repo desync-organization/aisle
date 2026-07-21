@@ -14,7 +14,9 @@ export async function POST(request: Request): Promise<Response> {
     parseSearchParams(new URL(request.url), emptyQuerySchema);
     const body = await parseJsonBody(request, stackPreflightRequestSchema);
     return withCatalogDatabase(async (_repository, database) => ({
-      rows: await preflightStackSelections(database, body.selectionIds),
+      rows: await preflightStackSelections(database, body, {
+        github: { signal: request.signal },
+      }),
     }));
   });
 }

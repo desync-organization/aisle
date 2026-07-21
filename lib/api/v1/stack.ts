@@ -10,6 +10,9 @@ import {
 import { installSpecSchema } from "@/lib/catalog/source-contract";
 import type { CatalogDatabase } from "@/lib/db/client";
 import {
+  packageMembers,
+  packages,
+  packageVersions,
   repositories,
   skillDuplicates,
   skillRevisions,
@@ -37,6 +40,7 @@ import {
 } from "./github-revalidation";
 import type {
   StackGateReason,
+  StackPreflightRequest,
   StackResolveRequest,
 } from "./contracts";
 
@@ -685,6 +689,100 @@ async function loadPersistedSelectionRows(
   return persistedRows;
 }
 
+async function assertPackageSelectionAssertions(
+  transaction: CatalogTransaction,
+  selectionIds: readonly string[],
+  assertions: StackPreflightRequest["packageAssertions"],
+  persistedRows: readonly PersistedStackSelection[],
+): Promise<void> {
+  if (assertions.length === 0) return;
+
+  const selected = new Set(selectionIds);
+  const currentRevisionBySkill = new Map(
+    persistedRows.map((row) => [row.id, row.revisionId]),
+  );
+  const issues: Array<{ path: string; message: string }> = [];
+
+  for (const [assertionIndex, assertion] of assertions.entries()) {
+    let assertionInvalid = false;
+    for (const [memberIndex, member] of assertion.members.entries()) {
+      if (!selected.has(member.selectionId)) {
+        assertionInvalid = true;
+        issues.push({
+          path: `packageAssertions.${assertionIndex}.members.${memberIndex}.selectionId`,
+          message: "The asserted package member is not in the requested selection set.",
+        });
+        continue;
+      }
+      if (currentRevisionBySkill.get(member.selectionId) !== member.revisionId) {
+        assertionInvalid = true;
+        issues.push({
+          path: `packageAssertions.${assertionIndex}.members.${memberIndex}.revisionId`,
+          message: "The catalog's current skill revision no longer matches the package receipt.",
+        });
+      }
+    }
+
+    const [publication] = await transaction
+      .select({
+        packageVersionId: packageVersions.id,
+        blueprintDigest: packageVersions.blueprintDigest,
+        publishedAt: packageVersions.publishedAt,
+      })
+      .from(packages)
+      .innerJoin(packageVersions, eq(packageVersions.packageId, packages.id))
+      .where(
+        and(
+          eq(packages.slug, assertion.packageSlug),
+          eq(packages.published, true),
+          eq(packageVersions.version, assertion.packageVersion),
+        ),
+      )
+      .limit(1);
+
+    if (
+      !publication?.publishedAt ||
+      publication.blueprintDigest !== assertion.blueprintDigest
+    ) {
+      issues.push({
+        path: `packageAssertions.${assertionIndex}`,
+        message: "The published package version or blueprint digest no longer matches this receipt.",
+      });
+      continue;
+    }
+
+    const publishedMembers = await transaction
+      .select({
+        selectionId: packageMembers.skillId,
+        revisionId: packageMembers.revisionId,
+      })
+      .from(packageMembers)
+      .where(eq(packageMembers.packageVersionId, publication.packageVersionId));
+    const assertedBySkill = new Map(
+      assertion.members.map((member) => [member.selectionId, member.revisionId]),
+    );
+    const publicationMatches = publishedMembers.length === assertion.members.length &&
+      publishedMembers.every((member) =>
+        assertedBySkill.get(member.selectionId) === member.revisionId,
+      );
+    if (!publicationMatches && !assertionInvalid) {
+      issues.push({
+        path: `packageAssertions.${assertionIndex}.members`,
+        message: "The published package member and revision set no longer matches this receipt.",
+      });
+    }
+  }
+
+  if (issues.length > 0) {
+    throw new ApiError(
+      409,
+      "PACKAGE_ASSERTION_MISMATCH",
+      "A selected package changed after it was added. Re-add that package before installing.",
+      issues,
+    );
+  }
+}
+
 function bindVerificationToFreshRow(
   row: PersistedStackSelection,
   verification: StackGithubVerificationResult | undefined,
@@ -703,9 +801,16 @@ function bindVerificationToFreshRow(
 async function resolveSelectionSet(
   transaction: CatalogTransaction,
   selectionIds: readonly string[],
+  packageAssertions: StackPreflightRequest["packageAssertions"],
   verification: ReadonlyMap<string, StackGithubVerificationResult>,
 ): Promise<ResolvedStackSelection[]> {
   const persistedRows = await loadPersistedSelectionRows(transaction, selectionIds);
+  await assertPackageSelectionAssertions(
+    transaction,
+    selectionIds,
+    packageAssertions,
+    persistedRows,
+  );
   const byId = new Map(persistedRows.map((row) => [row.id, row]));
   const evidence = await warningEvidence(transaction, persistedRows);
   return selectionIds.map((id) => {
@@ -721,6 +826,7 @@ async function resolveSelectionSet(
 async function withLiveVerifiedSelections<T>(
   database: CatalogDatabase,
   selectionIds: readonly string[],
+  packageAssertions: StackPreflightRequest["packageAssertions"],
   github: StackGithubRevalidationOptions,
   operation: (
     transaction: CatalogTransaction,
@@ -729,6 +835,12 @@ async function withLiveVerifiedSelections<T>(
 ): Promise<T> {
   const verificationCandidates = await database.transaction(async (transaction) => {
     const initialRows = await loadPersistedSelectionRows(transaction, selectionIds);
+    await assertPackageSelectionAssertions(
+      transaction,
+      selectionIds,
+      packageAssertions,
+      initialRows,
+    );
     return initialRows
       .map(githubVerificationCandidate)
       .filter((candidate): candidate is StackGithubVerificationCandidate => candidate !== null);
@@ -736,7 +848,12 @@ async function withLiveVerifiedSelections<T>(
   const verification = await revalidateGithubStackCandidates(verificationCandidates, github);
 
   return database.transaction(async (transaction) => {
-    const selections = await resolveSelectionSet(transaction, selectionIds, verification);
+    const selections = await resolveSelectionSet(
+      transaction,
+      selectionIds,
+      packageAssertions,
+      verification,
+    );
     return operation(transaction, selections);
   });
 }
@@ -747,12 +864,13 @@ export type StackResolutionDependencies = Readonly<{
 
 export async function preflightStackSelections(
   database: CatalogDatabase,
-  selectionIds: readonly string[],
+  request: StackPreflightRequest,
   dependencies: StackResolutionDependencies = {},
 ) {
   return withLiveVerifiedSelections(
     database,
-    selectionIds,
+    request.selectionIds,
+    request.packageAssertions,
     dependencies.github ?? {},
     (_transaction, selections) => selections.map((selection) => selection.publicRow),
   );
@@ -816,6 +934,7 @@ export async function resolveStackInstallPlan(
   return withLiveVerifiedSelections(
     database,
     request.selectionIds,
+    request.packageAssertions,
     dependencies.github ?? {},
     async (_transaction, selections) => {
       const blocked = selections

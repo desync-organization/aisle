@@ -2,7 +2,12 @@ import { z } from "zod";
 
 import { installPlanOptionsSchema } from "@/lib/install-plan/contracts";
 import { packageCategories } from "@/lib/packages/package-blueprint";
-import { MAX_SELECTED_SKILLS } from "@/lib/selection/contracts";
+import {
+  MAX_PACKAGE_ASSERTION_MEMBER_REFERENCES,
+  MAX_PACKAGE_SELECTION_ASSERTIONS,
+  MAX_PACKAGE_SLUG_LENGTH,
+  MAX_SELECTED_SKILLS,
+} from "@/lib/selection/contracts";
 
 export const API_VERSION = "v1" as const;
 export const API_PAGE_LIMIT_MAX = 100 as const;
@@ -137,9 +142,99 @@ const uniqueSelectionIdsSchema = z
     });
   });
 
-export const stackPreflightRequestSchema = z.strictObject({
-  selectionIds: uniqueSelectionIdsSchema,
+const stackPackageSelectionMemberAssertionSchema = z.strictObject({
+  selectionId: stackSelectionIdSchema,
+  revisionId: stackRevisionIdSchema,
 });
+
+const stackPackageSelectionAssertionSchema = z.strictObject({
+  packageSlug: z
+    .string()
+    .min(1)
+    .max(MAX_PACKAGE_SLUG_LENGTH)
+    .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
+  packageVersion: z.number().int().positive().max(2_147_483_647),
+  blueprintDigest: z.string().regex(/^sha256:[a-f0-9]{64}$/),
+  members: z
+    .array(stackPackageSelectionMemberAssertionSchema)
+    .min(1)
+    .max(MAX_SELECTED_SKILLS)
+    .superRefine((members, context) => {
+      const seen = new Set<string>();
+      members.forEach((member, index) => {
+        if (seen.has(member.selectionId)) {
+          context.addIssue({
+            code: "custom",
+            path: [index, "selectionId"],
+            message: "Package member selection IDs must be unique.",
+          });
+        }
+        seen.add(member.selectionId);
+      });
+    }),
+});
+
+const stackPackageSelectionAssertionsSchema = z
+  .array(stackPackageSelectionAssertionSchema)
+  .max(MAX_PACKAGE_SELECTION_ASSERTIONS)
+  .superRefine((assertions, context) => {
+    const slugs = new Set<string>();
+    let memberReferences = 0;
+    assertions.forEach((assertion, index) => {
+      memberReferences += assertion.members.length;
+      if (slugs.has(assertion.packageSlug)) {
+        context.addIssue({
+          code: "custom",
+          path: [index, "packageSlug"],
+          message: "A package can have only one selected version assertion.",
+        });
+      }
+      slugs.add(assertion.packageSlug);
+    });
+    if (memberReferences > MAX_PACKAGE_ASSERTION_MEMBER_REFERENCES) {
+      context.addIssue({
+        code: "custom",
+        message: `Package assertions can contain at most ${MAX_PACKAGE_ASSERTION_MEMBER_REFERENCES} member references.`,
+      });
+    }
+  })
+  .default([]);
+
+function packageAssertionSelectionMembershipIssues(
+  selectionIds: readonly string[],
+  assertions: ReadonlyArray<Readonly<{
+    members: ReadonlyArray<Readonly<{ selectionId: string }>>;
+  }>>,
+): Array<{ path: Array<string | number>; message: string }> {
+  const selected = new Set(selectionIds);
+  const issues: Array<{
+    path: Array<string | number>;
+    message: string;
+  }> = [];
+  assertions.forEach((assertion, assertionIndex) => {
+    assertion.members.forEach((member, memberIndex) => {
+      if (!selected.has(member.selectionId)) {
+        issues.push({
+          path: ["packageAssertions", assertionIndex, "members", memberIndex, "selectionId"],
+          message: "Package assertions can reference only requested selection IDs.",
+        });
+      }
+    });
+  });
+  return issues;
+}
+
+export const stackPreflightRequestSchema = z
+  .strictObject({
+    selectionIds: uniqueSelectionIdsSchema,
+    packageAssertions: stackPackageSelectionAssertionsSchema,
+  })
+  .superRefine((request, context) => {
+    packageAssertionSelectionMembershipIssues(
+      request.selectionIds,
+      request.packageAssertions,
+    ).forEach((issue) => context.addIssue({ code: "custom", ...issue }));
+  });
 
 export const stackWarningAcknowledgementSchema = z.strictObject({
   selectionId: stackSelectionIdSchema,
@@ -150,10 +245,15 @@ export const stackWarningAcknowledgementSchema = z.strictObject({
 export const stackResolveRequestSchema = z
   .strictObject({
     selectionIds: uniqueSelectionIdsSchema,
+    packageAssertions: stackPackageSelectionAssertionsSchema,
     acknowledgements: z.array(stackWarningAcknowledgementSchema).max(MAX_SELECTED_SKILLS),
     options: installPlanOptionsSchema,
   })
   .superRefine((request, context) => {
+    packageAssertionSelectionMembershipIssues(
+      request.selectionIds,
+      request.packageAssertions,
+    ).forEach((issue) => context.addIssue({ code: "custom", ...issue }));
     const selected = new Set(request.selectionIds);
     const acknowledged = new Set<string>();
     request.acknowledgements.forEach((acknowledgement, index) => {
