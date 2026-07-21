@@ -9,7 +9,7 @@
     "start": "next start",
     "lint": "eslint . --max-warnings=0",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run lib/db && vitest run lib/catalog && vitest run tests",
+    "test": "vitest run lib/db && vitest run lib/catalog/adapters && vitest run lib/catalog/connectors/skills-sh-client.test.ts && vitest run lib/catalog/connectors/skills-sh-sync.test.ts && vitest run lib/catalog/artifact-fingerprint.test.ts lib/catalog/categories.test.ts lib/catalog/http-safety.test.ts lib/catalog/orchestrator.test.ts lib/catalog/security.test.ts && vitest run tests",
     "test:watch": "vitest",
     "check": "npm run lint && npm run typecheck && npm test",
     "db:migrate": "tsx scripts/db-migrate.ts",
