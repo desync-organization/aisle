@@ -22,18 +22,18 @@ function formatInstalls(value: number): string {
 }
 
 export function SkillCard({ compact = false, skill }: { compact?: boolean; skill: MarketplaceSkillSummary }) {
-  const { actions, state } = useSelection();
+  const { actions, meta, state } = useSelection();
   const [feedback, setFeedback] = useState("");
-  const selected = state.ids.includes(skill.id as never);
+  const selected = state.ids.some((id) => id === skill.id);
   const source = sourceName(skill.sourceUrl);
 
   function toggle() {
     const result = actions.toggle(skill.id);
     if (!result.ok) {
-      setFeedback(`Your stack can contain up to ${state.count} current selections. Remove one before adding another.`);
+      setFeedback(`Your stack can contain up to ${meta.maxSelections} skills. Remove one before adding another.`);
       return;
     }
-    setFeedback(result.snapshot.ids.includes(skill.id as never) ? `${skill.name} added.` : `${skill.name} removed.`);
+    setFeedback(result.snapshot.ids.some((id) => id === skill.id) ? `${skill.name} added.` : `${skill.name} removed.`);
   }
 
   return (

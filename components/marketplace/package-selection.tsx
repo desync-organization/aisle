@@ -15,9 +15,9 @@ export function PackageSelection({
   memberCount: number;
   skillIds: ReadonlyArray<string>;
 }) {
-  const { actions, state } = useSelection();
+  const { actions, meta, state } = useSelection();
   const [feedback, setFeedback] = useState("");
-  const selected = useMemo(() => new Set(state.ids), [state.ids]);
+  const selected = useMemo(() => new Set<string>(state.ids), [state.ids]);
   const isComplete = availability === "resolved" && skillIds.length === memberCount;
   const allSelected = isComplete && skillIds.every((id) => selected.has(id));
 
@@ -34,7 +34,7 @@ export function PackageSelection({
     setFeedback(
       result.ok
         ? `${memberCount} package skills added to your stack.`
-        : `This package would exceed the ${state.count + (skillIds.length - selected.size)}-item selection request. Remove a few skills and try again.`,
+        : `This package would exceed the ${meta.maxSelections}-skill stack limit. Remove a few skills and try again.`,
     );
   }
 
