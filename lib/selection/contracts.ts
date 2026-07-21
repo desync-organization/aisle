@@ -120,14 +120,19 @@ export const legacyPersistedSelectionEnvelopeSchema = z.strictObject({
 });
 
 export type CatalogSkillId = z.infer<typeof catalogSkillIdSchema>;
-export type PackageSelectionMemberAssertion = z.infer<
-  typeof packageSelectionMemberAssertionSchema
+export type PackageSelectionMemberAssertion = Readonly<
+  z.infer<typeof packageSelectionMemberAssertionSchema>
 >;
-export type PackageSelectionAssertion = z.infer<
-  typeof packageSelectionAssertionSchema
+export type PackageSelectionAssertion = Readonly<
+  Omit<z.infer<typeof packageSelectionAssertionSchema>, "members"> & {
+    members: readonly PackageSelectionMemberAssertion[];
+  }
 >;
-export type PersistedSelectionEnvelope = z.infer<
-  typeof persistedSelectionEnvelopeSchema
+export type PersistedSelectionEnvelope = Readonly<
+  Omit<z.infer<typeof persistedSelectionEnvelopeSchema>, "ids" | "packageAssertions"> & {
+    ids: readonly CatalogSkillId[];
+    packageAssertions: readonly PackageSelectionAssertion[];
+  }
 >;
 
 export function sortAndDedupeCatalogSkillIds(
