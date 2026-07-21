@@ -18,7 +18,7 @@ export function SkillShelf({
       <div className="home-catalog-empty">
         <CircleDashed aria-hidden="true" size={25} />
         <div>
-          <strong>{availability === "unavailable" ? "Catalog temporarily unavailable" : "No eligible catalog records yet"}</strong>
+          <strong>{availability === "unavailable" ? "Catalog temporarily unavailable" : "No public catalog records yet"}</strong>
           <p>Public sources can be curated here only after their revisions and trust state resolve. Aisle does not ship placeholder skills.</p>
         </div>
         <Link href="/coverage">View coverage <ArrowRight aria-hidden="true" size={15} /></Link>

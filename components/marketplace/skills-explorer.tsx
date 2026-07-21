@@ -1,15 +1,20 @@
 "use client";
 
-import { ArrowRight, CircleDashed, Search, SlidersHorizontal, Sparkles, Trash2 } from "lucide-react";
+import { ArrowLeft, ArrowRight, CircleDashed, Search, SlidersHorizontal, Sparkles, Trash2 } from "lucide-react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useDeferredValue, useMemo, useState, type FormEvent } from "react";
 
 import { SkillCard } from "@/components/marketplace/skill-card";
 import { Button } from "@/components/ui/button";
-import type { CatalogAvailability, MarketplaceSkillSummary } from "@/lib/marketplace/catalog";
+import type {
+  CatalogAvailability,
+  MarketplaceCatalogSnapshot,
+  MarketplaceSkillSummary,
+} from "@/lib/marketplace/catalog";
 import { useSelection } from "@/lib/selection/react";
 
-type TrustFilter = "all" | "pass" | "warn";
+type TrustFilter = "all" | MarketplaceSkillSummary["trustState"];
 type ProvenanceFilter = "all" | "official" | "community";
 type SortMode = "popular" | "name" | "trust";
 
@@ -19,12 +24,12 @@ const availabilityCopy: Record<CatalogAvailability, { title: string; body: strin
     body: "Clear a filter or search for another upstream name, description, or source.",
   },
   empty: {
-    title: "No eligible skills in this view yet",
-    body: "Aisle only exposes records after public provenance, immutable revision, install shape, and trust checks resolve.",
+    title: "No public skills in this view yet",
+    body: "Aisle never inserts sample listings. Public upstream metadata will appear here after source discovery, even while selection checks are pending.",
   },
   "not-configured": {
     title: "The catalog has not been provisioned here",
-    body: "No sample listings are standing in for missing data. Once a source sync is connected, eligible public skills will appear here.",
+    body: "No sample listings are standing in for missing data. Once a source sync is connected, public skill metadata will appear here with explicit selection gates.",
   },
   unavailable: {
     title: "The catalog could not be read",
@@ -36,11 +41,13 @@ export function SkillsExplorer({
   availability,
   category,
   initialQuery = "",
+  pagination,
   skills,
 }: {
   availability: CatalogAvailability;
   category?: string;
   initialQuery?: string;
+  pagination: MarketplaceCatalogSnapshot["pagination"];
   skills: ReadonlyArray<MarketplaceSkillSummary>;
 }) {
   const router = useRouter();
@@ -64,7 +71,12 @@ export function SkillsExplorer({
     return next.toSorted((left, right) => {
       if (sort === "name") return left.name.localeCompare(right.name);
       if (sort === "trust") {
-        const rank = { pass: 0, warn: 1, unreviewed: 2 } as const;
+        const rank: Record<MarketplaceSkillSummary["trustState"], number> = {
+          pass: 0,
+          warn: 1,
+          unreviewed: 2,
+          blocked: 3,
+        };
         return rank[left.trustState] - rank[right.trustState] || left.name.localeCompare(right.name);
       }
       return right.installs - left.installs || left.name.localeCompare(right.name);
@@ -73,10 +85,11 @@ export function SkillsExplorer({
 
   const emptyCopy = availabilityCopy[availability];
 
-  function catalogUrl(nextQuery: string): string {
+  function catalogUrl(nextQuery: string, nextPage = 1): string {
     const params = new URLSearchParams();
     if (category) params.set("category", category);
     if (nextQuery) params.set("q", nextQuery);
+    if (nextPage > 1) params.set("page", String(nextPage));
     const encoded = params.toString();
     return encoded ? `/skills?${encoded}` : "/skills";
   }
@@ -84,7 +97,7 @@ export function SkillsExplorer({
   function submitCatalogSearch(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const normalized = query.trim();
-    if (normalized === initialQuery.trim()) return;
+    if (normalized === initialQuery.trim() && pagination.page === 1) return;
     router.push(catalogUrl(normalized));
   }
 
@@ -118,9 +131,11 @@ export function SkillsExplorer({
           <label>
             <span>Trust</span>
             <select onChange={(event) => setTrust(event.target.value as TrustFilter)} value={trust}>
-              <option value="all">All eligible</option>
+              <option value="all">All records</option>
               <option value="pass">Trust checked</option>
               <option value="warn">Review warnings</option>
+              <option value="unreviewed">Review pending</option>
+              <option value="blocked">Trust blocked</option>
             </select>
           </label>
           <label>
@@ -143,8 +158,8 @@ export function SkillsExplorer({
       </section>
 
       <div className="skills-result-bar">
-        <span><SlidersHorizontal aria-hidden="true" size={14} /> {visibleSkills.length} shown</span>
-        <span>{skills.length} eligible records loaded</span>
+        <span><SlidersHorizontal aria-hidden="true" size={14} /> {visibleSkills.length} shown on this page</span>
+        <span>{skills.length} public records loaded · page {pagination.page}</span>
       </div>
 
       {visibleSkills.length > 0 ? (
@@ -166,6 +181,22 @@ export function SkillsExplorer({
           ) : null}
         </div>
       )}
+
+      {(pagination.hasPrevious || pagination.hasNext) ? (
+        <nav aria-label="Skills catalog pages" className="catalog-pagination">
+          {pagination.hasPrevious ? (
+            <Link href={catalogUrl(initialQuery, pagination.page - 1)}>
+              <ArrowLeft aria-hidden="true" size={15} /> Previous
+            </Link>
+          ) : <span aria-hidden="true" />}
+          <span>Page {pagination.page}</span>
+          {pagination.hasNext ? (
+            <Link href={catalogUrl(initialQuery, pagination.page + 1)}>
+              Next <ArrowRight aria-hidden="true" size={15} />
+            </Link>
+          ) : <span aria-hidden="true" />}
+        </nav>
+      ) : null}
 
       <aside className="selection-dock" id="selected-stack">
         <span className="selection-dock__icon"><Sparkles aria-hidden="true" size={18} /></span>

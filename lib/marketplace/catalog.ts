@@ -3,6 +3,14 @@ import { resolve } from "node:path";
 
 import { createCatalogDatabase } from "@/lib/db/client";
 import { CatalogRepository } from "@/lib/db/repository";
+import type {
+  CatalogSelectionGateReason,
+  CatalogTrustState,
+} from "@/lib/marketplace/selection-gates";
+
+const DEFAULT_CATALOG_PAGE_SIZE = 48;
+const MAX_CATALOG_PAGE_SIZE = 48;
+const MAX_CATALOG_PAGE = 2_000;
 
 export type MarketplaceSkillSummary = Readonly<{
   id: string;
@@ -12,17 +20,19 @@ export type MarketplaceSkillSummary = Readonly<{
   skillPath: string;
   lifecycle: "current" | "stale" | "unavailable" | "removed";
   officialProvenance: boolean;
-  immutableRef: string;
+  immutableRef: string | null;
   license: string;
-  trustState: "unreviewed" | "pass" | "warn";
+  trustState: CatalogTrustState;
   installs: number;
+  selectable: boolean;
+  gateReasons: ReadonlyArray<CatalogSelectionGateReason>;
 }>;
 
 export type MarketplaceSkillDetail = MarketplaceSkillSummary & Readonly<{
   provider: string;
   compatibility: string | null;
-  revisionId: string;
-  contentHash: string;
+  revisionId: string | null;
+  contentHash: string | null;
 }>;
 
 export type MarketplaceCategoryFacet = Readonly<{
@@ -38,6 +48,12 @@ export type MarketplaceCatalogSnapshot = Readonly<{
   skills: ReadonlyArray<MarketplaceSkillSummary>;
   categories: ReadonlyArray<MarketplaceCategoryFacet>;
   connectedSources: number;
+  pagination: Readonly<{
+    page: number;
+    pageSize: number;
+    hasPrevious: boolean;
+    hasNext: boolean;
+  }>;
 }>;
 
 export type ResolvedPackageSnapshot = Readonly<{
@@ -63,15 +79,40 @@ function hasConfiguredDatabase(): boolean {
   return existsSync(resolve(process.cwd(), "data", "aisle.db"));
 }
 
+function boundedInteger(value: number | undefined, fallback: number, maximum: number): number {
+  const candidate = Number.isFinite(value) ? Math.trunc(value ?? fallback) : fallback;
+  return Math.min(Math.max(candidate, 1), maximum);
+}
+
 export async function loadMarketplaceCatalog(
-  options: Readonly<{ query?: string; category?: string; limit?: number }> = {},
+  options: Readonly<{
+    query?: string;
+    category?: string;
+    page?: number;
+    pageSize?: number;
+    limit?: number;
+  }> = {},
 ): Promise<MarketplaceCatalogSnapshot> {
+  const page = boundedInteger(options.page, 1, MAX_CATALOG_PAGE);
+  const pageSize = boundedInteger(
+    options.pageSize ?? options.limit,
+    DEFAULT_CATALOG_PAGE_SIZE,
+    MAX_CATALOG_PAGE_SIZE,
+  );
+  const pagination = {
+    page,
+    pageSize,
+    hasPrevious: page > 1,
+    hasNext: false,
+  } as const;
+
   if (!hasConfiguredDatabase()) {
     return {
       availability: "not-configured",
       skills: [],
       categories: [],
       connectedSources: 0,
+      pagination,
     };
   }
 
@@ -83,13 +124,17 @@ export async function loadMarketplaceCatalog(
       repository.search({
         query: options.query,
         category: options.category,
-        limit: options.limit ?? 100,
+        includeUnselectable: true,
+        lifecycle: ["current", "stale"],
+        limit: pageSize + 1,
+        offset: (page - 1) * pageSize,
       }),
       repository.facets(),
       repository.coverage(),
     ]);
 
-    const skills = rows.map((row) => ({
+    const hasNext = rows.length > pageSize;
+    const skills = rows.slice(0, pageSize).map((row) => ({
       id: row.id,
       name: row.name,
       description: row.description,
@@ -101,6 +146,8 @@ export async function loadMarketplaceCatalog(
       license: row.license,
       trustState: row.trustState,
       installs: row.installs,
+      selectable: row.selectable,
+      gateReasons: row.gateReasons,
     }));
 
     return {
@@ -108,6 +155,7 @@ export async function loadMarketplaceCatalog(
       skills,
       categories: facets.category,
       connectedSources: coverage.filter((source) => source.lastSuccessfulSyncAt !== null).length,
+      pagination: { page, pageSize, hasPrevious: page > 1, hasNext },
     };
   } catch {
     return {
@@ -115,6 +163,7 @@ export async function loadMarketplaceCatalog(
       skills: [],
       categories: [],
       connectedSources: 0,
+      pagination,
     };
   } finally {
     connection.client.close();
@@ -159,7 +208,12 @@ export async function loadMarketplaceSkill(id: string): Promise<MarketplaceSkill
   const repository = new CatalogRepository(connection.db);
 
   try {
-    const [row] = await repository.search({ id, limit: 1 });
+    const [row] = await repository.search({
+      id,
+      includeUnselectable: true,
+      lifecycle: ["current", "stale"],
+      limit: 1,
+    });
     if (!row) return { availability: "empty", skill: null };
 
     return {
@@ -180,6 +234,8 @@ export async function loadMarketplaceSkill(id: string): Promise<MarketplaceSkill
         license: row.license,
         trustState: row.trustState,
         installs: row.installs,
+        selectable: row.selectable,
+        gateReasons: row.gateReasons,
       },
     };
   } catch {

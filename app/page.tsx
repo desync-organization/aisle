@@ -107,7 +107,7 @@ export default async function HomePage() {
         <section aria-labelledby="live-catalog-heading" className="home-market-section home-market-section--catalog shell">
           <div className="market-section__heading">
             <div>
-              <span>Live catalog / Eligibility filtered</span>
+              <span>Live catalog / Public metadata</span>
               <h2 id="live-catalog-heading">Pick only what belongs in your stack.</h2>
             </div>
             <div className="market-heading-action">

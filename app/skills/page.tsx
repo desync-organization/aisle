@@ -13,7 +13,7 @@ import { createPageMetadata } from "@/lib/seo";
 
 export const metadata: Metadata = createPageMetadata({
   title: "Skills",
-  description: "Search, filter, compare, and select eligible public Agent Skills without losing upstream provenance.",
+  description: "Search and compare public Agent Skill metadata, with explicit provenance and selection eligibility gates.",
   path: "/skills",
 });
 
@@ -27,12 +27,24 @@ function firstValue(value: string | string[] | undefined): string {
   return Array.isArray(value) ? value[0] ?? "" : value ?? "";
 }
 
+function catalogPage(value: string | string[] | undefined): number {
+  const candidate = firstValue(value);
+  if (!/^\d+$/.test(candidate)) return 1;
+  return Math.min(Math.max(Number(candidate), 1), 2_000);
+}
+
 export default async function SkillsPage({ searchParams }: SkillsPageProps) {
   const params = await searchParams;
   const query = firstValue(params.q).slice(0, 160);
+  const page = catalogPage(params.page);
   const requestedCategory = firstValue(params.category);
   const category = getCatalogCategory(requestedCategory);
-  const catalog = await loadMarketplaceCatalog({ query, category: category?.slug, limit: 100 });
+  const catalog = await loadMarketplaceCatalog({
+    query,
+    category: category?.slug,
+    page,
+    pageSize: 48,
+  });
   const facetCounts = new Map(catalog.categories.map((facet) => [facet.key, facet.count]));
 
   return (
@@ -43,14 +55,14 @@ export default async function SkillsPage({ searchParams }: SkillsPageProps) {
         <div className="marketplace-main">
           <header className="marketplace-hero marketplace-hero--skills">
             <div>
-              <Badge tone="success"><CircleCheck aria-hidden="true" size={12} /> Eligibility filtered</Badge>
+              <Badge tone="success"><CircleCheck aria-hidden="true" size={12} /> Public metadata · gated selection</Badge>
               <h1>Choose the exact skills you want.</h1>
               <p>
                 Search public upstream records, compare trust and provenance, and keep a multi-skill stack without turning URLs into executable instructions.
               </p>
             </div>
             <dl className="marketplace-hero__ledger">
-              <div><dt>Visible records</dt><dd>{catalog.skills.length}</dd></div>
+              <div><dt>This page</dt><dd>{catalog.skills.length}</dd></div>
               <div><dt>Connected sources</dt><dd>{catalog.connectedSources || "—"}</dd></div>
               <div><dt>Selection limit</dt><dd>64</dd></div>
             </dl>
@@ -91,6 +103,7 @@ export default async function SkillsPage({ searchParams }: SkillsPageProps) {
             availability={catalog.availability}
             category={category?.slug}
             initialQuery={query}
+            pagination={catalog.pagination}
             skills={catalog.skills}
           />
         </div>

@@ -7,6 +7,7 @@ import {
   GitBranch,
   Scale,
   ShieldCheck,
+  TriangleAlert,
 } from "lucide-react";
 import type { Metadata } from "next";
 import Link from "next/link";
@@ -19,6 +20,7 @@ import { SiteFooter } from "@/components/site-footer";
 import { SiteHeader } from "@/components/site-header";
 import { Badge } from "@/components/ui/badge";
 import { loadMarketplaceSkill } from "@/lib/marketplace/catalog";
+import { catalogSelectionGateCopy } from "@/lib/marketplace/selection-gates";
 import { catalogSkillIdSchema } from "@/lib/selection";
 import { createPageMetadata } from "@/lib/seo";
 
@@ -84,6 +86,13 @@ export default async function SkillPage({ params }: SkillPageProps) {
   }
 
   const source = sourceIdentity(skill.sourceUrl);
+  const trustLabel = skill.trustState === "pass"
+    ? "Trust checked"
+    : skill.trustState === "blocked"
+      ? "Trust blocked"
+      : skill.trustState === "unreviewed"
+        ? "Review pending"
+        : "Review warning";
 
   return (
     <div className="site-frame">
@@ -96,16 +105,33 @@ export default async function SkillPage({ params }: SkillPageProps) {
             <div className="skill-detail-hero__monogram" aria-hidden="true">{skill.name.slice(0, 2).toUpperCase()}</div>
             <div className="skill-detail-hero__copy">
               <Badge tone={skill.trustState === "pass" ? "success" : "iris"}>
-                <ShieldCheck aria-hidden="true" size={12} /> {skill.trustState === "pass" ? "Trust checked" : "Review warning"}
+                {skill.trustState === "pass"
+                  ? <ShieldCheck aria-hidden="true" size={12} />
+                  : <TriangleAlert aria-hidden="true" size={12} />} {trustLabel}
               </Badge>
               <h1>{skill.name}</h1>
               <p>{skill.description || "The upstream publisher did not provide a catalog description."}</p>
               <div className="skill-detail-hero__actions">
-                <SkillSelectionButton id={skill.id} name={skill.name} />
+                <SkillSelectionButton
+                  gateReasons={skill.gateReasons}
+                  id={skill.id}
+                  name={skill.name}
+                  selectable={skill.selectable}
+                />
                 <a className="button button--secondary" href={skill.sourceUrl} rel="noreferrer" target="_blank">
                   View public source <ArrowUpRight aria-hidden="true" size={15} />
                 </a>
               </div>
+              {!skill.selectable ? (
+                <div className="skill-detail-gates" role="note">
+                  <strong>Selection is paused for this record.</strong>
+                  <ul>
+                    {skill.gateReasons.map((reason) => (
+                      <li key={reason}>{catalogSelectionGateCopy[reason]}</li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
             </div>
             <div className="skill-detail-hero__source">
               <span>Upstream identity</span>
@@ -124,7 +150,7 @@ export default async function SkillPage({ params }: SkillPageProps) {
             </div>
             <dl className="skill-metadata-grid">
               <div><dt><GitBranch aria-hidden="true" size={15} /> Source</dt><dd>{source}</dd><small>{skill.sourceUrl}</small></div>
-              <div><dt><Fingerprint aria-hidden="true" size={15} /> Immutable ref</dt><dd>{skill.immutableRef}</dd><small>Catalog-observed upstream revision</small></div>
+              <div><dt><Fingerprint aria-hidden="true" size={15} /> Immutable ref</dt><dd>{skill.immutableRef || "Pending"}</dd><small>Catalog-observed upstream revision</small></div>
               <div><dt><Scale aria-hidden="true" size={15} /> License</dt><dd>{skill.license}</dd><small>License evidence is required for package eligibility</small></div>
               <div><dt><ShieldCheck aria-hidden="true" size={15} /> Trust</dt><dd>{skill.trustState}</dd><small>Current revision assessment</small></div>
               <div><dt><BadgeCheck aria-hidden="true" size={15} /> Provenance</dt><dd>{skill.officialProvenance ? "Official publisher" : "Community publisher"}</dd><small>Provider: {skill.provider}</small></div>
@@ -140,8 +166,8 @@ export default async function SkillPage({ params }: SkillPageProps) {
             </div>
             <dl>
               <div><dt>Catalog skill ID</dt><dd>{skill.id}</dd></div>
-              <div><dt>Revision ID</dt><dd>{skill.revisionId}</dd></div>
-              <div><dt>Content hash</dt><dd>{skill.contentHash}</dd></div>
+              <div><dt>Revision ID</dt><dd>{skill.revisionId || "Pending"}</dd></div>
+              <div><dt>Content hash</dt><dd>{skill.contentHash || "Pending"}</dd></div>
               <div><dt>Skill path</dt><dd>{skill.skillPath}</dd></div>
             </dl>
           </section>
