@@ -1,6 +1,9 @@
 import { createHash } from "node:crypto";
 
-import type { CatalogRepository } from "../../db/repository";
+import type {
+  CatalogMutationFence,
+  CatalogRepository,
+} from "../../db/repository";
 import { CatalogSyncLeaseLostError } from "../../db/repository";
 import {
   computeArtifactContentHash,
@@ -122,6 +125,11 @@ export class SkillsShSync {
 
   async run(): Promise<SkillsShSyncResult> {
     const run = await this.repository.acquireSyncRun(this.sourceId, this.leaseDurationMs);
+    const fence: CatalogMutationFence = {
+      sourceId: this.sourceId,
+      runId: run.id,
+      leaseToken: run.leaseToken,
+    };
     const heartbeat = startSyncLeaseHeartbeat(this.repository, {
       runId: run.id,
       leaseToken: run.leaseToken,
@@ -189,7 +197,7 @@ export class SkillsShSync {
           this.detailConcurrency,
           async (listing) => {
             try {
-              await this.ingestListing(run.id, listing);
+              await this.ingestListing(fence, listing);
               return null;
             } catch (error) {
               if (error instanceof SkillsShAuthenticationError) {
@@ -280,11 +288,13 @@ export class SkillsShSync {
     }
   }
 
-  private async ingestListing(runId: string, listing: SkillsShSkill): Promise<void> {
+  private async ingestListing(
+    fence: CatalogMutationFence,
+    listing: SkillsShSkill,
+  ): Promise<void> {
     const listingHash = listing.hash ?? undefined;
     const stored = await this.repository.upsertSourceListing({
-      sourceId: this.sourceId,
-      runId,
+      fence,
       upstreamId: listing.id,
       sourceType: listing.sourceType,
       installUrl: listing.installUrl,
@@ -296,9 +306,6 @@ export class SkillsShSync {
 
     let observedContentHash = listingHash ?? stored.previousHash;
     const listingHashChanged = stored.previousHash !== (listingHash ?? null);
-    if (listingHashChanged && stored.skillId) {
-      await this.repository.markListingUnresolved(stored.id, listingHash ?? null);
-    }
     if (!listingHash || stored.previousHash !== listingHash || (this.ingestion && !stored.skillId)) {
       const hashChanged = listingHashChanged;
       const mayUseValidators = !hashChanged && !(this.ingestion && !stored.skillId);
@@ -311,6 +318,7 @@ export class SkillsShSync {
           throw new Error("skills.sh returned 304 after the listing hash changed");
         }
         await this.repository.updateSourceListingHydration({
+          fence,
           listingId: stored.id,
           hash: stored.previousHash,
           etag: detail.etag ?? stored.detailEtag,
@@ -322,6 +330,7 @@ export class SkillsShSync {
         }
         observedContentHash = detail.data.hash;
         await this.repository.updateSourceListingHydration({
+          fence,
           listingId: stored.id,
           hash: detail.data.hash,
           etag: detail.etag,
@@ -369,7 +378,7 @@ export class SkillsShSync {
             ? computeArtifactContentHash(artifactFiles)
             : null;
           const github = /^https:\/\/github\.com\/([^/]+)\/([^/#?]+)/i.exec(sourceUrl);
-          await this.ingestion.persist(this.sourceId, runId, {
+          await this.ingestion.persist(fence, {
             sourceRecordId: listing.id,
             provider: "skills-sh",
             sourceType: listing.sourceType,
@@ -437,6 +446,7 @@ export class SkillsShSync {
       throw new Error(`skills.sh audit id ${audit.data.id} did not match ${listing.id}`);
     }
     await this.repository.recordObservedAudits({
+      fence,
       listingId: stored.id,
       // skills.sh audits do not identify a revision. This hash is only the
       // content observed alongside the audit request, never an exact scan scope.

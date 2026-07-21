@@ -703,11 +703,22 @@ license: MIT
       },
     );
     expect((await sync.run()).status).toBe("current");
+    const invalidationRun = await repository.acquireSyncRun("skills-sh");
     await repository.markSourceRecordUnresolved(
-      "skills-sh",
+      {
+        sourceId: "skills-sh",
+        runId: invalidationRun.id,
+        leaseToken: invalidationRun.leaseToken,
+      },
       "fixture-org/fixture-repo/fixture-skill-0",
       "a".repeat(64),
     );
+    await repository.failSyncRun({
+      runId: invalidationRun.id,
+      leaseToken: invalidationRun.leaseToken,
+      sourceId: "skills-sh",
+      message: "Complete the fixture invalidation run.",
+    });
     changed = true;
     const second = await sync.run();
     expect(second.status).toBe("partial");

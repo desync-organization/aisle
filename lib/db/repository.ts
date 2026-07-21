@@ -178,6 +178,7 @@ export interface SourceDescriptorInput {
 }
 
 export interface CanonicalSkillInput {
+  fence: CatalogMutationFence;
   canonicalKey: string;
   provider: string;
   sourceUrl: string;
@@ -192,7 +193,7 @@ export interface CanonicalSkillInput {
   installSpec: Record<string, unknown>;
   immutableRef: string;
   contentHash: string;
-  upstreamHash: string | null;
+  upstreamHash: string;
   aliases: string[];
   listingId: string;
   repository: {
@@ -226,6 +227,12 @@ export interface CanonicalSkillInput {
   }>;
 }
 
+export interface CatalogMutationFence {
+  sourceId: string;
+  runId: string;
+  leaseToken: string;
+}
+
 export class CatalogSyncLeaseConflictError extends Error {
   constructor(sourceId: string) {
     super(`A catalog sync is already running for ${sourceId}`);
@@ -240,8 +247,102 @@ export class CatalogSyncLeaseLostError extends Error {
   }
 }
 
+export class CatalogImmutableRevisionConflictError extends Error {
+  constructor(immutableRef: string) {
+    super(`Immutable revision ${immutableRef} changed content hash; listing was detached`);
+    this.name = "CatalogImmutableRevisionConflictError";
+  }
+}
+
 export class CatalogRepository {
   constructor(readonly db: CatalogDatabase) {}
+
+  private async assertActiveSyncLease(
+    transaction: CatalogTransaction,
+    fence: CatalogMutationFence,
+  ): Promise<void> {
+    const [lease] = await transaction
+      .select({ id: syncRuns.id })
+      .from(syncRuns)
+      .innerJoin(catalogSources, eq(catalogSources.id, syncRuns.sourceId))
+      .where(
+        and(
+          eq(syncRuns.id, fence.runId),
+          eq(syncRuns.sourceId, fence.sourceId),
+          eq(syncRuns.status, "running"),
+          eq(syncRuns.leaseToken, fence.leaseToken),
+          eq(catalogSources.enabled, true),
+          ne(catalogSources.coverageState, "not-configured"),
+        ),
+      )
+      .limit(1);
+    if (!lease) throw new CatalogSyncLeaseLostError(fence.runId);
+  }
+
+  private async recomputeSkillLifecycleInTransaction(
+    transaction: CatalogTransaction,
+    skillId: string,
+    now = new Date(),
+  ): Promise<void> {
+    const rows = await transaction
+      .select({ status: sourceListings.status })
+      .from(sourceListings)
+      .where(eq(sourceListings.skillId, skillId));
+    const statuses = new Set(rows.map((row) => row.status));
+    const lifecycle: LifecycleState = rows.length === 0
+      ? "stale"
+      : statuses.has("current")
+        ? "current"
+        : statuses.has("stale")
+          ? "stale"
+          : statuses.has("unavailable")
+            ? "unavailable"
+            : "removed";
+    await transaction
+      .update(skills)
+      .set({ lifecycle, updatedAt: now })
+      .where(eq(skills.id, skillId));
+  }
+
+  private async markListingUnresolvedInTransaction(
+    transaction: CatalogTransaction,
+    fence: CatalogMutationFence,
+    listingId: string,
+    sourceHash: string | null,
+    now = new Date(),
+  ): Promise<boolean> {
+    const [listing] = await transaction
+      .select({ skillId: sourceListings.skillId })
+      .from(sourceListings)
+      .where(
+        and(
+          eq(sourceListings.id, listingId),
+          eq(sourceListings.sourceId, fence.sourceId),
+        ),
+      )
+      .limit(1);
+    if (!listing) return false;
+    await transaction
+      .update(sourceListings)
+      .set({
+        skillId: null,
+        status: "unresolved",
+        sourceHash,
+        duplicateIndicator: false,
+        lastSeenRunId: fence.runId,
+        lastSeenAt: now,
+      })
+      .where(
+        and(
+          eq(sourceListings.id, listingId),
+          eq(sourceListings.sourceId, fence.sourceId),
+        ),
+      );
+    if (listing.skillId) {
+      await this.recomputeSkillLifecycleInTransaction(transaction, listing.skillId, now);
+    }
+    return true;
+  }
 
   private async writeMonotonicTrustAssessment(
     transaction: CatalogTransaction,
@@ -832,6 +933,7 @@ export class CatalogRepository {
         .where(
           and(
             eq(syncRuns.id, input.runId),
+            eq(syncRuns.sourceId, input.sourceId),
             eq(syncRuns.status, "running"),
             eq(syncRuns.leaseToken, input.leaseToken),
           ),
@@ -865,22 +967,7 @@ export class CatalogRepository {
           if (listing.skillId) changedSkills.add(listing.skillId);
         }
         for (const skillId of changedSkills) {
-          const listingRows = await transaction
-            .select({ status: sourceListings.status })
-            .from(sourceListings)
-            .where(eq(sourceListings.skillId, skillId));
-          const statuses = new Set(listingRows.map((row) => row.status));
-          const lifecycle: LifecycleState = statuses.has("current")
-            ? "current"
-            : statuses.has("stale")
-              ? "stale"
-              : statuses.has("unavailable")
-                ? "unavailable"
-                : "removed";
-          await transaction
-            .update(skills)
-            .set({ lifecycle, updatedAt: now })
-            .where(eq(skills.id, skillId));
+          await this.recomputeSkillLifecycleInTransaction(transaction, skillId, now);
         }
       }
 
@@ -908,6 +995,7 @@ export class CatalogRepository {
         .where(
           and(
             eq(syncRuns.id, input.runId),
+            eq(syncRuns.sourceId, input.sourceId),
             eq(syncRuns.status, "running"),
             eq(syncRuns.leaseToken, input.leaseToken),
           ),
@@ -931,8 +1019,8 @@ export class CatalogRepository {
   }
 
   async failSyncRun(input: {
-    runId?: string;
-    leaseToken?: string;
+    runId: string;
+    leaseToken: string;
     sourceId: string;
     message: string;
     retryCount?: number;
@@ -940,8 +1028,8 @@ export class CatalogRepository {
     authMissing?: boolean;
   }): Promise<void> {
     const now = new Date();
-    if (input.runId) {
-      const result = await this.db
+    await this.db.transaction(async (transaction) => {
+      const result = await transaction
         .update(syncRuns)
         .set({
           status: "partial",
@@ -953,27 +1041,29 @@ export class CatalogRepository {
           leaseExpiresAt: null,
         })
         .where(
-          input.leaseToken
-            ? and(eq(syncRuns.id, input.runId), eq(syncRuns.leaseToken, input.leaseToken))
-            : eq(syncRuns.id, input.runId),
+          and(
+            eq(syncRuns.id, input.runId),
+            eq(syncRuns.sourceId, input.sourceId),
+            eq(syncRuns.status, "running"),
+            eq(syncRuns.leaseToken, input.leaseToken),
+          ),
         );
-      if (input.leaseToken && result.rowsAffected !== 1) {
+      if (result.rowsAffected !== 1) {
         throw new CatalogSyncLeaseLostError(input.runId);
       }
-    }
-    await this.db
-      .update(catalogSources)
-      .set({
-        coverageState: input.authMissing ? "credentials-required" : "partial",
-        lastError: input.message,
-        updatedAt: now,
-      })
-      .where(eq(catalogSources.id, input.sourceId));
+      await transaction
+        .update(catalogSources)
+        .set({
+          coverageState: input.authMissing ? "credentials-required" : "partial",
+          lastError: input.message,
+          updatedAt: now,
+        })
+        .where(eq(catalogSources.id, input.sourceId));
+    });
   }
 
   async upsertSourceListing(input: {
-    sourceId: string;
-    runId: string;
+    fence: CatalogMutationFence;
     upstreamId: string;
     sourceType: string;
     installUrl?: string | null;
@@ -990,150 +1080,168 @@ export class CatalogRepository {
     detailLastModified: string | null;
   }> {
     const now = new Date();
-    const id = stableId("listing", `${input.sourceId}:${input.upstreamId}`);
-    const [previous] = await this.db
-      .select({
-        sourceHash: sourceListings.sourceHash,
-        skillId: sourceListings.skillId,
-        detailEtag: sourceListings.detailEtag,
-        detailLastModified: sourceListings.detailLastModified,
-        status: sourceListings.status,
-      })
-      .from(sourceListings)
-      .where(and(eq(sourceListings.sourceId, input.sourceId), eq(sourceListings.upstreamId, input.upstreamId)))
-      .limit(1);
+    const id = stableId("listing", `${input.fence.sourceId}:${input.upstreamId}`);
+    return this.db.transaction(async (transaction) => {
+      await this.assertActiveSyncLease(transaction, input.fence);
+      const [previous] = await transaction
+        .select({
+          sourceHash: sourceListings.sourceHash,
+          skillId: sourceListings.skillId,
+          detailEtag: sourceListings.detailEtag,
+          detailLastModified: sourceListings.detailLastModified,
+          status: sourceListings.status,
+        })
+        .from(sourceListings)
+        .where(
+          and(
+            eq(sourceListings.sourceId, input.fence.sourceId),
+            eq(sourceListings.upstreamId, input.upstreamId),
+          ),
+        )
+        .limit(1);
+      const nextSourceHash = input.sourceHash ??
+        (input.preserveSourceHash === false ? null : previous?.sourceHash ?? null);
+      const invalidatesExistingBinding = Boolean(
+        previous?.skillId && previous.sourceHash !== nextSourceHash,
+      );
+      const restoresExistingBinding = Boolean(
+        previous?.skillId &&
+        input.sourceHash &&
+        previous.sourceHash === input.sourceHash,
+      );
 
-    const restoresExistingBinding = Boolean(
-      previous?.skillId &&
-      input.sourceHash &&
-      previous.sourceHash === input.sourceHash,
-    );
-
-    await this.db
-      .insert(sourceListings)
-      .values({
-        id,
-        sourceId: input.sourceId,
-        upstreamId: input.upstreamId,
-        sourceType: input.sourceType,
-        installUrl: input.installUrl ?? null,
-        sourceHash:
-          input.sourceHash ?? (input.preserveSourceHash === false ? null : previous?.sourceHash ?? null),
-        installs: input.installs,
-        duplicateIndicator: input.duplicateIndicator ?? false,
-        status: previous?.skillId ? "current" : "unresolved",
-        rawJson: input.raw,
-        lastSeenRunId: input.runId,
-        firstSeenAt: now,
-        lastSeenAt: now,
-      })
-      .onConflictDoUpdate({
-        target: [sourceListings.sourceId, sourceListings.upstreamId],
-        set: {
+      await transaction
+        .insert(sourceListings)
+        .values({
+          id,
+          sourceId: input.fence.sourceId,
+          upstreamId: input.upstreamId,
           sourceType: input.sourceType,
           installUrl: input.installUrl ?? null,
-          sourceHash:
-            input.sourceHash ??
-            (input.preserveSourceHash === false ? null : previous?.sourceHash ?? null),
+          sourceHash: nextSourceHash,
           installs: input.installs,
           duplicateIndicator: input.duplicateIndicator ?? false,
+          status: "unresolved",
           rawJson: input.raw,
-          lastSeenRunId: input.runId,
+          lastSeenRunId: input.fence.runId,
+          firstSeenAt: now,
           lastSeenAt: now,
-          missedCompleteCrawls: 0,
-          ...(restoresExistingBinding ? { status: "current" as const } : {}),
-        },
-      });
+        })
+        .onConflictDoUpdate({
+          target: [sourceListings.sourceId, sourceListings.upstreamId],
+          set: {
+            sourceType: input.sourceType,
+            installUrl: input.installUrl ?? null,
+            sourceHash: nextSourceHash,
+            installs: input.installs,
+            duplicateIndicator: invalidatesExistingBinding
+              ? false
+              : input.duplicateIndicator ?? false,
+            rawJson: input.raw,
+            lastSeenRunId: input.fence.runId,
+            lastSeenAt: now,
+            missedCompleteCrawls: 0,
+            ...(invalidatesExistingBinding
+              ? { skillId: null, status: "unresolved" as const }
+              : restoresExistingBinding
+                ? { status: "current" as const }
+                : {}),
+          },
+        });
 
-    if (restoresExistingBinding && previous?.skillId && previous.status !== "current") {
-      await this.recomputeSkillLifecycle(previous.skillId);
-    }
+      if (previous?.skillId && (invalidatesExistingBinding ||
+        (restoresExistingBinding && previous.status !== "current"))) {
+        await this.recomputeSkillLifecycleInTransaction(transaction, previous.skillId, now);
+      }
 
-    return {
-      id,
-      previousHash: previous?.sourceHash ?? null,
-      skillId: previous?.skillId ?? null,
-      detailEtag: previous?.detailEtag ?? null,
-      detailLastModified: previous?.detailLastModified ?? null,
-    };
+      return {
+        id,
+        previousHash: previous?.sourceHash ?? null,
+        skillId: invalidatesExistingBinding ? null : previous?.skillId ?? null,
+        detailEtag: previous?.detailEtag ?? null,
+        detailLastModified: previous?.detailLastModified ?? null,
+      };
+    });
   }
 
-  async markListingUnresolved(listingId: string, sourceHash: string | null): Promise<void> {
-    const now = new Date();
+  async markListingUnresolved(
+    fence: CatalogMutationFence,
+    listingId: string,
+    sourceHash: string | null,
+  ): Promise<void> {
     await this.db.transaction(async (transaction) => {
-      const [listing] = await transaction
-        .select({ skillId: sourceListings.skillId })
-        .from(sourceListings)
-        .where(eq(sourceListings.id, listingId))
-        .limit(1);
-      await transaction
-        .update(sourceListings)
-        .set({
-          skillId: null,
-          status: "unresolved",
-          sourceHash,
-          duplicateIndicator: false,
-        })
-        .where(eq(sourceListings.id, listingId));
-      if (!listing?.skillId) return;
-      const rows = await transaction
-        .select({ status: sourceListings.status })
-        .from(sourceListings)
-        .where(eq(sourceListings.skillId, listing.skillId));
-      const statuses = new Set(rows.map((row) => row.status));
-      const lifecycle: LifecycleState = statuses.has("current")
-        ? "current"
-        : statuses.has("stale")
-          ? "stale"
-          : statuses.has("unavailable")
-            ? "unavailable"
-            : statuses.has("removed")
-              ? "removed"
-              : "stale";
-      await transaction
-        .update(skills)
-        .set({ lifecycle, updatedAt: now })
-        .where(eq(skills.id, listing.skillId));
+      await this.assertActiveSyncLease(transaction, fence);
+      const found = await this.markListingUnresolvedInTransaction(
+        transaction,
+        fence,
+        listingId,
+        sourceHash,
+      );
+      if (!found) throw new Error("Source listing did not belong to the active sync source");
     });
   }
 
   async markSourceRecordUnresolved(
-    sourceId: string,
+    fence: CatalogMutationFence,
     upstreamId: string,
     sourceHash: string | null,
   ): Promise<void> {
-    const [listing] = await this.db
-      .select({ id: sourceListings.id })
-      .from(sourceListings)
-      .where(
-        and(
-          eq(sourceListings.sourceId, sourceId),
-          eq(sourceListings.upstreamId, upstreamId),
-        ),
-      )
-      .limit(1);
-    if (listing) await this.markListingUnresolved(listing.id, sourceHash);
+    await this.db.transaction(async (transaction) => {
+      await this.assertActiveSyncLease(transaction, fence);
+      const [listing] = await transaction
+        .select({ id: sourceListings.id })
+        .from(sourceListings)
+        .where(
+          and(
+            eq(sourceListings.sourceId, fence.sourceId),
+            eq(sourceListings.upstreamId, upstreamId),
+          ),
+        )
+        .limit(1);
+      if (listing) {
+        await this.markListingUnresolvedInTransaction(
+          transaction,
+          fence,
+          listing.id,
+          sourceHash,
+        );
+      }
+    });
   }
 
   async updateSourceListingHydration(input: {
+    fence: CatalogMutationFence;
     listingId: string;
     hash: string | null;
     etag: string | null;
     lastModified: string | null;
     hydratedAt?: Date;
   }): Promise<void> {
-    await this.db
-      .update(sourceListings)
-      .set({
-        sourceHash: input.hash,
-        detailEtag: input.etag,
-        detailLastModified: input.lastModified,
-        hydratedAt: input.hydratedAt ?? new Date(),
-      })
-      .where(eq(sourceListings.id, input.listingId));
+    await this.db.transaction(async (transaction) => {
+      await this.assertActiveSyncLease(transaction, input.fence);
+      const result = await transaction
+        .update(sourceListings)
+        .set({
+          sourceHash: input.hash,
+          detailEtag: input.etag,
+          detailLastModified: input.lastModified,
+          hydratedAt: input.hydratedAt ?? new Date(),
+        })
+        .where(
+          and(
+            eq(sourceListings.id, input.listingId),
+            eq(sourceListings.sourceId, input.fence.sourceId),
+            eq(sourceListings.lastSeenRunId, input.fence.runId),
+          ),
+        );
+      if (result.rowsAffected !== 1) {
+        throw new Error("Hydration target did not belong to the active sync observation");
+      }
+    });
   }
 
   async recordObservedAudits(input: {
+    fence: CatalogMutationFence;
     listingId: string;
     upstreamContentHash: string | null;
     audits: Array<{
@@ -1148,43 +1256,61 @@ export class CatalogRepository {
     observedAt?: Date;
   }): Promise<void> {
     const observedAt = input.observedAt ?? new Date();
-    for (const audit of input.audits) {
-      const auditTime = audit.auditedAt ? new Date(audit.auditedAt) : observedAt;
-      const id = stableId(
-        "audit",
-        `${input.listingId}:${audit.provider}:${audit.providerSlug}:${auditTime.toISOString()}`,
-      );
-      await this.db
-        .insert(auditRecords)
-        .values({
-          id,
-          revisionId: null,
-          sourceListingId: input.listingId,
-          scope: "observation",
-          provider: audit.provider,
-          providerSlug: audit.providerSlug,
-          status: audit.status,
-          summary: audit.summary,
-          riskLevel: audit.riskLevel ?? null,
-          upstreamContentHash: input.upstreamContentHash,
-          scannerVersion: null,
-          observedAt: auditTime,
-          rawJson: audit.raw,
-        })
-        .onConflictDoUpdate({
-          target: auditRecords.id,
-          set: {
+    await this.db.transaction(async (transaction) => {
+      await this.assertActiveSyncLease(transaction, input.fence);
+      const [listing] = await transaction
+        .select({ id: sourceListings.id })
+        .from(sourceListings)
+        .where(
+          and(
+            eq(sourceListings.id, input.listingId),
+            eq(sourceListings.sourceId, input.fence.sourceId),
+            eq(sourceListings.lastSeenRunId, input.fence.runId),
+          ),
+        )
+        .limit(1);
+      if (!listing) {
+        throw new Error("Audit target did not belong to the active sync observation");
+      }
+      for (const audit of input.audits) {
+        const auditTime = audit.auditedAt ? new Date(audit.auditedAt) : observedAt;
+        const id = stableId(
+          "audit",
+          `${input.listingId}:${audit.provider}:${audit.providerSlug}:${auditTime.toISOString()}`,
+        );
+        await transaction
+          .insert(auditRecords)
+          .values({
+            id,
+            revisionId: null,
+            sourceListingId: input.listingId,
+            scope: "observation",
+            provider: audit.provider,
+            providerSlug: audit.providerSlug,
             status: audit.status,
             summary: audit.summary,
             riskLevel: audit.riskLevel ?? null,
             upstreamContentHash: input.upstreamContentHash,
+            scannerVersion: null,
+            observedAt: auditTime,
             rawJson: audit.raw,
-          },
-        });
-    }
+          })
+          .onConflictDoUpdate({
+            target: auditRecords.id,
+            set: {
+              status: audit.status,
+              summary: audit.summary,
+              riskLevel: audit.riskLevel ?? null,
+              upstreamContentHash: input.upstreamContentHash,
+              rawJson: audit.raw,
+            },
+          });
+      }
+    });
   }
 
   async recordRevisionAudits(input: {
+    fence: CatalogMutationFence;
     revisionId: string;
     upstreamContentHash: string;
     audits: Array<{
@@ -1198,30 +1324,34 @@ export class CatalogRepository {
     observedAt?: Date;
   }): Promise<void> {
     const observedAt = input.observedAt ?? new Date();
-    for (const audit of input.audits) {
-      const id = stableId(
-        "audit",
-        `${input.revisionId}:${audit.provider}:${audit.providerSlug}:${observedAt.toISOString()}`,
-      );
-      await this.db.insert(auditRecords).values({
-        id,
-        revisionId: input.revisionId,
-        sourceListingId: null,
-        scope: "revision",
-        provider: audit.provider,
-        providerSlug: audit.providerSlug,
-        status: audit.status,
-        summary: audit.summary,
-        riskLevel: null,
-        upstreamContentHash: input.upstreamContentHash,
-        scannerVersion: audit.scannerVersion,
-        observedAt,
-        rawJson: audit.raw,
-      });
-    }
+    await this.db.transaction(async (transaction) => {
+      await this.assertActiveSyncLease(transaction, input.fence);
+      for (const audit of input.audits) {
+        const id = stableId(
+          "audit",
+          `${input.revisionId}:${audit.provider}:${audit.providerSlug}:${observedAt.toISOString()}`,
+        );
+        await transaction.insert(auditRecords).values({
+          id,
+          revisionId: input.revisionId,
+          sourceListingId: null,
+          scope: "revision",
+          provider: audit.provider,
+          providerSlug: audit.providerSlug,
+          status: audit.status,
+          summary: audit.summary,
+          riskLevel: null,
+          upstreamContentHash: input.upstreamContentHash,
+          scannerVersion: audit.scannerVersion,
+          observedAt,
+          rawJson: audit.raw,
+        });
+      }
+    });
   }
 
   async recordTrustAssessment(input: {
+    fence: CatalogMutationFence;
     revisionId: string;
     immutableRef: string;
     contentHash: string;
@@ -1233,8 +1363,16 @@ export class CatalogRepository {
     scannedAt?: Date;
   }): Promise<void> {
     await this.db.transaction(async (transaction) => {
+      await this.assertActiveSyncLease(transaction, input.fence);
       await this.writeMonotonicTrustAssessment(transaction, {
-        ...input,
+        revisionId: input.revisionId,
+        immutableRef: input.immutableRef,
+        contentHash: input.contentHash,
+        scanner: input.scanner,
+        scannerVersion: input.scannerVersion,
+        state: input.state,
+        quarantineReason: input.quarantineReason,
+        findings: input.findings,
         scannedAt: input.scannedAt ?? new Date(),
       });
     });
@@ -1304,7 +1442,47 @@ export class CatalogRepository {
       ? stableId("repository", `${input.repository.provider}:${input.repository.url}`)
       : null;
 
-    return this.db.transaction(async (transaction) => {
+    const outcome = await this.db.transaction(async (transaction) => {
+      await this.assertActiveSyncLease(transaction, input.fence);
+      const [listingObservation] = await transaction
+        .select({
+          skillId: sourceListings.skillId,
+          sourceHash: sourceListings.sourceHash,
+        })
+        .from(sourceListings)
+        .where(
+          and(
+            eq(sourceListings.id, input.listingId),
+            eq(sourceListings.sourceId, input.fence.sourceId),
+            eq(sourceListings.lastSeenRunId, input.fence.runId),
+          ),
+        )
+        .limit(1);
+      if (!listingObservation || listingObservation.sourceHash !== input.upstreamHash) {
+        throw new Error("Canonical skill was not bound to this active source observation");
+      }
+
+      const [existingRevision] = await transaction
+        .select({ id: skillRevisions.id, contentHash: skillRevisions.contentHash })
+        .from(skillRevisions)
+        .where(
+          and(
+            eq(skillRevisions.skillId, skillId),
+            eq(skillRevisions.immutableRef, input.immutableRef),
+          ),
+        )
+        .limit(1);
+      if (existingRevision && existingRevision.contentHash !== input.contentHash) {
+        await this.markListingUnresolvedInTransaction(
+          transaction,
+          input.fence,
+          input.listingId,
+          input.upstreamHash,
+          now,
+        );
+        return { conflict: true as const };
+      }
+
       if (input.repository && repositoryId) {
         await transaction
           .insert(repositories)
@@ -1369,21 +1547,6 @@ export class CatalogRepository {
           },
         });
 
-      const [existingRevision] = await transaction
-        .select({ id: skillRevisions.id, contentHash: skillRevisions.contentHash })
-        .from(skillRevisions)
-        .where(
-          and(
-            eq(skillRevisions.skillId, skillId),
-            eq(skillRevisions.immutableRef, input.immutableRef),
-          ),
-        )
-        .limit(1);
-      if (existingRevision && existingRevision.contentHash !== input.contentHash) {
-        throw new Error(
-          `Immutable revision ${input.immutableRef} changed content hash; refusing in-place mutation`,
-        );
-      }
       const [previousCurrentRevision] = await transaction
         .select({ contentHash: skillRevisions.contentHash })
         .from(skillRevisions)
@@ -1436,10 +1599,20 @@ export class CatalogRepository {
           .onConflictDoNothing();
       }
 
-      await transaction
+      const listingLink = await transaction
         .update(sourceListings)
         .set({ skillId, status: "current", missedCompleteCrawls: 0 })
-        .where(eq(sourceListings.id, input.listingId));
+        .where(
+          and(
+            eq(sourceListings.id, input.listingId),
+            eq(sourceListings.sourceId, input.fence.sourceId),
+            eq(sourceListings.lastSeenRunId, input.fence.runId),
+            eq(sourceListings.sourceHash, input.upstreamHash),
+          ),
+        );
+      if (listingLink.rowsAffected !== 1) {
+        throw new Error("Canonical listing link lost its active source observation");
+      }
 
       const affectedHashes = new Set(
         [previousCurrentRevision?.contentHash, input.contentHash].filter(
@@ -1524,82 +1697,94 @@ export class CatalogRepository {
       }
 
       return {
+        conflict: false as const,
         skillId,
         revisionId,
         duplicateOfSkillId: duplicate?.skillId ?? null,
       };
     });
+    if (outcome.conflict) {
+      throw new CatalogImmutableRevisionConflictError(input.immutableRef);
+    }
+    return {
+      skillId: outcome.skillId,
+      revisionId: outcome.revisionId,
+      duplicateOfSkillId: outcome.duplicateOfSkillId,
+    };
   }
 
   async markCompleteCrawlMisses(
-    sourceId: string,
-    runId: string,
+    fence: CatalogMutationFence,
     unavailableAfter = 2,
   ): Promise<void> {
-    const missing = await this.db
-      .select({
-        id: sourceListings.id,
-        skillId: sourceListings.skillId,
-        missed: sourceListings.missedCompleteCrawls,
-      })
-      .from(sourceListings)
-      .where(
-        and(
-          eq(sourceListings.sourceId, sourceId),
-          or(isNull(sourceListings.lastSeenRunId), ne(sourceListings.lastSeenRunId, runId)),
-          notInArray(sourceListings.status, ["removed", "unavailable"]),
-        ),
-      );
+    await this.db.transaction(async (transaction) => {
+      await this.assertActiveSyncLease(transaction, fence);
+      const missing = await transaction
+        .select({
+          id: sourceListings.id,
+          skillId: sourceListings.skillId,
+          missed: sourceListings.missedCompleteCrawls,
+        })
+        .from(sourceListings)
+        .where(
+          and(
+            eq(sourceListings.sourceId, fence.sourceId),
+            or(
+              isNull(sourceListings.lastSeenRunId),
+              ne(sourceListings.lastSeenRunId, fence.runId),
+            ),
+            notInArray(sourceListings.status, ["removed", "unavailable"]),
+          ),
+        );
 
-    for (const listing of missing) {
-      const missed = listing.missed + 1;
-      const status = missed >= unavailableAfter ? "unavailable" : "stale";
-      await this.db
-        .update(sourceListings)
-        .set({ status, missedCompleteCrawls: missed })
-        .where(eq(sourceListings.id, listing.id));
-      if (listing.skillId) {
-        await this.recomputeSkillLifecycle(listing.skillId);
+      for (const listing of missing) {
+        const missed = listing.missed + 1;
+        const status = missed >= unavailableAfter ? "unavailable" : "stale";
+        await transaction
+          .update(sourceListings)
+          .set({ status, missedCompleteCrawls: missed })
+          .where(
+            and(
+              eq(sourceListings.id, listing.id),
+              eq(sourceListings.sourceId, fence.sourceId),
+            ),
+          );
+        if (listing.skillId) {
+          await this.recomputeSkillLifecycleInTransaction(transaction, listing.skillId);
+        }
       }
-    }
+    });
   }
 
-  async markSourceListingRemoved(sourceId: string, upstreamId: string): Promise<void> {
-    const [listing] = await this.db
-      .select({ id: sourceListings.id, skillId: sourceListings.skillId })
-      .from(sourceListings)
-      .where(and(eq(sourceListings.sourceId, sourceId), eq(sourceListings.upstreamId, upstreamId)))
-      .limit(1);
-    if (!listing) {
-      return;
-    }
-    await this.db
-      .update(sourceListings)
-      .set({ status: "removed" })
-      .where(eq(sourceListings.id, listing.id));
-    if (listing.skillId) {
-      await this.recomputeSkillLifecycle(listing.skillId);
-    }
-  }
-
-  private async recomputeSkillLifecycle(skillId: string): Promise<void> {
-    const rows = await this.db
-      .select({ status: sourceListings.status })
-      .from(sourceListings)
-      .where(eq(sourceListings.skillId, skillId));
-    const statuses = new Set(rows.map((row) => row.status));
-    const lifecycle: LifecycleState = rows.length === 0
-      ? "stale"
-      : statuses.has("current")
-      ? "current"
-      : statuses.has("stale")
-        ? "stale"
-        : statuses.has("unavailable")
-          ? "unavailable"
-          : "removed";
-    await this.db
-      .update(skills)
-      .set({ lifecycle, updatedAt: new Date() })
-      .where(eq(skills.id, skillId));
+  async markSourceListingRemoved(
+    fence: CatalogMutationFence,
+    upstreamId: string,
+  ): Promise<void> {
+    await this.db.transaction(async (transaction) => {
+      await this.assertActiveSyncLease(transaction, fence);
+      const [listing] = await transaction
+        .select({ id: sourceListings.id, skillId: sourceListings.skillId })
+        .from(sourceListings)
+        .where(
+          and(
+            eq(sourceListings.sourceId, fence.sourceId),
+            eq(sourceListings.upstreamId, upstreamId),
+          ),
+        )
+        .limit(1);
+      if (!listing) return;
+      await transaction
+        .update(sourceListings)
+        .set({ status: "removed" })
+        .where(
+          and(
+            eq(sourceListings.id, listing.id),
+            eq(sourceListings.sourceId, fence.sourceId),
+          ),
+        );
+      if (listing.skillId) {
+        await this.recomputeSkillLifecycleInTransaction(transaction, listing.skillId);
+      }
+    });
   }
 }

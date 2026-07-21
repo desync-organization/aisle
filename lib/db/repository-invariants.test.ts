@@ -18,7 +18,10 @@ import { createAgentSkillValidator } from "../catalog/security";
 import type { DiscoveredSkillRecord } from "../catalog/source-contract";
 import { createCatalogDatabase, type CatalogDatabaseConnection } from "./client";
 import { migrateCatalogDatabase } from "./migrate";
-import { CatalogRepository } from "./repository";
+import {
+  CatalogRepository,
+  type CatalogMutationFence,
+} from "./repository";
 import {
   packageMembers,
   packageVersions,
@@ -38,6 +41,13 @@ license: MIT
 
 # Fixture
 `;
+
+function mutationFence(
+  sourceId: string,
+  run: { id: string; leaseToken: string },
+): CatalogMutationFence {
+  return { sourceId, runId: run.id, leaseToken: run.leaseToken };
+}
 
 function candidate(
   key: string,
@@ -99,14 +109,14 @@ describe("CatalogRepository invariants", () => {
 
   it("atomically detaches a formerly valid listing when a new observation is invalid", async () => {
     const run = await repository.acquireSyncRun("skills-sh");
-    const first = await ingestion.persist("skills-sh", run.id, candidate("detach"));
+    const first = await ingestion.persist(mutationFence("skills-sh", run), candidate("detach"));
     const invalid = candidate("detach", {
       sourceRecordId: "detach:fixture-safe",
       immutableRef: "b".repeat(40),
     });
     const invalidSourceHash = invalid.upstreamHash;
     invalid.artifact = null;
-    await ingestion.persist("skills-sh", run.id, invalid);
+    await ingestion.persist(mutationFence("skills-sh", run), invalid);
 
     const [listing] = await connection.db.select().from(sourceListings);
     const [skill] = await connection.db
@@ -149,7 +159,7 @@ describe("CatalogRepository invariants", () => {
       },
     }));
     await expect(
-      unsafeIngestion.persist("skills-sh", run.id, candidate("trust-rollback")),
+      unsafeIngestion.persist(mutationFence("skills-sh", run), candidate("trust-rollback")),
     ).rejects.toThrow(/Critical trust findings/);
     expect(await connection.db.select().from(skills)).toEqual([]);
     expect(await connection.db.select().from(skillRevisions)).toEqual([]);
@@ -158,7 +168,7 @@ describe("CatalogRepository invariants", () => {
   it("requires a fresh trust assessment instead of reusing an old pass", async () => {
     const run = await repository.acquireSyncRun("skills-sh");
     const fixture = candidate("fresh-trust");
-    const first = await ingestion.persist("skills-sh", run.id, fixture);
+    const first = await ingestion.persist(mutationFence("skills-sh", run), fixture);
     expect(first.resolved).toBe(true);
 
     const noAssessment = new CatalogIngestionService(repository, async () => ({
@@ -170,7 +180,7 @@ describe("CatalogRepository invariants", () => {
         license: "MIT",
       },
     }));
-    const repeated = await noAssessment.persist("skills-sh", run.id, fixture);
+    const repeated = await noAssessment.persist(mutationFence("skills-sh", run), fixture);
     expect(repeated).toMatchObject({ resolved: false, skillId: null, revisionId: null });
     expect(await repository.search()).toEqual([]);
     expect(await repository.countSourceListings("skills-sh")).toBe(1);
@@ -178,7 +188,10 @@ describe("CatalogRepository invariants", () => {
 
   it("requires exact trust bindings and ignores an unbound failure", async () => {
     const run = await repository.acquireSyncRun("skills-sh");
-    const persisted = await ingestion.persist("skills-sh", run.id, candidate("trust-binding"));
+    const persisted = await ingestion.persist(
+      mutationFence("skills-sh", run),
+      candidate("trust-binding"),
+    );
     const revision = candidate("trust-binding");
 
     await connection.client.execute({
@@ -188,6 +201,7 @@ describe("CatalogRepository invariants", () => {
     expect(await repository.search()).toEqual([]);
 
     await repository.recordTrustAssessment({
+      fence: mutationFence("skills-sh", run),
       revisionId: persisted.revisionId!,
       immutableRef: revision.immutableRef!,
       contentHash: revision.contentHash!,
@@ -220,9 +234,10 @@ describe("CatalogRepository invariants", () => {
   it("never lets delayed or equal-time assessments weaken a quarantine", async () => {
     const run = await repository.acquireSyncRun("skills-sh");
     const fixture = candidate("monotonic-trust");
-    const persisted = await ingestion.persist("skills-sh", run.id, fixture);
+    const persisted = await ingestion.persist(mutationFence("skills-sh", run), fixture);
     const scannedAt = new Date(Date.now() + 60_000);
     await repository.recordTrustAssessment({
+      fence: mutationFence("skills-sh", run),
       revisionId: persisted.revisionId!,
       immutableRef: fixture.immutableRef!,
       contentHash: fixture.contentHash!,
@@ -243,6 +258,7 @@ describe("CatalogRepository invariants", () => {
     });
     for (const delayedAt of [new Date(scannedAt.getTime() - 1), scannedAt]) {
       await repository.recordTrustAssessment({
+        fence: mutationFence("skills-sh", run),
         revisionId: persisted.revisionId!,
         immutableRef: fixture.immutableRef!,
         contentHash: fixture.contentHash!,
@@ -268,8 +284,9 @@ describe("CatalogRepository invariants", () => {
   it("does not let canonical re-ingestion overwrite a newer quarantine for the same scanner", async () => {
     const run = await repository.acquireSyncRun("skills-sh");
     const fixture = candidate("canonical-monotonic-trust");
-    const persisted = await ingestion.persist("skills-sh", run.id, fixture);
+    const persisted = await ingestion.persist(mutationFence("skills-sh", run), fixture);
     await repository.recordTrustAssessment({
+      fence: mutationFence("skills-sh", run),
       revisionId: persisted.revisionId!,
       immutableRef: fixture.immutableRef!,
       contentHash: fixture.contentHash!,
@@ -289,7 +306,7 @@ describe("CatalogRepository invariants", () => {
       scannedAt: new Date(Date.now() + 60_000),
     });
 
-    await ingestion.persist("skills-sh", run.id, fixture);
+    await ingestion.persist(mutationFence("skills-sh", run), fixture);
 
     expect(await repository.trustDetails(persisted.revisionId!)).toEqual([
       expect.objectContaining({
@@ -307,8 +324,9 @@ describe("CatalogRepository invariants", () => {
     const upstreamHash = "provider-revision-v1";
     const fixture = candidate("audit-binding", { sourceRecordId: "audit-binding" });
     fixture.upstreamHash = upstreamHash;
-    const persisted = await ingestion.persist("skills-sh", run.id, fixture);
+    const persisted = await ingestion.persist(mutationFence("skills-sh", run), fixture);
     const audit = async (hash: string) => repository.recordObservedAudits({
+      fence: mutationFence("skills-sh", run),
       listingId: persisted.listingId,
       upstreamContentHash: hash,
       audits: [{
@@ -329,7 +347,7 @@ describe("CatalogRepository invariants", () => {
   it("restores stale and unavailable listings only when the bound provider hash reappears", async () => {
     const firstRun = await repository.acquireSyncRun("skills-sh");
     const fixture = candidate("reappearance", { sourceRecordId: "reappearance" });
-    const persisted = await ingestion.persist("skills-sh", firstRun.id, fixture);
+    const persisted = await ingestion.persist(mutationFence("skills-sh", firstRun), fixture);
     await repository.failSyncRun({
       runId: firstRun.id,
       leaseToken: firstRun.leaseToken,
@@ -338,12 +356,11 @@ describe("CatalogRepository invariants", () => {
     });
 
     const staleRun = await repository.acquireSyncRun("skills-sh");
-    await repository.markCompleteCrawlMisses("skills-sh", staleRun.id, 2);
+    await repository.markCompleteCrawlMisses(mutationFence("skills-sh", staleRun), 2);
     let [listing] = await connection.db.select().from(sourceListings);
     expect(listing?.status).toBe("stale");
     await repository.upsertSourceListing({
-      sourceId: "skills-sh",
-      runId: staleRun.id,
+      fence: mutationFence("skills-sh", staleRun),
       upstreamId: "reappearance",
       sourceType: "github",
       sourceHash: fixture.upstreamHash,
@@ -360,10 +377,9 @@ describe("CatalogRepository invariants", () => {
     });
 
     const unavailableRun = await repository.acquireSyncRun("skills-sh");
-    await repository.markCompleteCrawlMisses("skills-sh", unavailableRun.id, 1);
+    await repository.markCompleteCrawlMisses(mutationFence("skills-sh", unavailableRun), 1);
     await repository.upsertSourceListing({
-      sourceId: "skills-sh",
-      runId: unavailableRun.id,
+      fence: mutationFence("skills-sh", unavailableRun),
       upstreamId: "reappearance",
       sourceType: "github",
       sourceHash: fixture.upstreamHash,
@@ -382,12 +398,12 @@ describe("CatalogRepository invariants", () => {
   it("rejects immutable-ref hash mutation without changing the current revision", async () => {
     const run = await repository.acquireSyncRun("skills-sh");
     const original = candidate("immutable");
-    const first = await ingestion.persist("skills-sh", run.id, original);
+    const first = await ingestion.persist(mutationFence("skills-sh", run), original);
     const changed = candidate("immutable", {
       immutableRef: original.immutableRef!,
       contents: `${SKILL}\nChanged exact bytes.\n`,
     });
-    await expect(ingestion.persist("skills-sh", run.id, changed)).rejects.toThrow(
+    await expect(ingestion.persist(mutationFence("skills-sh", run), changed)).rejects.toThrow(
       /changed content hash/,
     );
     const [revision] = await connection.db
@@ -400,17 +416,16 @@ describe("CatalogRepository invariants", () => {
   it("rebuilds same-hash duplicate groups around one deterministic root without cycles", async () => {
     const run = await repository.acquireSyncRun("skills-sh");
     const sharedContents = `${SKILL}\nShared exact bytes.\n`;
-    await ingestion.persist("skills-sh", run.id, candidate("a", { contents: sharedContents }));
-    await ingestion.persist("skills-sh", run.id, candidate("b", { contents: sharedContents }));
-    await ingestion.persist("skills-sh", run.id, candidate("c", { contents: sharedContents }));
+    await ingestion.persist(mutationFence("skills-sh", run), candidate("a", { contents: sharedContents }));
+    await ingestion.persist(mutationFence("skills-sh", run), candidate("b", { contents: sharedContents }));
+    await ingestion.persist(mutationFence("skills-sh", run), candidate("c", { contents: sharedContents }));
     let duplicates = await connection.db.select().from(skillDuplicates);
     expect(duplicates).toHaveLength(2);
     expect(new Set(duplicates.map((entry) => entry.duplicateOfSkillId)).size).toBe(1);
     expect(duplicates.every((entry) => entry.skillId !== entry.duplicateOfSkillId)).toBe(true);
 
     await ingestion.persist(
-      "skills-sh",
-      run.id,
+      mutationFence("skills-sh", run),
       candidate("a", { contents: `${SKILL}\nNew exact bytes.\n`, immutableRef: "1".repeat(40) }),
     );
     duplicates = await connection.db.select().from(skillDuplicates);
@@ -421,7 +436,7 @@ describe("CatalogRepository invariants", () => {
   it("aggregates lifecycle across listings and only removes the final active source", async () => {
     const runOne = await repository.acquireSyncRun("skills-sh");
     const firstRecord = candidate("multi-source", { sourceRecordId: "first" });
-    const first = await ingestion.persist("skills-sh", runOne.id, firstRecord);
+    const first = await ingestion.persist(mutationFence("skills-sh", runOne), firstRecord);
     await repository.upsertSource({
       id: "second-source",
       name: "Second source",
@@ -430,17 +445,17 @@ describe("CatalogRepository invariants", () => {
       upstreamIdentifier: "second",
     });
     const runTwo = await repository.acquireSyncRun("second-source");
-    await ingestion.persist("second-source", runTwo.id, {
+    await ingestion.persist(mutationFence("second-source", runTwo), {
       ...firstRecord,
       sourceRecordId: "second",
     });
-    await repository.markSourceListingRemoved("skills-sh", "first");
+    await repository.markSourceListingRemoved(mutationFence("skills-sh", runOne), "first");
     let [skill] = await connection.db
       .select()
       .from(skills)
       .where(eq(skills.id, first.skillId!));
     expect(skill?.lifecycle).toBe("current");
-    await repository.markSourceListingRemoved("second-source", "second");
+    await repository.markSourceListingRemoved(mutationFence("second-source", runTwo), "second");
     [skill] = await connection.db
       .select()
       .from(skills)
@@ -452,8 +467,8 @@ describe("CatalogRepository invariants", () => {
 
   it("enforces revision/skill package pairs, publication, atomic blocking, and licenses", async () => {
     const run = await repository.acquireSyncRun("skills-sh");
-    const first = await ingestion.persist("skills-sh", run.id, candidate("package-one"));
-    const second = await ingestion.persist("skills-sh", run.id, candidate("package-two"));
+    const first = await ingestion.persist(mutationFence("skills-sh", run), candidate("package-one"));
+    const second = await ingestion.persist(mutationFence("skills-sh", run), candidate("package-two"));
     const now = new Date();
     await connection.db.insert(packages).values({
       id: "package-invariants",
@@ -517,6 +532,7 @@ describe("CatalogRepository invariants", () => {
     expect(resolved).toHaveLength(2);
     expect(resolved.every((entry) => entry.license === "MIT")).toBe(true);
     await repository.recordTrustAssessment({
+      fence: mutationFence("skills-sh", run),
       revisionId: second.revisionId!,
       immutableRef: candidate("package-two").immutableRef!,
       contentHash: candidate("package-two").contentHash!,
@@ -540,7 +556,7 @@ describe("CatalogRepository invariants", () => {
   it("blocks an unlinked unresolved package member while retaining its provenance", async () => {
     const run = await repository.acquireSyncRun("skills-sh");
     const fixture = candidate("unresolved-package", { sourceRecordId: "unresolved-package" });
-    const persisted = await ingestion.persist("skills-sh", run.id, fixture);
+    const persisted = await ingestion.persist(mutationFence("skills-sh", run), fixture);
     const now = new Date();
     await connection.db.insert(packages).values({
       id: "unresolved-package",
@@ -566,11 +582,20 @@ describe("CatalogRepository invariants", () => {
     });
     expect(await repository.resolvePackage("unresolved-package")).toHaveLength(1);
 
-    await repository.markCompleteCrawlMisses("skills-sh", "unseen-run", 2);
+    await repository.failSyncRun({
+      runId: run.id,
+      leaseToken: run.leaseToken,
+      sourceId: "skills-sh",
+      message: "Advance to an unseen sync observation.",
+    });
+    const unseenRun = await repository.acquireSyncRun("skills-sh");
+    await repository.markCompleteCrawlMisses(mutationFence("skills-sh", unseenRun), 2);
     expect(await repository.resolvePackage("unresolved-package")).toHaveLength(1);
 
     const unresolved = { ...fixture, artifact: null };
-    expect(await ingestion.persist("skills-sh", run.id, unresolved)).toMatchObject({
+    expect(
+      await ingestion.persist(mutationFence("skills-sh", unseenRun), unresolved),
+    ).toMatchObject({
       resolved: false,
       skillId: null,
       revisionId: null,
@@ -614,7 +639,7 @@ describe("CatalogRepository invariants", () => {
       sourceUrl: fixture.sourceUrl,
       immutableRef: fixture.immutableRef!,
     };
-    const persisted = await ingestion.persist("skills-sh", run.id, fixture);
+    const persisted = await ingestion.persist(mutationFence("skills-sh", run), fixture);
     const now = new Date();
     await connection.db.insert(packages).values({
       id: "root-license-package",
@@ -697,7 +722,7 @@ describe("CatalogRepository invariants", () => {
       files,
     };
 
-    const persisted = await ingestion.persist("skills-sh", run.id, fixture);
+    const persisted = await ingestion.persist(mutationFence("skills-sh", run), fixture);
     const [revision] = await connection.db
       .select()
       .from(skillRevisions)
@@ -759,7 +784,7 @@ describe("CatalogRepository invariants", () => {
     fixture.artifact = { ...fixture.artifact!, files };
     fixture.contentHash = computeArtifactContentHash(files);
 
-    const persisted = await ingestion.persist("skills-sh", run.id, fixture);
+    const persisted = await ingestion.persist(mutationFence("skills-sh", run), fixture);
     const [revision] = await connection.db
       .select()
       .from(skillRevisions)

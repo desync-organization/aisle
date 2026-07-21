@@ -68,6 +68,12 @@ describe("catalog database and repository", () => {
 
   it("supports searchable catalog rows, facets, and ordered package resolution", async () => {
     await seedCatalog(repository);
+    const run = await repository.acquireSyncRun("skills-sh");
+    const fence = {
+      sourceId: "skills-sh",
+      runId: run.id,
+      leaseToken: run.leaseToken,
+    };
     const now = new Date("2026-07-20T12:00:00.000Z");
     const repoId = "repo_fixture_public";
     const skillId = "skill_fixture_public";
@@ -148,6 +154,7 @@ describe("catalog database and repository", () => {
       installs: 42,
       status: "current",
       rawJson: { fixture: true },
+      lastSeenRunId: run.id,
       firstSeenAt: now,
       lastSeenAt: now,
     });
@@ -232,6 +239,7 @@ describe("catalog database and repository", () => {
     ]);
 
     await repository.recordObservedAudits({
+      fence,
       listingId: "listing_fixture_public",
       upstreamContentHash: "provider-revision-v1",
       audits: [
@@ -249,6 +257,7 @@ describe("catalog database and repository", () => {
     expect(await repository.resolvePackage("fixture-stack")).toEqual([]);
 
     await repository.recordObservedAudits({
+      fence,
       listingId: "listing_fixture_public",
       upstreamContentHash: "provider-revision-v1",
       audits: [
@@ -266,6 +275,7 @@ describe("catalog database and repository", () => {
     expect(await repository.resolvePackage("fixture-stack")).toHaveLength(1);
 
     await repository.recordObservedAudits({
+      fence,
       listingId: "listing_fixture_public",
       upstreamContentHash: "provider-revision-v1",
       audits: [
@@ -283,6 +293,7 @@ describe("catalog database and repository", () => {
     expect(await repository.resolvePackage("fixture-stack")).toEqual([]);
 
     await repository.recordObservedAudits({
+      fence,
       listingId: "listing_fixture_public",
       upstreamContentHash: "provider-revision-v1",
       audits: [

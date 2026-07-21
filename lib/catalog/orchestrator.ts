@@ -98,6 +98,11 @@ export class CatalogSyncOrchestrator {
       connector.descriptor.id,
       this.leaseDurationMs,
     );
+    const fence = {
+      sourceId: connector.descriptor.id,
+      runId: run.id,
+      leaseToken: run.leaseToken,
+    };
     const heartbeat = startSyncLeaseHeartbeat(this.repository, {
       runId: run.id,
       leaseToken: run.leaseToken,
@@ -155,7 +160,7 @@ export class CatalogSyncOrchestrator {
         const transientFailures: string[] = [];
         for (const candidate of page.records) {
           try {
-            await this.ingestion.persist(connector.descriptor.id, run.id, candidate);
+            await this.ingestion.persist(fence, candidate);
             processed += 1;
           } catch (error) {
             if (error instanceof ZodError || error instanceof CatalogNormalizationError) {

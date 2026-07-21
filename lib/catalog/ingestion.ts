@@ -4,7 +4,10 @@ import {
   discoveredSkillRecordSchema,
   type DiscoveredSkillRecord,
 } from "./source-contract";
-import type { CatalogRepository } from "../db/repository";
+import type {
+  CatalogMutationFence,
+  CatalogRepository,
+} from "../db/repository";
 
 export interface PersistedDiscovery {
   listingId: string;
@@ -72,8 +75,7 @@ export class CatalogIngestionService {
   ) {}
 
   async persist(
-    sourceId: string,
-    runId: string,
+    fence: CatalogMutationFence,
     candidate: unknown,
     options: { installs?: number } = {},
   ): Promise<PersistedDiscovery> {
@@ -86,7 +88,7 @@ export class CatalogIngestionService {
         typeof candidate.sourceRecordId === "string"
           ? candidate.sourceRecordId
           : null;
-      if (identity) await this.repository.markSourceRecordUnresolved(sourceId, identity, null);
+      if (identity) await this.repository.markSourceRecordUnresolved(fence, identity, null);
       throw parsed.error;
     }
     const decoded = parsed.data;
@@ -95,7 +97,7 @@ export class CatalogIngestionService {
       normalized = normalizeDiscoveredSkill(decoded);
     } catch (error) {
       await this.repository.markSourceRecordUnresolved(
-        sourceId,
+        fence,
         decoded.sourceRecordId,
         decoded.upstreamHash ?? decoded.contentHash,
       );
@@ -103,8 +105,7 @@ export class CatalogIngestionService {
     }
     const validation = await this.validateRecord(decoded);
     const listing = await this.repository.upsertSourceListing({
-      sourceId,
-      runId,
+      fence,
       upstreamId: normalized.sourceRecordId,
       sourceType: normalized.sourceType,
       installUrl: normalized.installUrl,
@@ -127,6 +128,7 @@ export class CatalogIngestionService {
       !decoded.artifact.files?.length
     ) {
       await this.repository.markListingUnresolved(
+        fence,
         listing.id,
         normalized.upstreamHash ?? normalized.contentHash,
       );
@@ -143,6 +145,7 @@ export class CatalogIngestionService {
       fileInventory = createPersistedFileInventory(decoded.artifact, normalized.contentHash);
     } catch {
       await this.repository.markListingUnresolved(
+        fence,
         listing.id,
         normalized.upstreamHash ?? normalized.contentHash,
       );
@@ -155,6 +158,7 @@ export class CatalogIngestionService {
     }
 
     const persisted = await this.repository.upsertCanonicalSkill({
+      fence,
       canonicalKey: normalized.canonicalKey,
       provider: normalized.provider,
       sourceUrl: normalized.sourceUrl,

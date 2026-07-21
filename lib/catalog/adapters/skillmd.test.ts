@@ -222,7 +222,10 @@ describe("SkillMdAdapter", () => {
       const persisted = await new CatalogIngestionService(
         repository,
         createAgentSkillValidator(),
-      ).persist("skillmd", run.id, record);
+      ).persist(
+        { sourceId: "skillmd", runId: run.id, leaseToken: run.leaseToken },
+        record,
+      );
       const [storedListing] = await connection.db.select().from(sourceListings);
       const persistedJson = JSON.stringify(storedListing?.rawJson);
 

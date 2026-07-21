@@ -294,7 +294,10 @@ describe("ClawHubAdapter", () => {
       const persisted = await new CatalogIngestionService(
         repository,
         createAgentSkillValidator(),
-      ).persist("clawhub", run.id, record);
+      ).persist(
+        { sourceId: "clawhub", runId: run.id, leaseToken: run.leaseToken },
+        record,
+      );
       const [storedListing] = await connection.db.select().from(sourceListings);
       const storedAudits = await connection.db.select().from(auditRecords);
       const persistedJson = JSON.stringify({
