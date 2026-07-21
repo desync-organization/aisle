@@ -149,7 +149,7 @@ function hashNormalizedInventory(files: readonly PersistedFileInventoryEntry[]):
     .digest("hex");
 }
 
-function isExecutableRegularFileMode(mode: string): boolean {
+export function isExecutableRegularFileMode(mode: string): boolean {
   const permissions = /^100([0-7]{3})$/.exec(mode)?.[1];
   return permissions
     ? [...permissions].some((digit) => (Number.parseInt(digit, 8) & 1) === 1)

@@ -5,6 +5,7 @@ import { z } from "zod";
 
 import {
   computeArtifactContentHash,
+  isExecutableRegularFileMode,
   normalizeArtifactFilePath,
 } from "./artifact-fingerprint";
 import type {
@@ -421,7 +422,16 @@ export function validateAgentSkillRecord(record: DiscoveredSkillRecord): Discove
 
   const findings: TrustFindingInput[] = [];
   const directoryName = record.skillPath.replaceAll("\\", "/").split("/").filter(Boolean).at(-1);
-  if (directoryName && directoryName !== "." && directoryName !== metadata.name) {
+  const containingDirectoryName =
+    directoryName === "." ? record.repository?.name ?? null : directoryName ?? null;
+  if (directoryName === "." && !containingDirectoryName) {
+    return {
+      valid: false,
+      metadata: null,
+      reason: "Repository-root SKILL.md requires an authoritative repository directory name",
+    };
+  }
+  if (containingDirectoryName && containingDirectoryName !== metadata.name) {
     return {
       valid: false,
       metadata: null,
@@ -481,7 +491,7 @@ export function validateAgentSkillRecord(record: DiscoveredSkillRecord): Discove
         finding("SUBMODULE", "critical", "Artifact inventory contains a Git submodule.", file.path),
       );
     }
-    if (/^1007(?:00|55)$/.test(file.mode ?? "")) {
+    if (isExecutableRegularFileMode(file.mode ?? "")) {
       findings.push(
         finding("EXECUTABLE_MODE", "warning", "Artifact inventory contains an executable file mode.", file.path),
       );
