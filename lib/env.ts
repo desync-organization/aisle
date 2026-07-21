@@ -12,6 +12,11 @@ const optionalValue = z.preprocess(
   z.string().min(1).optional(),
 );
 
+const optionalQueryList = z.preprocess(
+  (value) => (value === "" ? undefined : value),
+  z.string().min(1).max(2_048).optional(),
+);
+
 const explicitBoolean = z
   .preprocess(
     (value) => (value === undefined || value === "" ? "false" : value),
@@ -28,6 +33,8 @@ const serverEnvironmentSchema = z.object({
   GITHUB_TOKEN: optionalValue,
   AISLE_AGENTSKILLS_IN_ENABLED: explicitBoolean,
   AISLE_ASKSKILL_ENABLED: explicitBoolean,
+  AISLE_GITHUB_CODE_SEARCH_ENABLED: explicitBoolean,
+  AISLE_GITHUB_CODE_SEARCH_QUERIES: optionalQueryList,
 });
 
 const publicEnvironmentSchema = z.object({
@@ -43,6 +50,8 @@ export const serverEnvironment = serverEnvironmentSchema.parse({
   GITHUB_TOKEN: process.env.GITHUB_TOKEN,
   AISLE_AGENTSKILLS_IN_ENABLED: process.env.AISLE_AGENTSKILLS_IN_ENABLED,
   AISLE_ASKSKILL_ENABLED: process.env.AISLE_ASKSKILL_ENABLED,
+  AISLE_GITHUB_CODE_SEARCH_ENABLED: process.env.AISLE_GITHUB_CODE_SEARCH_ENABLED,
+  AISLE_GITHUB_CODE_SEARCH_QUERIES: process.env.AISLE_GITHUB_CODE_SEARCH_QUERIES,
 });
 
 export const publicEnvironment = publicEnvironmentSchema.parse({

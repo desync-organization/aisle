@@ -59,15 +59,18 @@ export const githubCodeSearchSourceDescriptor = {
   name: "GitHub Code Search",
   baseUrl: "https://api.github.com/search/code",
   mode: "federated",
+  freshnessPolicy: "retain",
   upstreamIdentifier: "GitHub REST Code Search API",
   termsUrl: "https://docs.github.com/en/site-policy/github-terms/github-terms-of-service",
   enabled: false,
+  resumePartialRuns: false,
   initialCoverageState: "not-configured",
   knownExclusions: [
-    "Code Search is query-only and cannot enumerate every public repository or skill.",
-    "Each query exposes at most 1,000 results, may report incomplete results, and remains partial even when every reachable page is fetched.",
-    "Search result SHA values identify blobs, not installable revisions; origin identity and an exact public commit-to-tree-to-SKILL.md binding must be verified before ingestion.",
-    "Server-side GitHub credentials are required, and oversized, truncated, missing, private, or identity-conflicting origins fail closed.",
+    "Synchronization is an explicit opt-in and requires a public-only GitHub API token for search and exact repository hydration.",
+    "The fixed name and description queries sample required SKILL.md metadata; configured plain-text queries only add more query-scoped samples.",
+    "Each ranked query exposes at most 1,000 results, may be incomplete, omits unindexed content, and never proves exhaustive GitHub or internet coverage.",
+    "Search result blob SHAs, ranks, and URLs are discovery observations only; the current public default branch is independently rebound to the exact SKILL.md path.",
+    "Every sweep is partial, non-retiring, and non-resumable; oversized, truncated, missing, private, or identity-conflicting origins fail closed.",
   ],
 } satisfies CatalogSourceDescriptor;
 
