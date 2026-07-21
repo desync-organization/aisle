@@ -110,9 +110,12 @@ describe("install command rendering", () => {
       failFastBoundary: "process-exit-status-only",
       runtimeCompletenessVerified: false,
       sourceRevisionEnforced: false,
+      pathScopeEnforced: true,
+      allSelectorsRuntimeEnforced: false,
       partialInstallPossible: true,
       agentFailureMayExitZero: true,
+      mutableSourceRacePossible: true,
     });
-    expect(plan.warnings).toHaveLength(3);
+    expect(plan.warnings).toHaveLength(4);
   });
 });

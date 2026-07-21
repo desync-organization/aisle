@@ -14,34 +14,69 @@ A selection is rejected unless all of these facts are present and valid:
 - license evidence is verified;
 - every requested agent is both supported by `skills@1.5.19` and compatible
   with the revision;
-- the CLI `--skill` selector is proven unique within that repository at the
-  same commit the catalog scanned; and
+- the GitHub owner/repository, single-segment branch, relative discovery path,
+  and observed branch-head SHA form an explicit verified discovery scope;
+- the CLI `--skill` selector is proven unique within that exact scope at the
+  observed current branch head;
+- the selector's verified scope, the source scope, and the observed artifact
+  commit are identical; and
 - the selection has no duplicate revision, canonical-revision conflict, or
   normalized-name collision with another source.
 
 The API integration must produce this evidence from durable catalog state in
-the same transaction that resolves revision IDs. Browser-provided sources,
-flags, shell fragments, observed hashes, and eligibility assertions must never
-be passed through.
+the same transaction that resolves revision IDs. Immediately before calling
+the planner, the backend must refetch the branch HEAD, the scoped skill
+artifact and digest, and its license evidence. It must reject the request if
+any observation is stale or if selector uniqueness no longer holds within the
+exact branch/path scope. Browser-provided sources, refs, paths, flags, shell
+fragments, observed hashes, and eligibility assertions must never be passed
+through.
+
+### Backend evidence shape
+
+Each resolved selection now requires both `source.discoveryScope` and
+`installer.verifiedDiscoveryScope`, with the same shape:
+
+```text
+{ branch, path, branchHeadSha }
+```
+
+`observed.commitSha` must equal `branchHeadSha`. The former
+`installer.verifiedAtCommitSha` field is no longer accepted because a commit
+alone did not prove which branch/path boundary was searched. The backend must
+persist and supply the complete scope evidence; the planner derives
+`sourceUrl` and never accepts one as input.
 
 ## Pinned executable contract
 
 Every operation is represented first as `file: "npx"` and an argument array:
 
 ```text
-npx --yes skills@1.5.19 add owner/repo \
-  --skill exact-name --agent codex --copy --yes
+npx --yes skills@1.5.19 add \
+  https://github.com/freshtechbro/claudedesignskills/tree/main/.claude/skills \
+  --full-depth --skill gsap-scrolltrigger --agent codex --copy --yes
 ```
 
-Skills are grouped by lower-cased GitHub `owner/repo`; repositories, skills,
-and agents are sorted deterministically. `--skill` and `--agent` are always
-explicit, and `--all` is forbidden. Global scope adds `--global`. Project scope
-is the CLI default and therefore adds no flag. Copy mode adds `--copy`; symlink
-mode is the pinned CLI default and there is no supported `--symlink` flag.
+The source URL is generated only from validated GitHub owner/repository,
+branch, and path fields. It never comes from browser text. The pinned CLI's
+GitHub tree parser treats the first segment after `/tree/` as the branch, so
+the contract deliberately accepts only safe single-segment branch names.
+Paths are safe relative POSIX directory paths; traversal, backslashes,
+encoded separators, URL punctuation, and absolute paths are rejected.
 
-The planner caps skills, repositories, agents, and the final command length.
+Selections are grouped only when lower-cased owner/repository, case-sensitive
+branch and path, and `branchHeadSha` all match. Each exact scope gets one CLI
+process. Scopes, skills, and agents are sorted deterministically. Every process
+uses `--full-depth`; `--skill` and `--agent` are always explicit, and `--all`
+is forbidden. Global scope adds `--global`. Project scope is the CLI default
+and therefore adds no flag. Copy mode adds `--copy`; symlink mode is the pinned
+CLI default and there is no supported `--symlink` flag.
+
+The planner caps skills, discovery scopes, agents, and the final command length.
 It emits one single-line command for POSIX shells, PowerShell 7, Windows
-PowerShell 5.1, and cmd.exe. Every argv item is quoted independently. POSIX,
+PowerShell 5.1, and cmd.exe. Arguments are quoted independently. The cmd.exe
+renderer uses the fixed trusted executable token `npx.cmd` without quotes;
+quoting `"npx"` can select Node's extensionless Unix shim on Windows. POSIX,
 PowerShell 7, and cmd use process-level `&&`; PowerShell 5.1 uses a guarded
 script block that checks `$?` and `$LASTEXITCODE` after every process.
 
@@ -54,15 +89,27 @@ The output makes these semantics machine-readable:
   CLI process reports failure;
 - `runtimeCompletenessVerified: false` and `partialInstallPossible: true` — a
   partial selector match is not proof that every requested skill installed;
+- `pathScopeEnforced: true` — the generated branch/path URL constrains where
+  the CLI performs full-depth discovery;
+- `allSelectorsRuntimeEnforced: false` — the CLI does not guarantee that every
+  requested selector matched before reporting overall success;
 - `agentFailureMayExitZero: true` — an individual agent failure may not fail
-  the CLI process; and
+  the CLI process;
 - `sourceRevisionEnforced: false` — observed commits and content digests are
-  provenance, not a pin enforced by the generated command.
+  provenance, not a pin enforced by the generated command; and
+- `mutableSourceRacePossible: true` — the verified branch may advance after
+  backend preflight and before the CLI clone starts.
 
-The CLI package is pinned, but the GitHub source remains the publisher's
-current default branch. Arbitrary commit SHAs are not emitted because this CLI
-release uses a shallow branch clone and cannot reliably enforce them. Users
-need Node.js 22.20.0 or newer for the pinned release.
+The CLI package and branch name are explicit, but the source revision remains
+mutable. Commit-shaped branch tokens are rejected and the planner never emits
+`/tree/<commit>`. Arbitrary commit SHAs are not emitted because this CLI
+release performs a shallow branch clone and the generated command cannot
+honestly enforce the scanned revision. Users need Node.js 22.20.0 or newer for
+the pinned release.
+
+Interoperability fixtures cover the audited public layouts without copying any
+skill body: Freshtech at `.claude/skills`, Microsoft Azure Skills at `skills`,
+and Impeccable at `.agents/skills/impeccable`.
 
 Primary implementation evidence:
 
