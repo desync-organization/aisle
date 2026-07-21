@@ -19,16 +19,20 @@ export type InstallPlan = InstallPlanCore &
       failFastBoundary: "process-exit-status-only";
       runtimeCompletenessVerified: false;
       sourceRevisionEnforced: false;
+      pathScopeEnforced: true;
+      allSelectorsRuntimeEnforced: false;
       partialInstallPossible: true;
       agentFailureMayExitZero: true;
+      mutableSourceRacePossible: true;
     }>;
     warnings: readonly string[];
   }>;
 
 const warnings = [
-  "Installation is best-effort and non-atomic; earlier repository steps are not rolled back if a later process fails.",
+  "Installation is best-effort and non-atomic; earlier discovery-scope steps are not rolled back if a later process fails.",
   "The pinned CLI can exit successfully after an individual agent install fails or after only a subset of requested names matches.",
-  "Observed upstream commits and content digests are provenance only; this command does not enforce an upstream commit pin.",
+  "The generated GitHub URL enforces the verified branch/path discovery scope, but it does not enforce the observed commit SHA.",
+  "The source branch is mutable and can move after the backend preflight but before the CLI clone begins.",
 ] as const;
 
 function contentAddress(value: unknown): string {
@@ -49,8 +53,11 @@ export function createInstallPlan(input: unknown): InstallPlan {
       failFastBoundary: "process-exit-status-only",
       runtimeCompletenessVerified: false,
       sourceRevisionEnforced: false,
+      pathScopeEnforced: true,
+      allSelectorsRuntimeEnforced: false,
       partialInstallPossible: true,
       agentFailureMayExitZero: true,
+      mutableSourceRacePossible: true,
     },
     warnings,
   } as const;
