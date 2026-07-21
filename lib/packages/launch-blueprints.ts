@@ -657,7 +657,7 @@ const sources = {
       repository: "agent-skills",
       repositoryUrl: "https://github.com/firebase/agent-skills",
       skillPath: "skills/firebase-data-connect-basics/SKILL.md",
-      upstreamSkillName: "firebase-data-connect-basics",
+      upstreamSkillName: "firebase-data-connect",
     },
     observedLicense: {
       spdx: "Apache-2.0",
