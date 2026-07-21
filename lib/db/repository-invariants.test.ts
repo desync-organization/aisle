@@ -11,6 +11,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   computeArtifactContentHash,
   createTextArtifactInventory,
+  PERSISTED_FILE_INVENTORY_ENTRY_LIMIT,
 } from "../catalog/artifact-fingerprint";
 import { CatalogIngestionService } from "../catalog/ingestion";
 import { createAgentSkillValidator } from "../catalog/security";
@@ -642,13 +643,143 @@ describe("CatalogRepository invariants", () => {
       expect.objectContaining({
         skillId: persisted.skillId,
         license: "MIT",
-        revisionMetadata: {
+        revisionMetadata: expect.objectContaining({
           licenseEvidence: expect.objectContaining({
             source: "repository-root-license-text",
             immutableRef: fixture.immutableRef,
           }),
-        },
+        }),
       }),
     ]);
+  });
+
+  it("persists content-free file metadata for text, binary, and executable inventory entries", async () => {
+    const run = await repository.acquireSyncRun("skills-sh");
+    const bodyMarker = "INVENTORY_BODY_MUST_NOT_PERSIST";
+    const helperMarker = "INVENTORY_HELPER_BODY_MUST_NOT_PERSIST";
+    const manifest = `${SKILL}\n<!-- ${bodyMarker} -->\n`;
+    const helper = `export const fixture = "${helperMarker}";\n`;
+    const binary = Buffer.from([0, 1, 2, 3]);
+    const textFiles = [
+      { path: "SKILL.md", contents: manifest, sha256: createHash("sha256").update(manifest).digest("hex") },
+      { path: "scripts/run.ts", contents: helper, sha256: createHash("sha256").update(helper).digest("hex") },
+    ];
+    const files = [
+      {
+        path: "SKILL.md",
+        type: "file",
+        mode: "100644",
+        size: Buffer.byteLength(manifest),
+        sha: textFiles[0]!.sha256,
+      },
+      {
+        path: "scripts/run.ts",
+        type: "file",
+        mode: "100755",
+        size: Buffer.byteLength(helper),
+        sha: textFiles[1]!.sha256,
+      },
+      {
+        path: "assets/tool.bin",
+        type: "binary",
+        mode: "100644",
+        size: binary.byteLength,
+        sha: createHash("sha256").update(binary).digest("hex"),
+      },
+    ];
+    const fixture = candidate("persisted-inventory", { contents: manifest });
+    fixture.contentHash = computeArtifactContentHash(files);
+    fixture.artifact = {
+      type: "skill-md",
+      contents: manifest,
+      complete: true,
+      textFiles,
+      files,
+    };
+
+    const persisted = await ingestion.persist("skills-sh", run.id, fixture);
+    const [revision] = await connection.db
+      .select()
+      .from(skillRevisions)
+      .where(eq(skillRevisions.id, persisted.revisionId!));
+
+    expect(revision?.metadataJson).toMatchObject({
+      fileInventory: {
+        schemaVersion: 1,
+        complete: true,
+        fileCount: 3,
+        listedFileCount: 3,
+        regularFileCount: 2,
+        binaryFileCount: 1,
+        executableFileCount: 1,
+        aggregateSha256: fixture.contentHash,
+        truncated: false,
+        files: [
+          expect.objectContaining({
+            path: "SKILL.md",
+            type: "file",
+            mode: "100644",
+            sha256: textFiles[0]!.sha256,
+          }),
+          expect.objectContaining({
+            path: "assets/tool.bin",
+            type: "binary",
+            mode: "100644",
+          }),
+          expect.objectContaining({
+            path: "scripts/run.ts",
+            type: "file",
+            mode: "100755",
+            sha256: textFiles[1]!.sha256,
+          }),
+        ],
+      },
+    });
+    const persistedMetadata = JSON.stringify(revision?.metadataJson);
+    expect(persistedMetadata).not.toContain(bodyMarker);
+    expect(persistedMetadata).not.toContain(helperMarker);
+    expect(persistedMetadata).not.toContain("contents");
+  });
+
+  it("bounds persisted file entries while retaining the complete aggregate inventory", async () => {
+    const run = await repository.acquireSyncRun("skills-sh");
+    const fixture = candidate("bounded-persisted-inventory");
+    const manifestFile = fixture.artifact!.files![0]!;
+    const extraFiles = Array.from(
+      { length: PERSISTED_FILE_INVENTORY_ENTRY_LIMIT + 4 },
+      (_, index) => ({
+        path: `generated/${String(index).padStart(4, "0")}.txt`,
+        type: "file",
+        mode: "100644",
+        size: 0,
+        sha: createHash("sha256").update(`empty-${index}`).digest("hex"),
+      }),
+    );
+    const files = [manifestFile, ...extraFiles];
+    fixture.artifact = { ...fixture.artifact!, files };
+    fixture.contentHash = computeArtifactContentHash(files);
+
+    const persisted = await ingestion.persist("skills-sh", run.id, fixture);
+    const [revision] = await connection.db
+      .select()
+      .from(skillRevisions)
+      .where(eq(skillRevisions.id, persisted.revisionId!));
+    const metadata = revision?.metadataJson as {
+      fileInventory?: {
+        fileCount: number;
+        listedFileCount: number;
+        aggregateSha256: string;
+        truncated: boolean;
+        files: unknown[];
+      };
+    };
+
+    expect(metadata.fileInventory).toMatchObject({
+      fileCount: PERSISTED_FILE_INVENTORY_ENTRY_LIMIT + 5,
+      listedFileCount: PERSISTED_FILE_INVENTORY_ENTRY_LIMIT,
+      aggregateSha256: fixture.contentHash,
+      truncated: true,
+    });
+    expect(metadata.fileInventory?.files).toHaveLength(PERSISTED_FILE_INVENTORY_ENTRY_LIMIT);
   });
 });

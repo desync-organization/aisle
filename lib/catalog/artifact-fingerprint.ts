@@ -13,6 +13,32 @@ export interface ArtifactInventoryInput {
   sha?: string;
 }
 
+export interface PersistedFileInventoryEntry {
+  path: string;
+  type: string;
+  mode: string;
+  size: number;
+  sha256: string;
+}
+
+export interface PersistedFileInventory {
+  schemaVersion: 1;
+  complete: boolean;
+  fileCount: number;
+  listedFileCount: number;
+  totalBytes: number;
+  regularFileCount: number;
+  binaryFileCount: number;
+  executableFileCount: number;
+  otherFileCount: number;
+  aggregateSha256: string;
+  truncated: boolean;
+  files: PersistedFileInventoryEntry[];
+}
+
+export const PERSISTED_FILE_INVENTORY_ENTRY_LIMIT = 256;
+export const PERSISTED_FILE_INVENTORY_BYTE_LIMIT = 65_536;
+
 export function createTextArtifactInventory(
   files: readonly ArtifactTextInput[],
 ): ArtifactInventoryInput[] {
@@ -79,8 +105,9 @@ export function computeScannedTextHash(files: readonly ArtifactTextInput[]): str
     .digest("hex");
 }
 
-/** Hashes the complete installed inventory, including verified non-text bytes. */
-export function computeArtifactContentHash(files: readonly ArtifactInventoryInput[]): string {
+function normalizeVerifiedInventory(
+  files: readonly ArtifactInventoryInput[],
+): PersistedFileInventoryEntry[] {
   if (files.length === 0) {
     throw new Error("At least one verified file is required for an artifact fingerprint");
   }
@@ -91,7 +118,12 @@ export function computeArtifactContentHash(files: readonly ArtifactInventoryInpu
     paths.add(path);
     const type = file.type.trim().toLowerCase();
     const mode = file.mode?.trim() ?? "";
-    if (!type) throw new Error(`Artifact inventory type is missing for ${path}`);
+    if (!/^[a-z0-9][a-z0-9._-]{0,31}$/.test(type)) {
+      throw new Error(`Artifact inventory type is invalid for ${path}`);
+    }
+    if (mode && !/^[0-7]{5,6}$/.test(mode)) {
+      throw new Error(`Artifact inventory mode is invalid for ${path}`);
+    }
     if (!Number.isSafeInteger(file.size) || file.size! < 0) {
       throw new Error(`Artifact inventory size is unverified for ${path}`);
     }
@@ -102,13 +134,87 @@ export function computeArtifactContentHash(files: readonly ArtifactInventoryInpu
     return { path, type, mode, size: file.size!, sha256 };
   });
   inventory.sort((left, right) => (left.path < right.path ? -1 : left.path > right.path ? 1 : 0));
+  return inventory;
+}
+
+function hashNormalizedInventory(files: readonly PersistedFileInventoryEntry[]): string {
   return createHash("sha256")
     .update(
-      inventory
+      files
         .map(({ path, type, mode, size, sha256 }) =>
           `${path.length}:${path}\0${type.length}:${type}\0${mode.length}:${mode}\0${size}\0${sha256}`,
         )
         .join("\n"),
     )
     .digest("hex");
+}
+
+/** Hashes the complete installed inventory, including verified non-text bytes. */
+export function computeArtifactContentHash(files: readonly ArtifactInventoryInput[]): string {
+  return hashNormalizedInventory(normalizeVerifiedInventory(files));
+}
+
+export function createPersistedFileInventory(
+  artifact: { complete: boolean; files?: readonly ArtifactInventoryInput[] },
+  expectedContentHash: string,
+  options: { maxEntries?: number; maxEntriesBytes?: number } = {},
+): PersistedFileInventory {
+  if (!artifact.complete) {
+    throw new Error("Cannot persist an incomplete artifact inventory");
+  }
+  const inventory = normalizeVerifiedInventory(artifact.files ?? []);
+  const aggregateSha256 = hashNormalizedInventory(inventory);
+  const normalizedExpectedHash = expectedContentHash.trim().toLowerCase().replace(/^sha256:/, "");
+  if (!/^[a-f0-9]{64}$/.test(normalizedExpectedHash) || aggregateSha256 !== normalizedExpectedHash) {
+    throw new Error("Persisted file inventory did not match the validated content hash");
+  }
+
+  const maxEntries = options.maxEntries ?? PERSISTED_FILE_INVENTORY_ENTRY_LIMIT;
+  const maxEntriesBytes = options.maxEntriesBytes ?? PERSISTED_FILE_INVENTORY_BYTE_LIMIT;
+  if (!Number.isSafeInteger(maxEntries) || maxEntries < 1) {
+    throw new Error("Persisted file inventory entry limit must be a positive safe integer");
+  }
+  if (!Number.isSafeInteger(maxEntriesBytes) || maxEntriesBytes < 2) {
+    throw new Error("Persisted file inventory byte limit must be at least two bytes");
+  }
+
+  let totalBytes = 0;
+  let regularFileCount = 0;
+  let binaryFileCount = 0;
+  let executableFileCount = 0;
+  const files: PersistedFileInventoryEntry[] = [];
+  let serializedBytes = 2;
+  let truncated = false;
+  for (const file of inventory) {
+    totalBytes += file.size;
+    if (!Number.isSafeInteger(totalBytes)) {
+      throw new Error("Artifact inventory aggregate size exceeds the safe integer range");
+    }
+    if (file.type === "file") regularFileCount += 1;
+    if (file.type === "binary") binaryFileCount += 1;
+    if (/^1007(?:00|55)$/.test(file.mode)) executableFileCount += 1;
+
+    const entryBytes = Buffer.byteLength(JSON.stringify(file), "utf8") + (files.length ? 1 : 0);
+    if (files.length >= maxEntries || serializedBytes + entryBytes > maxEntriesBytes) {
+      truncated = true;
+      continue;
+    }
+    files.push(file);
+    serializedBytes += entryBytes;
+  }
+
+  return {
+    schemaVersion: 1,
+    complete: artifact.complete,
+    fileCount: inventory.length,
+    listedFileCount: files.length,
+    totalBytes,
+    regularFileCount,
+    binaryFileCount,
+    executableFileCount,
+    otherFileCount: inventory.length - regularFileCount - binaryFileCount,
+    aggregateSha256,
+    truncated,
+    files,
+  };
 }

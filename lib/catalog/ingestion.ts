@@ -1,4 +1,5 @@
 import { normalizeDiscoveredSkill } from "./normalization";
+import { createPersistedFileInventory } from "./artifact-fingerprint";
 import {
   discoveredSkillRecordSchema,
   type DiscoveredSkillRecord,
@@ -121,8 +122,26 @@ export class CatalogIngestionService {
       !normalized.contentHash ||
       !normalized.upstreamHash ||
       !normalized.installUrl ||
-      !normalized.installSpec
+      !normalized.installSpec ||
+      decoded.artifact?.complete !== true ||
+      !decoded.artifact.files?.length
     ) {
+      await this.repository.markListingUnresolved(
+        listing.id,
+        normalized.upstreamHash ?? normalized.contentHash,
+      );
+      return {
+        listingId: listing.id,
+        skillId: null,
+        revisionId: null,
+        resolved: false,
+      };
+    }
+
+    let fileInventory: ReturnType<typeof createPersistedFileInventory>;
+    try {
+      fileInventory = createPersistedFileInventory(decoded.artifact, normalized.contentHash);
+    } catch {
       await this.repository.markListingUnresolved(
         listing.id,
         normalized.upstreamHash ?? normalized.contentHash,
@@ -144,9 +163,12 @@ export class CatalogIngestionService {
       upstreamDescription: validation.metadata.description,
       compatibility: validation.metadata.compatibility,
       license: validation.metadata.license,
-      revisionMetadata: validation.metadata.licenseEvidence
-        ? { licenseEvidence: validation.metadata.licenseEvidence }
-        : {},
+      revisionMetadata: {
+        ...(validation.metadata.licenseEvidence
+          ? { licenseEvidence: validation.metadata.licenseEvidence }
+          : {}),
+        fileInventory,
+      },
       officialProvenance: await this.officialPublisherPolicy(decoded),
       installUrl: normalized.installUrl,
       installSpec: normalized.installSpec,
