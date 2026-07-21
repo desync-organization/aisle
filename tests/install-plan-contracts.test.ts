@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import {
   GLOBAL_UNSUPPORTED_AGENTS,
+  MAX_SKILLS_PER_PLAN,
+  MAX_SOURCES_PER_PLAN,
   SKILLS_CLI_PACKAGE,
   SUPPORTED_AGENTS,
   installPlanRequestSchema,
@@ -14,6 +16,11 @@ describe("install plan contracts", () => {
     expect(SUPPORTED_AGENTS).toContain("codex");
     expect(SUPPORTED_AGENTS).toContain("claude-code");
     expect(GLOBAL_UNSUPPORTED_AGENTS).toEqual(["eve", "promptscript"]);
+  });
+
+  it("allows one verified discovery scope per selected skill", () => {
+    expect(MAX_SOURCES_PER_PLAN).toBe(MAX_SKILLS_PER_PLAN);
+    expect(MAX_SOURCES_PER_PLAN).toBeGreaterThanOrEqual(17);
   });
 
   it("accepts an eligible, already-resolved GitHub selection", () => {
