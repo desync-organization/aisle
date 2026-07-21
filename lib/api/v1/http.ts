@@ -10,6 +10,7 @@ import { InvalidCursorError } from "./cursor";
 import { ApiError } from "../errors";
 
 const READ_CACHE_CONTROL = "public, max-age=0, s-maxage=30, stale-while-revalidate=120";
+const MAX_JSON_BODY_BYTES = 64 * 1_024;
 
 function zodFieldIssues(error: ZodError): ApiFieldIssue[] {
   return error.issues.map((issue) => ({
@@ -68,6 +69,48 @@ export function parseRouteParams<T>(input: unknown, schema: ZodType<T>): T {
   return result.data;
 }
 
+export async function parseJsonBody<T>(request: Request, schema: ZodType<T>): Promise<T> {
+  const contentType = request.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase();
+  if (contentType !== "application/json") {
+    throw new ApiError(415, "UNSUPPORTED_MEDIA_TYPE", "The request body must be JSON.");
+  }
+
+  const contentLength = request.headers.get("content-length");
+  if (contentLength && /^\d+$/.test(contentLength) && Number(contentLength) > MAX_JSON_BODY_BYTES) {
+    throw new ApiError(413, "BODY_TOO_LARGE", "The JSON request body is too large.");
+  }
+
+  let text: string;
+  try {
+    text = await request.text();
+  } catch {
+    throw new ApiError(400, "INVALID_JSON", "The JSON request body could not be read.");
+  }
+  if (Buffer.byteLength(text, "utf8") > MAX_JSON_BODY_BYTES) {
+    throw new ApiError(413, "BODY_TOO_LARGE", "The JSON request body is too large.");
+  }
+
+  let input: unknown;
+  try {
+    input = JSON.parse(text);
+  } catch {
+    throw new ApiError(400, "INVALID_JSON", "The request body is not valid JSON.");
+  }
+  const result = schema.safeParse(input);
+  if (!result.success) {
+    throw new ApiError(
+      400,
+      "INVALID_BODY",
+      "The request body is invalid.",
+      zodFieldIssues(result.error).map((issue) => ({
+        ...issue,
+        path: issue.path === "query" ? "body" : issue.path,
+      })),
+    );
+  }
+  return result.data;
+}
+
 export async function withCatalogDatabase<T>(
   operation: (
     repository: CatalogRepository,
@@ -113,6 +156,38 @@ export async function handleReadRequest<T>(
 
     if (apiError.status >= 500) {
       console.error(`[api:${requestId}] read request failed`, error);
+    }
+    return new Response(
+      JSON.stringify({
+        ok: false,
+        error: {
+          code: apiError.code,
+          message: apiError.message,
+          requestId,
+          ...(apiError.fieldIssues ? { fieldIssues: apiError.fieldIssues } : {}),
+        },
+      }),
+      { status: apiError.status, headers: responseHeaders(requestId, false) },
+    );
+  }
+}
+
+export async function handleMutationRequest<T extends Record<string, unknown>>(
+  operation: (context: Readonly<{ requestId: string }>) => Promise<T>,
+): Promise<Response> {
+  const requestId = randomUUID();
+  try {
+    const result = await operation({ requestId });
+    return new Response(
+      JSON.stringify({ ok: true, ...result, meta: { requestId } }),
+      { status: 200, headers: responseHeaders(requestId, false) },
+    );
+  } catch (error) {
+    const apiError = error instanceof ApiError
+      ? error
+      : new ApiError(500, "INTERNAL_ERROR", "The request could not be completed.");
+    if (apiError.status >= 500) {
+      console.error(`[api:${requestId}] mutation request failed`, error);
     }
     return new Response(
       JSON.stringify({

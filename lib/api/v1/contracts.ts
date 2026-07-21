@@ -1,6 +1,8 @@
 import { z } from "zod";
 
+import { installPlanOptionsSchema } from "@/lib/install-plan/contracts";
 import { packageCategories } from "@/lib/packages/package-blueprint";
+import { MAX_SELECTED_SKILLS } from "@/lib/selection/contracts";
 
 export const API_VERSION = "v1" as const;
 export const API_PAGE_LIMIT_MAX = 100 as const;
@@ -106,6 +108,78 @@ export type SkillGateReason = Readonly<{
 export type SkillsQuery = z.infer<typeof skillsQuerySchema>;
 export type PackagesQuery = z.infer<typeof packagesQuerySchema>;
 export type PackageDetailQuery = z.infer<typeof packageDetailQuerySchema>;
+
+export const stackSelectionIdSchema = z.string().regex(/^skill_[a-f0-9]{24}$/);
+export const stackRevisionIdSchema = z.string().regex(/^revision_[a-f0-9]{24}$/);
+export const warningFingerprintSchema = z.string().regex(/^sha256:[a-f0-9]{64}$/);
+
+const uniqueSelectionIdsSchema = z
+  .array(stackSelectionIdSchema)
+  .min(1)
+  .max(MAX_SELECTED_SKILLS)
+  .superRefine((ids, context) => {
+    const seen = new Set<string>();
+    ids.forEach((id, index) => {
+      if (seen.has(id)) {
+        context.addIssue({ code: "custom", path: [index], message: "Selection IDs must be unique." });
+      }
+      seen.add(id);
+    });
+  });
+
+export const stackPreflightRequestSchema = z.strictObject({
+  selectionIds: uniqueSelectionIdsSchema,
+});
+
+export const stackWarningAcknowledgementSchema = z.strictObject({
+  selectionId: stackSelectionIdSchema,
+  revisionId: stackRevisionIdSchema,
+  warningFingerprint: warningFingerprintSchema,
+});
+
+export const stackResolveRequestSchema = z
+  .strictObject({
+    selectionIds: uniqueSelectionIdsSchema,
+    acknowledgements: z.array(stackWarningAcknowledgementSchema).max(MAX_SELECTED_SKILLS),
+    options: installPlanOptionsSchema,
+  })
+  .superRefine((request, context) => {
+    const selected = new Set(request.selectionIds);
+    const acknowledged = new Set<string>();
+    request.acknowledgements.forEach((acknowledgement, index) => {
+      if (!selected.has(acknowledgement.selectionId)) {
+        context.addIssue({
+          code: "custom",
+          path: ["acknowledgements", index, "selectionId"],
+          message: "Acknowledgements must belong to the requested selection set.",
+        });
+      }
+      if (acknowledged.has(acknowledgement.selectionId)) {
+        context.addIssue({
+          code: "custom",
+          path: ["acknowledgements", index, "selectionId"],
+          message: "A selection can be acknowledged only once.",
+        });
+      }
+      acknowledged.add(acknowledgement.selectionId);
+    });
+  });
+
+export const stackGateReasons = [
+  "lifecycle-not-current",
+  "revision-evidence-missing",
+  "install-unresolved",
+  "source-inactive",
+  "license-not-eligible",
+  "license-evidence-missing",
+  "trust-pending",
+  "trust-blocked",
+  "upstream-audit-failed",
+] as const;
+
+export type StackGateReason = (typeof stackGateReasons)[number];
+export type StackPreflightRequest = z.infer<typeof stackPreflightRequestSchema>;
+export type StackResolveRequest = z.infer<typeof stackResolveRequestSchema>;
 
 export type ApiFieldIssue = Readonly<{
   path: string;
