@@ -45,6 +45,7 @@ describe("install plan resolution", () => {
         "skills@1.5.19",
         "add",
         "fixture-owner/frontend",
+        "--full-depth",
         "--skill",
         "alpha",
         "--skill",
@@ -61,6 +62,20 @@ describe("install plan resolution", () => {
       "alpha",
       "beta",
     ]);
+  });
+
+  it("forces full-depth discovery on every CLI process", () => {
+    const plan = createInstallPlan(
+      installPlanFixture([
+        installSkillFixture({ name: "one", repository: "first" }),
+        installSkillFixture({ name: "two", repository: "second" }),
+      ]),
+    );
+
+    expect(plan.steps).toHaveLength(2);
+    for (const step of plan.steps) {
+      expect(step.args.filter((argument) => argument === "--full-depth")).toHaveLength(1);
+    }
   });
 
   it("groups and orders mixed repositories deterministically", () => {
