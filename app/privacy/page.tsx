@@ -26,7 +26,7 @@ const privacyAreas = [
   {
     icon: HardDrive,
     title: "Local selection state",
-    body: "When the stack builder is available, it may keep public catalog identifiers and interface choices in browser storage on this device. It is not an account or cloud backup, and clearing site data removes it.",
+    body: "The stack builder keeps public catalog identifiers and interface choices in browser storage on this device. It is not an account or cloud backup, and clearing site data removes it.",
   },
   {
     icon: GitFork,
@@ -79,9 +79,9 @@ export default function PrivacyPage() {
           <ShieldCheck aria-hidden="true" size={23} />
           <div>
             <span className="eyebrow">Current transparency release</span>
-            <h2>The catalog is not synchronized and the composed installer is not live.</h2>
+            <h2>Selections stay local; command requests are revalidated on the server.</h2>
             <p>
-              No catalog counts, cloud stack records, or install histories are being claimed by this static shell. This notice must be revised before a hosted data service, account system, analytics tool, or payment flow is enabled.
+              A configured deployment can serve synchronized public catalog metadata. Preflight and command requests send the selected opaque catalog IDs, install-target choices, and any revision-bound warning acknowledgements to Aisle for current eligibility checks. This release does not save cloud stack records or install history, and it includes no account, analytics, advertising, or payment flow.
             </p>
           </div>
           <time dateTime="2026-07-21">Reviewed 21 Jul 2026</time>
