@@ -662,7 +662,11 @@ export class CatalogRepository {
     }));
   }
 
-  async acquireSyncRun(sourceId: string, leaseDurationMs = 300_000) {
+  async acquireSyncRun(
+    sourceId: string,
+    leaseDurationMs = 300_000,
+    options: { resumePartial?: boolean } = {},
+  ) {
     const now = new Date();
     const leaseExpiresAt = new Date(now.getTime() + Math.max(leaseDurationMs, 100));
     const leaseToken = randomUUID();
@@ -689,18 +693,20 @@ export class CatalogRepository {
           .where(eq(syncRuns.id, active.id));
       }
 
-      const [resumable] = await transaction
-        .select()
-        .from(syncRuns)
-        .where(
-          and(
-            eq(syncRuns.sourceId, sourceId),
-            eq(syncRuns.status, "partial"),
-            isNotNull(syncRuns.cursor),
-          ),
-        )
-        .orderBy(desc(syncRuns.startedAt))
-        .limit(1);
+      const [resumable] = options.resumePartial === false
+        ? []
+        : await transaction
+            .select()
+            .from(syncRuns)
+            .where(
+              and(
+                eq(syncRuns.sourceId, sourceId),
+                eq(syncRuns.status, "partial"),
+                isNotNull(syncRuns.cursor),
+              ),
+            )
+            .orderBy(desc(syncRuns.startedAt))
+            .limit(1);
       if (resumable) {
         await transaction
           .update(syncRuns)

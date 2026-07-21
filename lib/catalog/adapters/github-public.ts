@@ -227,6 +227,17 @@ export class GitHubPublicRepositoryAdapter implements CatalogSourceConnector {
         `GitHub hydration selected ${manifestEntries.length} manifests, above the ${this.maxHydratedManifests}-manifest limit`,
       );
     }
+    const missingRequestedManifests = this.manifestFilePaths
+      ? [...this.manifestFilePaths].filter(
+          (path) => !manifestEntries.some((entry) => entry.path === path),
+        )
+      : [];
+    if (missingRequestedManifests.length) {
+      const sample = missingRequestedManifests.slice(0, 5).join(", ").slice(0, 1_024);
+      exclusions.push(
+        `${missingRequestedManifests.length} requested SKILL.md path(s) were absent at the resolved commit${sample ? ` (${sample})` : ""}.`,
+      );
+    }
     const repositoryLicenseEvidence = manifestEntries.length
       ? await this.loadRepositoryLicenseEvidence(
           tree.tree,
@@ -236,7 +247,7 @@ export class GitHubPublicRepositoryAdapter implements CatalogSourceConnector {
         )
       : null;
     const records: DiscoveredSkillRecord[] = [];
-    let degraded = false;
+    let degraded = missingRequestedManifests.length > 0;
 
     for (const manifest of manifestEntries) {
       const skillPath = directoryForManifest(manifest.path);

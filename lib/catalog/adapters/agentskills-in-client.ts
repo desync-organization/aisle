@@ -17,7 +17,10 @@ const DEFAULT_MAX_PAGE_BYTES = 2 * 1024 * 1024;
 
 const providerSkillSchema = z
   .object({
-    id: z.union([z.string().min(1).max(512), z.number().int().nonnegative()]),
+    id: z.union([
+      z.string().min(1).max(512),
+      z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+    ]),
     name: z.string().min(1).max(256),
     description: z.string().max(10_000).optional(),
     author: z.string().min(1).max(256),
@@ -29,8 +32,8 @@ const providerSkillSchema = z
     repo_full_name: z.string().min(1).max(256).optional(),
     path: z.string().min(1).max(2_048),
     branch: z.string().min(1).max(255).optional(),
-    stars: z.number().int().nonnegative().optional(),
-    forks: z.number().int().nonnegative().optional(),
+    stars: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional(),
+    forks: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional(),
     category: z.string().min(1).max(256).optional(),
     hasContent: z.boolean().optional(),
     has_content: z.boolean().optional(),
@@ -40,9 +43,9 @@ const providerSkillSchema = z
 const listResponseSchema = z
   .object({
     skills: z.array(providerSkillSchema).max(MAX_PAGE_SIZE),
-    total: z.number().int().nonnegative(),
+    total: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
     limit: z.number().int().positive().max(MAX_PAGE_SIZE),
-    offset: z.number().int().nonnegative(),
+    offset: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
   })
   .passthrough();
 
@@ -193,8 +196,13 @@ export class AgentSkillsInClient {
     }
 
     const skills = response.skills.map(normalizeSkill);
+    if (skills.length > response.limit) {
+      throw new RegistryContractError(
+        `AgentSkills.in returned ${skills.length} records for a ${response.limit}-record page`,
+      );
+    }
     const advancedOffset = response.offset + skills.length;
-    if (advancedOffset > response.total) {
+    if (!Number.isSafeInteger(advancedOffset) || advancedOffset > response.total) {
       throw new RegistryContractError(
         `AgentSkills.in page ended at ${advancedOffset}, beyond its reported total ${response.total}`,
       );

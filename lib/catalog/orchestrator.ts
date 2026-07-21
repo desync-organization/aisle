@@ -97,6 +97,7 @@ export class CatalogSyncOrchestrator {
     const run = await this.repository.acquireSyncRun(
       connector.descriptor.id,
       this.leaseDurationMs,
+      { resumePartial: connector.descriptor.resumePartialRuns !== false },
     );
     const heartbeat = startSyncLeaseHeartbeat(this.repository, {
       runId: run.id,

@@ -5,9 +5,11 @@ export const agentSkillsInSourceDescriptor = {
   name: "AgentSkills.in",
   baseUrl: "https://www.agentskills.in/api/skills",
   mode: "full",
+  freshnessPolicy: "retain",
   upstreamIdentifier: "AgentSkills.in public skills API",
   termsUrl: "https://www.agentskills.in",
   enabled: false,
+  resumePartialRuns: false,
   initialCoverageState: "not-configured",
   knownExclusions: [
     "Synchronization is an explicit opt-in and requires a public-only GitHub API token for exact repository hydration.",

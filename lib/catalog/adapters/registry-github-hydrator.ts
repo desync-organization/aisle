@@ -111,6 +111,24 @@ function repositoryKey(identity: GitHubSkillIdentity): string {
   return `${identity.owner.toLowerCase()}/${identity.repository.toLowerCase()}`;
 }
 
+function boundedCategoryHints(
+  hints: RegistryGitHubCategoryHints | undefined,
+): { categories: string[]; tags: string[] } | undefined {
+  if (!hints) return undefined;
+  const bounded = (values: readonly string[], maximum: number, length: number): string[] => [
+    ...new Set(
+      values
+        .slice(0, maximum)
+        .map((value) => value.trim().slice(0, length))
+        .filter(Boolean),
+    ),
+  ];
+  return {
+    categories: bounded(hints.categories, 16, 128),
+    tags: bounded(hints.tags, 32, 64),
+  };
+}
+
 function exactHydration(
   record: DiscoveredSkillRecord,
   identity: GitHubSkillIdentity,
@@ -504,17 +522,11 @@ export class RegistryToGitHubHydrationConnector<
               sourceRecordId: observation.sourceRecordId,
             },
           });
+          const categoryHints = boundedCategoryHints(observation.categoryHints);
           records.push({
             ...exact.record,
             sourceRecordId: observation.sourceRecordId,
-            ...(observation.categoryHints
-              ? {
-                  categoryHints: {
-                    categories: [...observation.categoryHints.categories],
-                    tags: [...observation.categoryHints.tags],
-                  },
-                }
-              : {}),
+            ...(categoryHints ? { categoryHints } : {}),
             raw,
           });
         }

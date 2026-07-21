@@ -100,9 +100,12 @@ export interface CatalogSourceDescriptor {
   name: string;
   baseUrl: string;
   mode: (typeof sourceModes)[number];
+  freshnessPolicy?: "retain" | "latest-completed-observation";
   upstreamIdentifier: string;
   termsUrl?: string | null;
   enabled?: boolean;
+  /** False when a mutable cursor cannot safely continue a prior observation sweep. */
+  resumePartialRuns?: boolean;
   initialCoverageState?: string;
   knownExclusions?: string[];
 }
