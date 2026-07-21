@@ -17,12 +17,17 @@ import {
 } from "drizzle-orm";
 
 import { installSpecSchema } from "../catalog/source-contract";
-import { normalizeSkillPath, normalizeSourceUrl } from "../catalog/normalization";
 import {
+  packageEditorialSchema,
   parsePackageBlueprint,
   type PackageBlueprint,
-  type PackageBlueprintMember,
 } from "../packages/package-blueprint";
+import {
+  PackageMemberEligibilityError,
+  resolveEligiblePackageMember,
+  type EligiblePackageMember,
+  type PackageMemberEligibilityBinding,
+} from "../packages/member-eligibility";
 import type { CatalogDatabase } from "./client";
 import {
   auditRecords,
@@ -75,24 +80,14 @@ const trustStateRank: Record<TrustState, number> = {
   fail: 3,
   quarantined: 4,
 };
-const packageEligibleLicenses = [
-  "MIT",
-  "Apache-2.0",
-  "BSD-2-Clause",
-  "BSD-3-Clause",
-  "ISC",
-  "0BSD",
-  "CC0-1.0",
-  "Unlicense",
-] as const;
-
 export type PackagePublicationErrorCode =
   | "MEMBER_NOT_FOUND"
   | "REVISION_MISMATCH"
   | "LICENSE_EVIDENCE_MISMATCH"
   | "TRUST_NOT_ELIGIBLE"
   | "PROVENANCE_MISMATCH"
-  | "DUPLICATE_MEMBER";
+  | "DUPLICATE_MEMBER"
+  | "PACKAGE_SET_INVALID";
 
 export class PackagePublicationError extends Error {
   constructor(
@@ -116,6 +111,8 @@ export type PublishedPackageSummary = Readonly<{
   publishedAt: Date;
   memberCount: number;
   editorial: Record<string, unknown>;
+  blueprintSchemaVersion: number;
+  blueprintDigest: string;
 }>;
 
 export type PackagePublicationResult = Readonly<{
@@ -129,81 +126,8 @@ export type PackagePublicationResult = Readonly<{
   reused: boolean;
 }>;
 
-type PersistedLicenseEvidence = Readonly<{
-  path: string;
-  sha256: string;
-  source: string;
-  sourceUrl?: string;
-  immutableRef?: string;
-}>;
-
 function packageBlueprintDigest(blueprint: PackageBlueprint): string {
   return `sha256:${createHash("sha256").update(JSON.stringify(blueprint)).digest("hex")}`;
-}
-
-function persistedLicenseEvidence(metadata: Record<string, unknown> | null): PersistedLicenseEvidence | null {
-  const value = metadata?.licenseEvidence;
-  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  const evidence = value as Record<string, unknown>;
-  if (
-    typeof evidence.path !== "string" ||
-    typeof evidence.sha256 !== "string" ||
-    !/^[a-f0-9]{64}$/.test(evidence.sha256) ||
-    typeof evidence.source !== "string"
-  ) {
-    return null;
-  }
-  if (evidence.sourceUrl !== undefined && typeof evidence.sourceUrl !== "string") return null;
-  if (evidence.immutableRef !== undefined && typeof evidence.immutableRef !== "string") return null;
-  return {
-    path: evidence.path,
-    sha256: evidence.sha256,
-    source: evidence.source,
-    ...(typeof evidence.sourceUrl === "string" ? { sourceUrl: evidence.sourceUrl } : {}),
-    ...(typeof evidence.immutableRef === "string" ? { immutableRef: evidence.immutableRef } : {}),
-  };
-}
-
-function hasCompleteInventory(metadata: Record<string, unknown> | null, contentHash: string): boolean {
-  const value = metadata?.fileInventory;
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const inventory = value as Record<string, unknown>;
-  return (
-    inventory.schemaVersion === 1 &&
-    inventory.complete === true &&
-    typeof inventory.fileCount === "number" &&
-    Number.isSafeInteger(inventory.fileCount) &&
-    inventory.fileCount > 0 &&
-    inventory.aggregateSha256 === contentHash
-  );
-}
-
-function packageLicenseEvidenceMatches(
-  member: PackageBlueprintMember,
-  evidence: PersistedLicenseEvidence,
-  normalizedSkillPath: string,
-  normalizedRepositoryUrl: string,
-  immutableRef: string,
-): boolean {
-  const expected = member.observedLicense;
-  if (expected.evidenceClass === "repository-license") {
-    return (
-      evidence.source === "repository-root-license-text" &&
-      evidence.path === expected.evidencePath &&
-      evidence.sourceUrl !== undefined &&
-      normalizeSourceUrl(evidence.sourceUrl) === normalizedRepositoryUrl &&
-      evidence.immutableRef === immutableRef
-    );
-  }
-  if (expected.evidenceClass === "skill-frontmatter") {
-    return evidence.source === "frontmatter-spdx" && evidence.path === "SKILL.md";
-  }
-  const repositoryEvidencePath =
-    normalizedSkillPath === "." ? evidence.path : `${normalizedSkillPath}/${evidence.path}`;
-  return (
-    evidence.source === "license-text-fingerprint" &&
-    repositoryEvidencePath === expected.evidencePath
-  );
 }
 
 function stableId(namespace: string, value: string): string {
@@ -654,446 +578,347 @@ export class CatalogRepository {
    * copied into package storage: a version contains only editorial metadata
    * and exact canonical skill/revision foreign keys.
    */
-  async publishPackageBlueprint(input: unknown): Promise<PackagePublicationResult> {
-    const blueprint = parsePackageBlueprint(input);
-    const digest = packageBlueprintDigest(blueprint);
-    const now = new Date();
-
-    return this.db.transaction(async (transaction) => {
-      const resolved: Array<{
-        position: number;
-        selectedByDefault: true;
-        skillId: string;
-        revisionId: string;
-        contentHash: string;
-      }> = [];
-      const selectedSkillIds = new Set<string>();
-      const selectedContentHashes = new Set<string>();
-
-      const reject = (
-        code: PackagePublicationErrorCode,
-        member: PackageBlueprintMember,
-        message: string,
-      ): never => {
-        throw new PackagePublicationError(code, blueprint.slug, member.position, message);
-      };
-
-      for (const member of [...blueprint.members].sort(
-        (left, right) => left.position - right.position,
-      )) {
-        if (!member.observedSource) {
-          reject(
-            "REVISION_MISMATCH",
-            member,
-            "A package member requires an observed public branch head before publication.",
-          );
-        }
-        const repositoryUrl = normalizeSourceUrl(member.locator.repositoryUrl);
-        const skillPath = normalizeSkillPath(member.locator.skillPath);
-        const observedHead = member.observedSource.headSha;
-        const candidates = await transaction
-          .select({
-            repositoryUrl: repositories.normalizedUrl,
-            repositoryOwner: repositories.owner,
-            repositoryName: repositories.name,
-            repositoryVisibility: repositories.visibility,
-            repositoryDefaultBranch: repositories.defaultBranch,
-            skillId: skills.id,
-            sourceUrl: skills.sourceUrl,
-            skillPath: skills.skillPath,
-            name: skills.upstreamName,
-            lifecycle: skills.lifecycle,
-            public: skills.public,
-            internal: skills.internal,
-            officialProvenance: skills.officialProvenance,
-            revisionId: skillRevisions.id,
-            immutableRef: skillRevisions.immutableRef,
-            contentHash: skillRevisions.contentHash,
-            upstreamHash: skillRevisions.upstreamHash,
-            installSpec: skillRevisions.installSpecJson,
-            license: skillRevisions.license,
-            metadata: skillRevisions.metadataJson,
-            isCurrent: skillRevisions.isCurrent,
-          })
-          .from(repositories)
-          .innerJoin(skills, eq(skills.repositoryId, repositories.id))
-          .innerJoin(skillRevisions, eq(skillRevisions.skillId, skills.id))
-          .where(
-            and(
-              eq(repositories.provider, "github"),
-              eq(repositories.normalizedUrl, repositoryUrl),
-              eq(repositories.visibility, "public"),
-              eq(skills.provider, "github"),
-              eq(skills.sourceUrl, repositoryUrl),
-              eq(skills.skillPath, skillPath),
-              eq(skills.upstreamName, member.locator.upstreamSkillName),
-              eq(skillRevisions.isCurrent, true),
-            ),
-          )
-          .limit(2);
-        if (candidates.length !== 1) {
-          reject(
-            "MEMBER_NOT_FOUND",
-            member,
-            "The exact public GitHub repository, SKILL.md path, and upstream name did not resolve uniquely.",
-          );
-        }
-        const candidate = candidates[0]!;
-        if (
-          candidate.repositoryOwner?.toLowerCase() !== member.locator.owner.toLowerCase() ||
-          candidate.repositoryName?.toLowerCase() !== member.locator.repository.toLowerCase() ||
-          candidate.repositoryVisibility !== "public" ||
-          candidate.public !== true ||
-          candidate.internal !== false ||
-          candidate.lifecycle !== "current" ||
-          candidate.isCurrent !== true
-        ) {
-          reject(
-            "PROVENANCE_MISMATCH",
-            member,
-            "The catalog record no longer has the required public current repository provenance.",
-          );
-        }
-        if (
-          candidate.immutableRef !== observedHead ||
-          candidate.upstreamHash !== observedHead ||
-          !/^[a-f0-9]{40}$/.test(candidate.immutableRef) ||
-          !/^[a-f0-9]{64}$/.test(candidate.contentHash) ||
-          !hasCompleteInventory(candidate.metadata, candidate.contentHash)
-        ) {
-          reject(
-            "REVISION_MISMATCH",
-            member,
-            "The current ingested revision is not bound to the blueprint head and complete artifact fingerprint.",
-          );
-        }
-        const installSpec = installSpecSchema.safeParse(candidate.installSpec);
-        if (
-          !installSpec.success ||
-          installSpec.data.kind !== "source" ||
-          normalizeSourceUrl(installSpec.data.sourceUrl) !== repositoryUrl ||
-          normalizeSkillPath(installSpec.data.skillPath) !== skillPath ||
-          installSpec.data.immutableRef !== observedHead
-        ) {
-          reject(
-            "REVISION_MISMATCH",
-            member,
-            "The immutable install evidence does not match the resolved repository, path, and head.",
-          );
-        }
-
-        const activeListings = await transaction
-          .select({ id: sourceListings.id })
-          .from(sourceListings)
-          .innerJoin(catalogSources, eq(catalogSources.id, sourceListings.sourceId))
-          .where(
-            and(
-              eq(sourceListings.skillId, candidate.skillId),
-              eq(sourceListings.status, "current"),
-              eq(sourceListings.sourceHash, observedHead),
-              eq(catalogSources.enabled, true),
-              eq(catalogSources.coverageState, "current"),
-            ),
-          )
-          .limit(1);
-        if (activeListings.length !== 1) {
-          reject(
-            "PROVENANCE_MISMATCH",
-            member,
-            "No current enabled complete source observation is bound to the blueprint head.",
-          );
-        }
-
-        const assessments = await transaction
-          .select({
-            state: trustAssessments.state,
-            immutableRef: trustAssessments.immutableRef,
-            contentHash: trustAssessments.contentHash,
-          })
-          .from(trustAssessments)
-          .where(eq(trustAssessments.revisionId, candidate.revisionId));
-        const boundAssessments = assessments.filter(
-          (assessment) =>
-            assessment.immutableRef === candidate.immutableRef &&
-            assessment.contentHash === candidate.contentHash,
+  private async resolveBoundPackageMember(
+    transaction: CatalogTransaction,
+    binding: PackageMemberEligibilityBinding,
+    packageSlug: string,
+    position: number,
+  ): Promise<EligiblePackageMember> {
+    try {
+      return await resolveEligiblePackageMember(transaction, binding);
+    } catch (error) {
+      if (error instanceof PackageMemberEligibilityError) {
+        throw new PackagePublicationError(
+          error.code,
+          packageSlug,
+          position,
+          error.message,
         );
-        if (
-          !boundAssessments.some((assessment) => ["pass", "warn"].includes(assessment.state)) ||
-          boundAssessments.some((assessment) => ["fail", "quarantined"].includes(assessment.state))
-        ) {
-          reject(
-            "TRUST_NOT_ELIGIBLE",
-            member,
-            "The exact revision does not have selectable revision-bound trust evidence.",
-          );
-        }
-        const observations = await transaction
-          .select({
-            id: auditRecords.id,
-            provider: auditRecords.provider,
-            providerSlug: auditRecords.providerSlug,
-            status: auditRecords.status,
-            observedAt: auditRecords.observedAt,
-          })
-          .from(auditRecords)
-          .innerJoin(sourceListings, eq(sourceListings.id, auditRecords.sourceListingId))
-          .where(
-            and(
-              eq(sourceListings.skillId, candidate.skillId),
-              eq(auditRecords.scope, "observation"),
-              eq(auditRecords.upstreamContentHash, observedHead),
-            ),
-          )
-          .orderBy(desc(auditRecords.observedAt), desc(auditRecords.id));
-        const latestObservationKeys = new Set<string>();
-        for (const observation of observations) {
-          const key = `${observation.provider}\0${observation.providerSlug ?? ""}`;
-          if (latestObservationKeys.has(key)) continue;
-          latestObservationKeys.add(key);
-          if (observation.status === "fail") {
-            reject(
-              "TRUST_NOT_ELIGIBLE",
-              member,
-              "The latest upstream observation for the exact revision failed.",
-            );
-          }
-        }
-
-        const evidence = persistedLicenseEvidence(candidate.metadata);
-        if (
-          candidate.license !== member.observedLicense.spdx ||
-          !packageEligibleLicenses.includes(
-            candidate.license as (typeof packageEligibleLicenses)[number],
-          ) ||
-          !evidence ||
-          !packageLicenseEvidenceMatches(
-            member,
-            evidence,
-            skillPath,
-            repositoryUrl,
-            observedHead,
-          )
-        ) {
-          reject(
-            "LICENSE_EVIDENCE_MISMATCH",
-            member,
-            "Verified revision-bound license evidence does not match the blueprint observation.",
-          );
-        }
-        if (member.publisherClass === "official" && candidate.officialProvenance !== true) {
-          reject(
-            "PROVENANCE_MISMATCH",
-            member,
-            "An official package member requires catalog-verified official publisher provenance.",
-          );
-        }
-        if (
-          selectedSkillIds.has(candidate.skillId) ||
-          selectedContentHashes.has(candidate.contentHash)
-        ) {
-          reject(
-            "DUPLICATE_MEMBER",
-            member,
-            "A package version cannot include duplicate canonical skills or mirrored artifact content.",
-          );
-        }
-        selectedSkillIds.add(candidate.skillId);
-        selectedContentHashes.add(candidate.contentHash);
-        resolved.push({
-          position: member.position,
-          selectedByDefault: member.defaultSelected,
-          skillId: candidate.skillId,
-          revisionId: candidate.revisionId,
-          contentHash: candidate.contentHash,
-        });
       }
+      throw error;
+    }
+  }
 
-      const [existingPackage] = await transaction
-        .select({ id: packages.id })
-        .from(packages)
-        .where(eq(packages.slug, blueprint.slug))
-        .limit(1);
-      const packageId = existingPackage?.id ?? stableId("package", blueprint.slug);
-      await transaction
-        .insert(packages)
-        .values({
-          id: packageId,
-          slug: blueprint.slug,
-          title: blueprint.editorial.title,
-          description: blueprint.editorial.summary,
-          published: false,
-          createdAt: now,
-          updatedAt: now,
-        })
-        .onConflictDoUpdate({
-          target: packages.slug,
-          set: {
-            title: blueprint.editorial.title,
-            description: blueprint.editorial.summary,
-            updatedAt: now,
-          },
-        });
+  private async publishBlueprintInTransaction(
+    transaction: CatalogTransaction,
+    blueprint: PackageBlueprint,
+    now: Date,
+  ): Promise<PackagePublicationResult> {
+    const digest = packageBlueprintDigest(blueprint);
+    const resolved: Array<{
+      position: number;
+      selectedByDefault: true;
+      binding: PackageMemberEligibilityBinding;
+      member: EligiblePackageMember;
+    }> = [];
+    const selectedSkillIds = new Set<string>();
+    const selectedContentHashes = new Set<string>();
 
-      const packageVersionId = stableId("package-version", `${packageId}:${digest}`);
-      const [existingVersion] = await transaction
-        .select({
-          version: packageVersions.version,
-          publishedAt: packageVersions.publishedAt,
-          blueprintDigest: packageVersions.blueprintDigest,
-        })
-        .from(packageVersions)
-        .where(
-          and(
-            eq(packageVersions.id, packageVersionId),
-            eq(packageVersions.packageId, packageId),
-          ),
-        )
-        .limit(1);
-      if (existingVersion) {
-        const existingMembers = await transaction
-          .select({
-            skillId: packageMembers.skillId,
-            revisionId: packageMembers.revisionId,
-            position: packageMembers.position,
-            selectedByDefault: packageMembers.selectedByDefault,
-          })
-          .from(packageMembers)
-          .where(eq(packageMembers.packageVersionId, packageVersionId))
-          .orderBy(asc(packageMembers.position));
-        const memberCount = existingMembers.length;
-        const membersMatch = existingMembers.every((existingMember, index) => {
-          const resolvedMember = resolved[index];
-          return (
-            resolvedMember !== undefined &&
-            existingMember.skillId === resolvedMember.skillId &&
-            existingMember.revisionId === resolvedMember.revisionId &&
-            existingMember.position === resolvedMember.position &&
-            existingMember.selectedByDefault === resolvedMember.selectedByDefault
-          );
-        });
-        if (
-          existingVersion.blueprintDigest !== digest ||
-          existingVersion.publishedAt === null ||
-          memberCount !== resolved.length ||
-          !membersMatch
-        ) {
-          throw new PackagePublicationError(
-            "REVISION_MISMATCH",
-            blueprint.slug,
-            0,
-            "An incomplete or inconsistent version already occupies the deterministic blueprint identity.",
-          );
-        }
-        await transaction
-          .update(packages)
-          .set({ published: true, updatedAt: now })
-          .where(eq(packages.id, packageId));
-        return {
-          packageId,
-          packageVersionId,
-          slug: blueprint.slug,
-          version: existingVersion.version,
-          blueprintDigest: digest,
-          memberCount,
-          publishedAt: existingVersion.publishedAt,
-          reused: true,
-        };
+    for (const blueprintMember of [...blueprint.members].sort(
+      (left, right) => left.position - right.position,
+    )) {
+      if (!blueprintMember.observedSource) {
+        throw new PackagePublicationError(
+          "REVISION_MISMATCH",
+          blueprint.slug,
+          blueprintMember.position,
+          "A package member requires an observed public branch head before publication.",
+        );
       }
-
-      const [{ latestVersion = 0 } = {}] = await transaction
-        .select({ latestVersion: sql<number>`coalesce(max(${packageVersions.version}), 0)` })
-        .from(packageVersions)
-        .where(eq(packageVersions.packageId, packageId));
-      const version = latestVersion + 1;
-      await transaction.insert(packageVersions).values({
-        id: packageVersionId,
-        packageId,
-        version,
-        blueprintSchemaVersion: blueprint.schemaVersion,
-        blueprintDigest: digest,
-        editorialJson: blueprint.editorial,
-        publishedAt: now,
-        createdAt: now,
+      const binding: PackageMemberEligibilityBinding = {
+        repositoryUrl: blueprintMember.locator.repositoryUrl,
+        skillPath: blueprintMember.locator.skillPath,
+        upstreamSkillName: blueprintMember.locator.upstreamSkillName,
+        observedHead: blueprintMember.observedSource.headSha,
+        observedLicense: blueprintMember.observedLicense.spdx,
+        licenseEvidenceClass: blueprintMember.observedLicense.evidenceClass,
+        licenseEvidencePath: blueprintMember.observedLicense.evidencePath,
+        publisherClass: blueprintMember.publisherClass,
+      };
+      const member = await this.resolveBoundPackageMember(
+        transaction,
+        binding,
+        blueprint.slug,
+        blueprintMember.position,
+      );
+      if (
+        selectedSkillIds.has(member.skillId) ||
+        selectedContentHashes.has(member.contentHash)
+      ) {
+        throw new PackagePublicationError(
+          "DUPLICATE_MEMBER",
+          blueprint.slug,
+          blueprintMember.position,
+          "A package cannot contain duplicate canonical skills or mirrored artifact content.",
+        );
+      }
+      selectedSkillIds.add(member.skillId);
+      selectedContentHashes.add(member.contentHash);
+      resolved.push({
+        position: blueprintMember.position,
+        selectedByDefault: blueprintMember.defaultSelected,
+        binding,
+        member,
       });
-      for (const member of resolved) {
-        await transaction.insert(packageMembers).values({
-          packageVersionId,
-          skillId: member.skillId,
-          revisionId: member.revisionId,
-          position: member.position,
-          selectedByDefault: member.selectedByDefault,
+    }
+
+    const [existingPackage] = await transaction
+      .select({
+        id: packages.id,
+        title: packages.title,
+        description: packages.description,
+        published: packages.published,
+      })
+      .from(packages)
+      .where(eq(packages.slug, blueprint.slug))
+      .limit(1);
+    const expectedPackageId = stableId("package", blueprint.slug);
+    if (existingPackage && existingPackage.id !== expectedPackageId) {
+      throw new PackagePublicationError(
+        "REVISION_MISMATCH",
+        blueprint.slug,
+        0,
+        "An existing package slug is not bound to its deterministic canonical ID.",
+      );
+    }
+    const packageId = expectedPackageId;
+    const packageVersionId = stableId(
+      "package-version",
+      packageId + ":" + digest,
+    );
+    const [latestPublishedVersion] = await transaction
+      .select({
+        id: packageVersions.id,
+        version: packageVersions.version,
+      })
+      .from(packageVersions)
+      .where(
+        and(
+          eq(packageVersions.packageId, packageId),
+          isNotNull(packageVersions.publishedAt),
+        ),
+      )
+      .orderBy(desc(packageVersions.version))
+      .limit(1);
+    const [existingVersion] = await transaction
+      .select({
+        id: packageVersions.id,
+        version: packageVersions.version,
+        blueprintSchemaVersion: packageVersions.blueprintSchemaVersion,
+        blueprintDigest: packageVersions.blueprintDigest,
+        editorial: packageVersions.editorialJson,
+        publishedAt: packageVersions.publishedAt,
+      })
+      .from(packageVersions)
+      .where(
+        and(
+          eq(packageVersions.id, packageVersionId),
+          eq(packageVersions.packageId, packageId),
+        ),
+      )
+      .limit(1);
+
+    if (existingVersion) {
+      const existingMembers = await transaction
+        .select({
+          skillId: packageMembers.skillId,
+          revisionId: packageMembers.revisionId,
+          position: packageMembers.position,
+          selectedByDefault: packageMembers.selectedByDefault,
+          repositoryUrl: packageMembers.upstreamRepositoryUrl,
+          skillPath: packageMembers.upstreamSkillPath,
+          upstreamSkillName: packageMembers.upstreamSkillName,
+          observedHead: packageMembers.observedHead,
+          observedLicense: packageMembers.observedLicense,
+          licenseEvidenceClass: packageMembers.licenseEvidenceClass,
+          licenseEvidencePath: packageMembers.licenseEvidencePath,
+          publisherClass: packageMembers.publisherClass,
+        })
+        .from(packageMembers)
+        .where(eq(packageMembers.packageVersionId, packageVersionId))
+        .orderBy(asc(packageMembers.position));
+      const membersMatch =
+        existingMembers.length === resolved.length &&
+        existingMembers.every((stored, index) => {
+          const expected = resolved[index];
+          return (
+            expected !== undefined &&
+            stored.skillId === expected.member.skillId &&
+            stored.revisionId === expected.member.revisionId &&
+            stored.position === expected.position &&
+            stored.selectedByDefault === expected.selectedByDefault &&
+            stored.repositoryUrl === expected.binding.repositoryUrl &&
+            stored.skillPath === expected.binding.skillPath &&
+            stored.upstreamSkillName === expected.binding.upstreamSkillName &&
+            stored.observedHead === expected.binding.observedHead &&
+            stored.observedLicense === expected.binding.observedLicense &&
+            stored.licenseEvidenceClass === expected.binding.licenseEvidenceClass &&
+            stored.licenseEvidencePath === expected.binding.licenseEvidencePath &&
+            stored.publisherClass === expected.binding.publisherClass
+          );
         });
+      const storedEditorial = packageEditorialSchema.safeParse(existingVersion.editorial);
+      const editorialMatches =
+        storedEditorial.success &&
+        JSON.stringify(storedEditorial.data) === JSON.stringify(blueprint.editorial);
+      if (
+        latestPublishedVersion?.id !== existingVersion.id ||
+        existingVersion.publishedAt === null ||
+        existingVersion.blueprintSchemaVersion !== blueprint.schemaVersion ||
+        existingVersion.blueprintDigest !== digest ||
+        !editorialMatches ||
+        !membersMatch ||
+        existingPackage?.published !== true ||
+        existingPackage.title !== blueprint.editorial.title ||
+        existingPackage.description !== blueprint.editorial.summary
+      ) {
+        throw new PackagePublicationError(
+          "REVISION_MISMATCH",
+          blueprint.slug,
+          0,
+          "An old or inconsistent version cannot be reused or overwrite current package metadata.",
+        );
       }
-      await transaction
-        .update(packages)
-        .set({ published: true, updatedAt: now })
-        .where(eq(packages.id, packageId));
       return {
         packageId,
         packageVersionId,
         slug: blueprint.slug,
-        version,
+        version: existingVersion.version,
         blueprintDigest: digest,
         memberCount: resolved.length,
-        publishedAt: now,
-        reused: false,
+        publishedAt: existingVersion.publishedAt,
+        reused: true,
       };
+    }
+
+    const [latestVersion] = await transaction
+      .select({ version: packageVersions.version })
+      .from(packageVersions)
+      .where(eq(packageVersions.packageId, packageId))
+      .orderBy(desc(packageVersions.version))
+      .limit(1);
+    const version = (latestVersion?.version ?? 0) + 1;
+    if (existingPackage) {
+      await transaction
+        .update(packages)
+        .set({
+          title: blueprint.editorial.title,
+          description: blueprint.editorial.summary,
+          published: true,
+          updatedAt: now,
+        })
+        .where(eq(packages.id, packageId));
+    } else {
+      await transaction.insert(packages).values({
+        id: packageId,
+        slug: blueprint.slug,
+        title: blueprint.editorial.title,
+        description: blueprint.editorial.summary,
+        published: true,
+        createdAt: now,
+        updatedAt: now,
+      });
+    }
+    await transaction.insert(packageVersions).values({
+      id: packageVersionId,
+      packageId,
+      version,
+      blueprintSchemaVersion: blueprint.schemaVersion,
+      blueprintDigest: digest,
+      editorialJson: blueprint.editorial,
+      publishedAt: now,
+      createdAt: now,
+    });
+    for (const resolvedMember of resolved) {
+      await transaction.insert(packageMembers).values({
+        packageVersionId,
+        skillId: resolvedMember.member.skillId,
+        revisionId: resolvedMember.member.revisionId,
+        position: resolvedMember.position,
+        selectedByDefault: resolvedMember.selectedByDefault,
+        upstreamRepositoryUrl: resolvedMember.binding.repositoryUrl,
+        upstreamSkillPath: resolvedMember.binding.skillPath,
+        upstreamSkillName: resolvedMember.binding.upstreamSkillName,
+        observedHead: resolvedMember.binding.observedHead,
+        observedLicense: resolvedMember.binding.observedLicense,
+        licenseEvidenceClass: resolvedMember.binding.licenseEvidenceClass,
+        licenseEvidencePath: resolvedMember.binding.licenseEvidencePath,
+        publisherClass: resolvedMember.binding.publisherClass,
+      });
+    }
+    return {
+      packageId,
+      packageVersionId,
+      slug: blueprint.slug,
+      version,
+      blueprintDigest: digest,
+      memberCount: resolved.length,
+      publishedAt: now,
+      reused: false,
+    };
+  }
+
+  async publishPackageBlueprintSet(
+    inputs: readonly unknown[],
+  ): Promise<PackagePublicationResult[]> {
+    if (inputs.length === 0 || inputs.length > 100) {
+      throw new PackagePublicationError(
+        "PACKAGE_SET_INVALID",
+        "",
+        0,
+        "A publication set must contain between one and 100 blueprints.",
+      );
+    }
+    const blueprints = inputs.map((input) => parsePackageBlueprint(input));
+    if (new Set(blueprints.map((blueprint) => blueprint.slug)).size !== blueprints.length) {
+      throw new PackagePublicationError(
+        "PACKAGE_SET_INVALID",
+        "",
+        0,
+        "A publication set cannot contain the same package slug twice.",
+      );
+    }
+    const now = new Date();
+    return this.db.transaction(async (transaction) => {
+      const published: PackagePublicationResult[] = [];
+      for (const blueprint of blueprints) {
+        published.push(
+          await this.publishBlueprintInTransaction(transaction, blueprint, now),
+        );
+      }
+      return published;
     });
   }
 
-  async listPublishedPackages(limit = 100): Promise<PublishedPackageSummary[]> {
-    const boundedLimit = Math.min(Math.max(limit, 1), 100);
-    const rows = await this.db
-      .select({
-        id: packages.id,
-        slug: packages.slug,
-        title: packages.title,
-        description: packages.description,
-        versionId: packageVersions.id,
-        version: packageVersions.version,
-        publishedAt: packageVersions.publishedAt,
-        editorial: packageVersions.editorialJson,
-        memberCount: sql<number>`(
-          select count(*) from package_members members
-          where members.package_version_id = ${packageVersions.id}
-        )`,
-      })
-      .from(packages)
-      .innerJoin(packageVersions, eq(packageVersions.packageId, packages.id))
-      .where(
-        and(
-          eq(packages.published, true),
-          isNotNull(packageVersions.publishedAt),
-          eq(packageVersions.blueprintSchemaVersion, 1),
-          like(packageVersions.blueprintDigest, "sha256:%"),
-          sql`${packageVersions.version} = (
-            select max(latest.version) from package_versions latest
-            where latest.package_id = ${packages.id}
-              and latest.published_at is not null
-          )`,
-        ),
-      )
-      .orderBy(asc(packages.title), asc(packages.id))
-      .limit(boundedLimit);
-    const visible: PublishedPackageSummary[] = [];
-    for (const row of rows) {
-      if (!row.publishedAt) continue;
-      const members = await this.resolvePackage(row.slug, row.version);
-      if (members.length !== row.memberCount) continue;
-      visible.push({ ...row, publishedAt: row.publishedAt });
+  async publishPackageBlueprint(input: unknown): Promise<PackagePublicationResult> {
+    const [result] = await this.publishPackageBlueprintSet([input]);
+    if (!result) {
+      throw new PackagePublicationError(
+        "PACKAGE_SET_INVALID",
+        "",
+        0,
+        "The requested package was not published.",
+      );
     }
-    return visible;
+    return result;
   }
 
-  async publishedPackageDetails(packageId: string, version?: number) {
-    const versionCondition = version
-      ? eq(packageVersions.version, version)
-      : sql`${packageVersions.version} = (
-          select max(latest.version) from package_versions latest
-          where latest.package_id = ${packages.id}
-            and latest.published_at is not null
-        )`;
-    const [selected] = await this.db
+  private async resolvePublishedPackageVersion(
+    transaction: CatalogTransaction,
+    selector: Readonly<{ packageId?: string; slug?: string; version?: number }>,
+  ) {
+    const conditions = [
+      eq(packages.published, true),
+      isNotNull(packageVersions.publishedAt),
+      eq(packageVersions.blueprintSchemaVersion, 1),
+      like(packageVersions.blueprintDigest, "sha256:%"),
+    ];
+    if (selector.packageId) conditions.push(eq(packages.id, selector.packageId));
+    if (selector.slug) conditions.push(eq(packages.slug, selector.slug));
+    if (selector.version !== undefined) {
+      conditions.push(eq(packageVersions.version, selector.version));
+    }
+    const [selected] = await transaction
       .select({
         id: packages.id,
         slug: packages.slug,
@@ -1108,138 +933,157 @@ export class CatalogRepository {
       })
       .from(packages)
       .innerJoin(packageVersions, eq(packageVersions.packageId, packages.id))
-      .where(
-        and(
-          eq(packages.id, packageId),
-          eq(packages.published, true),
-          isNotNull(packageVersions.publishedAt),
-          eq(packageVersions.blueprintSchemaVersion, 1),
-          like(packageVersions.blueprintDigest, "sha256:%"),
-          versionCondition,
-        ),
-      )
+      .where(and(...conditions))
+      .orderBy(desc(packageVersions.version))
       .limit(1);
-    if (!selected?.publishedAt) return null;
-    const members = await this.resolvePackage(selected.slug, selected.version);
-    if (members.length === 0) return null;
-    return { ...selected, publishedAt: selected.publishedAt, members };
+    if (
+      !selected?.publishedAt ||
+      !/^sha256:[a-f0-9]{64}$/.test(selected.blueprintDigest)
+    ) {
+      return null;
+    }
+    const editorial = packageEditorialSchema.safeParse(selected.editorial);
+    if (
+      !editorial.success ||
+      selected.title !== editorial.data.title ||
+      selected.description !== editorial.data.summary
+    ) {
+      return null;
+    }
+    const storedMembers = await transaction
+      .select({
+        skillId: packageMembers.skillId,
+        revisionId: packageMembers.revisionId,
+        position: packageMembers.position,
+        selectedByDefault: packageMembers.selectedByDefault,
+        repositoryUrl: packageMembers.upstreamRepositoryUrl,
+        skillPath: packageMembers.upstreamSkillPath,
+        upstreamSkillName: packageMembers.upstreamSkillName,
+        observedHead: packageMembers.observedHead,
+        observedLicense: packageMembers.observedLicense,
+        licenseEvidenceClass: packageMembers.licenseEvidenceClass,
+        licenseEvidencePath: packageMembers.licenseEvidencePath,
+        publisherClass: packageMembers.publisherClass,
+      })
+      .from(packageMembers)
+      .where(eq(packageMembers.packageVersionId, selected.versionId))
+      .orderBy(asc(packageMembers.position));
+    if (storedMembers.length === 0) return null;
+
+    const members: Array<
+      EligiblePackageMember & {
+        position: number;
+        selectedByDefault: boolean;
+      }
+    > = [];
+    const skillIds = new Set<string>();
+    const contentHashes = new Set<string>();
+    for (const stored of storedMembers) {
+      if (
+        stored.publisherClass === "legacy" ||
+        !["official", "community"].includes(stored.publisherClass) ||
+        !["repository-license", "skill-local-license", "skill-frontmatter"].includes(
+          stored.licenseEvidenceClass,
+        )
+      ) {
+        return null;
+      }
+      const binding: PackageMemberEligibilityBinding = {
+        repositoryUrl: stored.repositoryUrl,
+        skillPath: stored.skillPath,
+        upstreamSkillName: stored.upstreamSkillName,
+        observedHead: stored.observedHead,
+        observedLicense: stored.observedLicense,
+        licenseEvidenceClass: stored.licenseEvidenceClass as PackageMemberEligibilityBinding["licenseEvidenceClass"],
+        licenseEvidencePath: stored.licenseEvidencePath,
+        publisherClass: stored.publisherClass as PackageMemberEligibilityBinding["publisherClass"],
+        skillId: stored.skillId,
+        revisionId: stored.revisionId,
+      };
+      let member: EligiblePackageMember;
+      try {
+        member = await resolveEligiblePackageMember(transaction, binding);
+      } catch (error) {
+        if (error instanceof PackageMemberEligibilityError) return null;
+        throw error;
+      }
+      if (skillIds.has(member.skillId) || contentHashes.has(member.contentHash)) {
+        return null;
+      }
+      skillIds.add(member.skillId);
+      contentHashes.add(member.contentHash);
+      members.push({
+        ...member,
+        position: stored.position,
+        selectedByDefault: stored.selectedByDefault,
+      });
+    }
+    return {
+      ...selected,
+      editorial: editorial.data,
+      publishedAt: selected.publishedAt,
+      memberCount: members.length,
+      members,
+    };
+  }
+
+  async listPublishedPackages(limit = 100): Promise<PublishedPackageSummary[]> {
+    const boundedLimit = Math.min(Math.max(limit, 1), 100);
+    return this.db.transaction(async (transaction) => {
+      const packageRows = await transaction
+        .select({ id: packages.id })
+        .from(packages)
+        .where(eq(packages.published, true))
+        .orderBy(asc(packages.title), asc(packages.id))
+        .limit(boundedLimit);
+      const visible: PublishedPackageSummary[] = [];
+      for (const packageRow of packageRows) {
+        const resolved = await this.resolvePublishedPackageVersion(transaction, {
+          packageId: packageRow.id,
+        });
+        if (!resolved) continue;
+        visible.push({
+          id: resolved.id,
+          slug: resolved.slug,
+          title: resolved.title,
+          description: resolved.description,
+          versionId: resolved.versionId,
+          version: resolved.version,
+          publishedAt: resolved.publishedAt,
+          memberCount: resolved.memberCount,
+          editorial: resolved.editorial,
+          blueprintSchemaVersion: resolved.blueprintSchemaVersion,
+          blueprintDigest: resolved.blueprintDigest,
+        });
+      }
+      return visible;
+    });
+  }
+
+  async publishedPackageDetails(packageId: string, version?: number) {
+    return this.db.transaction((transaction) =>
+      this.resolvePublishedPackageVersion(transaction, { packageId, version }),
+    );
   }
 
   async resolvePackage(slug: string, version?: number) {
-    const versionCondition = version
-      ? eq(packageVersions.version, version)
-      : sql`${packageVersions.version} = (
-          select max(latest.version)
-          from package_versions latest
-          where latest.package_id = ${packages.id}
-            and latest.published_at is not null
-        )`;
-    const [selected] = await this.db
-      .select({ id: packageVersions.id })
-      .from(packages)
-      .innerJoin(packageVersions, eq(packageVersions.packageId, packages.id))
-      .where(
-        and(
-          eq(packages.slug, slug),
-          eq(packages.published, true),
-          isNotNull(packageVersions.publishedAt),
-          versionCondition,
-        ),
-      )
-      .limit(1);
-    if (!selected) return [];
-    const [{ count: expectedCount = 0 } = {}] = await this.db
-      .select({ count: sql<number>`count(*)` })
-      .from(packageMembers)
-      .where(eq(packageMembers.packageVersionId, selected.id));
-    const rows = await this.db
-      .select({
-        packageId: packages.id,
-        slug: packages.slug,
-        title: packages.title,
-        description: packages.description,
-        version: packageVersions.version,
-        position: packageMembers.position,
-        selectedByDefault: packageMembers.selectedByDefault,
-        skillId: skills.id,
-        name: skills.upstreamName,
-        sourceUrl: skills.sourceUrl,
-        skillPath: skills.skillPath,
-        revisionId: skillRevisions.id,
-        immutableRef: skillRevisions.immutableRef,
-        contentHash: skillRevisions.contentHash,
-        installSpec: skillRevisions.installSpecJson,
-        license: skillRevisions.license,
-        revisionMetadata: skillRevisions.metadataJson,
-        trustState: sql<"unreviewed" | "pass" | "warn">`
-          case
-            when exists (
-              select 1 from trust_assessments ta
-              where ta.revision_id = ${skillRevisions.id}
-                and ta.immutable_ref = ${skillRevisions.immutableRef}
-                and ta.content_hash = ${skillRevisions.contentHash}
-                and ta.state = 'warn'
-            ) then 'warn'
-            when exists (
-              select 1 from trust_assessments ta
-              where ta.revision_id = ${skillRevisions.id}
-                and ta.immutable_ref = ${skillRevisions.immutableRef}
-                and ta.content_hash = ${skillRevisions.contentHash}
-                and ta.state = 'pass'
-            ) then 'pass'
-            else 'unreviewed'
-          end
-        `,
-      })
-      .from(packages)
-      .innerJoin(packageVersions, eq(packageVersions.packageId, packages.id))
-      .innerJoin(packageMembers, eq(packageMembers.packageVersionId, packageVersions.id))
-      .innerJoin(skills, eq(skills.id, packageMembers.skillId))
-      .innerJoin(
-        skillRevisions,
-        and(
-          eq(skillRevisions.id, packageMembers.revisionId),
-          eq(skillRevisions.skillId, skills.id),
-        ),
-      )
-      .where(
-        and(
-          eq(packages.slug, slug),
-          eq(packages.published, true),
-          eq(packageVersions.id, selected.id),
-          isNotNull(packageVersions.publishedAt),
-          eq(skills.public, true),
-          eq(skills.internal, false),
-          inArray(skills.lifecycle, ["current", "stale"]),
-          ne(skillRevisions.immutableRef, ""),
-          ne(skillRevisions.contentHash, ""),
-          isNotNull(skillRevisions.upstreamHash),
-          ne(skillRevisions.upstreamHash, ""),
-          hasStructurallyValidInstallSpec(),
-          hasActiveSourceListing(),
-          inArray(skillRevisions.license, packageEligibleLicenses),
-          sql`json_extract(${skillRevisions.metadataJson}, '$.licenseEvidence.sha256') is not null`,
-          notExists(
-            this.db
-              .select({ value: sql`1` })
-              .from(trustAssessments)
-              .where(
-                and(
-                  eq(trustAssessments.revisionId, skillRevisions.id),
-                  eq(trustAssessments.immutableRef, skillRevisions.immutableRef),
-                  eq(trustAssessments.contentHash, skillRevisions.contentHash),
-                  inArray(trustAssessments.state, ["fail", "quarantined"]),
-                ),
-              ),
-          ),
-          hasSelectableTrust(),
-          noLatestObservedFail(),
-        ),
-      )
-      .orderBy(desc(packageVersions.version), asc(packageMembers.position));
-    return rows.length === expectedCount && rows.every((row) => hasValidInstallSpec(row.installSpec))
-      ? rows
-      : [];
+    const resolved = await this.db.transaction((transaction) =>
+      this.resolvePublishedPackageVersion(transaction, { slug, version }),
+    );
+    if (!resolved) return [];
+    return resolved.members.map((member) => ({
+      packageId: resolved.id,
+      slug: resolved.slug,
+      title: resolved.title,
+      description: resolved.description,
+      versionId: resolved.versionId,
+      version: resolved.version,
+      blueprintSchemaVersion: resolved.blueprintSchemaVersion,
+      blueprintDigest: resolved.blueprintDigest,
+      editorial: resolved.editorial,
+      publishedAt: resolved.publishedAt,
+      ...member,
+    }));
   }
 
   async coverage(now = new Date()) {

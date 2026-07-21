@@ -21,10 +21,7 @@ async function main(): Promise<void> {
   try {
     await migrateCatalogDatabase(connection.client);
     const repository = new CatalogRepository(connection.db);
-    const published = [];
-    for (const blueprint of requestedBlueprints()) {
-      published.push(await repository.publishPackageBlueprint(blueprint));
-    }
+    const published = await repository.publishPackageBlueprintSet(requestedBlueprints());
     console.log(JSON.stringify({ published }, null, 2));
   } finally {
     connection.client.close();
