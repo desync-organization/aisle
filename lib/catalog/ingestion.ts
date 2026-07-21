@@ -194,11 +194,14 @@ export class CatalogIngestionService {
       skillPath: normalized.skillPath,
       categoryHints: decoded.categoryHints,
     });
-    await this.repository.replaceSkillCategories(
+    await this.repository.replaceSkillCategoryEvidence({
       fence,
-      persisted.skillId,
+      listingId: listing.id,
+      skillId: persisted.skillId,
+      revisionId: persisted.revisionId,
+      sourceHash: normalized.upstreamHash,
       categorySlugs,
-    );
+    });
     return {
       listingId: listing.id,
       skillId: persisted.skillId,

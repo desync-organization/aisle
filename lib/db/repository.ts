@@ -40,6 +40,7 @@ import {
   repositories,
   skillAliases,
   skillCategories,
+  skillCategoryEvidence,
   skillDuplicates,
   skillRevisions,
   skills,
@@ -338,6 +339,99 @@ export class CatalogRepository {
       .where(eq(skills.id, skillId));
   }
 
+  private async recomputeSkillCategoryMaterializationInTransaction(
+    transaction: CatalogTransaction,
+    skillIds: Iterable<string>,
+  ): Promise<void> {
+    const orderedSkillIds = [...new Set(skillIds)].sort();
+    const chunkSize = 25;
+    for (let offset = 0; offset < orderedSkillIds.length; offset += chunkSize) {
+      const chunk = orderedSkillIds.slice(offset, offset + chunkSize);
+      const eligible = await transaction
+        .selectDistinct({
+          skillId: skillCategoryEvidence.skillId,
+          categoryId: skillCategoryEvidence.categoryId,
+          categoryOrder: categories.sortOrder,
+          categorySlug: categories.slug,
+        })
+        .from(skillCategoryEvidence)
+        .innerJoin(
+          sourceListings,
+          and(
+            eq(sourceListings.id, skillCategoryEvidence.sourceListingId),
+            eq(sourceListings.skillId, skillCategoryEvidence.skillId),
+            eq(sourceListings.sourceHash, skillCategoryEvidence.sourceHash),
+            eq(sourceListings.lastSeenRunId, skillCategoryEvidence.observedRunId),
+          ),
+        )
+        .innerJoin(catalogSources, eq(catalogSources.id, sourceListings.sourceId))
+        .innerJoin(
+          skillRevisions,
+          and(
+            eq(skillRevisions.id, skillCategoryEvidence.revisionId),
+            eq(skillRevisions.skillId, skillCategoryEvidence.skillId),
+            eq(skillRevisions.upstreamHash, skillCategoryEvidence.sourceHash),
+            eq(skillRevisions.isCurrent, true),
+          ),
+        )
+        .innerJoin(categories, eq(categories.id, skillCategoryEvidence.categoryId))
+        .where(
+          and(
+            inArray(skillCategoryEvidence.skillId, chunk),
+            eq(sourceListings.status, "current"),
+            eq(catalogSources.enabled, true),
+            inArray(catalogSources.coverageState, ["current", "partial"]),
+            sql<boolean>`(
+              ${catalogSources.freshnessPolicy} = 'retain'
+              or (
+                ${catalogSources.freshnessPolicy} = 'latest-completed-observation'
+                and ${skillCategoryEvidence.observedRunId} = ${sourceListings.lastCompletedObservationRunId}
+                and ${sourceListings.lastCompletedObservationRunId} = (
+                  select completed_category_observation.id
+                  from sync_runs completed_category_observation
+                  where completed_category_observation.source_id = ${catalogSources.id}
+                    and completed_category_observation.observation_sweep_complete = 1
+                    and completed_category_observation.finished_at is not null
+                    and completed_category_observation.status in ('succeeded', 'partial')
+                  order by completed_category_observation.finished_at desc,
+                    completed_category_observation.started_at desc,
+                    completed_category_observation.id desc
+                  limit 1
+                )
+              )
+            )`,
+          ),
+        )
+        .orderBy(
+          asc(skillCategoryEvidence.skillId),
+          asc(categories.sortOrder),
+          asc(categories.slug),
+          asc(skillCategoryEvidence.categoryId),
+        );
+
+      await transaction
+        .delete(skillCategories)
+        .where(
+          and(
+            inArray(skillCategories.skillId, chunk),
+            eq(skillCategories.attribution, SOURCE_CATEGORY_ATTRIBUTION),
+          ),
+        );
+      if (eligible.length) {
+        await transaction
+          .insert(skillCategories)
+          .values(
+            eligible.map(({ skillId, categoryId }) => ({
+              skillId,
+              categoryId,
+              attribution: SOURCE_CATEGORY_ATTRIBUTION,
+            })),
+          )
+          .onConflictDoNothing();
+      }
+    }
+  }
+
   private async markListingUnresolvedInTransaction(
     transaction: CatalogTransaction,
     fence: CatalogMutationFence,
@@ -357,6 +451,9 @@ export class CatalogRepository {
       .limit(1);
     if (!listing) return false;
     await transaction
+      .delete(skillCategoryEvidence)
+      .where(eq(skillCategoryEvidence.sourceListingId, listingId));
+    await transaction
       .update(sourceListings)
       .set({
         skillId: null,
@@ -375,6 +472,10 @@ export class CatalogRepository {
       );
     if (listing.skillId) {
       await this.recomputeSkillLifecycleInTransaction(transaction, listing.skillId, now);
+      await this.recomputeSkillCategoryMaterializationInTransaction(
+        transaction,
+        [listing.skillId],
+      );
     }
     return true;
   }
@@ -493,29 +594,45 @@ export class CatalogRepository {
       });
   }
 
-  async replaceSkillCategories(
-    fence: CatalogMutationFence,
-    skillId: string,
-    categorySlugs: readonly CanonicalCategorySlug[],
-  ): Promise<void> {
-    const requested = [...new Set(categorySlugs)];
+  async replaceSkillCategoryEvidence(input: {
+    fence: CatalogMutationFence;
+    listingId: string;
+    skillId: string;
+    revisionId: string;
+    sourceHash: string;
+    categorySlugs: readonly CanonicalCategorySlug[];
+  }): Promise<void> {
+    const requested = [...new Set(input.categorySlugs)];
     const allowed = new Set<string>(CANONICAL_CATEGORY_SLUGS);
     if (requested.some((slug) => !allowed.has(slug))) {
       throw new Error("Category assignment referenced a non-canonical taxonomy slug");
     }
 
     await this.db.transaction(async (transaction) => {
-      await this.assertActiveSyncLease(transaction, fence);
+      await this.assertActiveSyncLease(transaction, input.fence);
       const [binding] = await transaction
-        .select({ id: sourceListings.id })
+        .select({
+          listingId: sourceListings.id,
+          revisionId: skillRevisions.id,
+        })
         .from(sourceListings)
+        .innerJoin(
+          skillRevisions,
+          and(
+            eq(skillRevisions.id, input.revisionId),
+            eq(skillRevisions.skillId, input.skillId),
+            eq(skillRevisions.upstreamHash, input.sourceHash),
+            eq(skillRevisions.isCurrent, true),
+          ),
+        )
         .where(
           and(
-            eq(sourceListings.sourceId, fence.sourceId),
-            eq(sourceListings.lastSeenRunId, fence.runId),
-            eq(sourceListings.skillId, skillId),
+            eq(sourceListings.id, input.listingId),
+            eq(sourceListings.sourceId, input.fence.sourceId),
+            eq(sourceListings.lastSeenRunId, input.fence.runId),
+            eq(sourceListings.skillId, input.skillId),
             eq(sourceListings.status, "current"),
-            isNotNull(sourceListings.sourceHash),
+            eq(sourceListings.sourceHash, input.sourceHash),
           ),
         )
         .limit(1);
@@ -534,68 +651,116 @@ export class CatalogRepository {
       }
 
       await transaction
-        .delete(skillCategories)
-        .where(
-          and(
-            eq(skillCategories.skillId, skillId),
-            eq(skillCategories.attribution, SOURCE_CATEGORY_ATTRIBUTION),
-          ),
-        );
+        .delete(skillCategoryEvidence)
+        .where(eq(skillCategoryEvidence.sourceListingId, input.listingId));
       if (resolved.length) {
+        const observedAt = new Date();
         await transaction
-          .insert(skillCategories)
+          .insert(skillCategoryEvidence)
           .values(
             resolved.map((category) => ({
-              skillId,
+              sourceListingId: input.listingId,
+              skillId: input.skillId,
+              revisionId: input.revisionId,
               categoryId: category.id,
-              attribution: SOURCE_CATEGORY_ATTRIBUTION,
+              sourceHash: input.sourceHash,
+              observedRunId: input.fence.runId,
+              observedAt,
             })),
-          )
-          .onConflictDoNothing();
+          );
       }
+      await this.recomputeSkillCategoryMaterializationInTransaction(
+        transaction,
+        [input.skillId],
+      );
     });
   }
 
   async upsertSource(input: SourceDescriptorInput): Promise<void> {
     const now = new Date();
-    await this.db
-      .insert(catalogSources)
-      .values({
-        ...input,
-        termsUrl: input.termsUrl ?? null,
-        enabled: input.enabled ?? true,
-        freshnessPolicy: input.freshnessPolicy ?? "retain",
-        coverageState: input.initialCoverageState ?? "not-synced",
-        exclusionsJson: input.knownExclusions ? [...input.knownExclusions] : [],
-        createdAt: now,
-        updatedAt: now,
-      })
-      .onConflictDoUpdate({
-        target: catalogSources.id,
-        set: {
-          name: input.name,
-          baseUrl: input.baseUrl,
-          mode: input.mode,
-          freshnessPolicy: input.freshnessPolicy ?? "retain",
-          upstreamIdentifier: input.upstreamIdentifier,
+    await this.db.transaction(async (transaction) => {
+      const [previous] = await transaction
+        .select({
+          enabled: catalogSources.enabled,
+          freshnessPolicy: catalogSources.freshnessPolicy,
+        })
+        .from(catalogSources)
+        .where(eq(catalogSources.id, input.id))
+        .limit(1);
+      const enabled = input.enabled ?? true;
+      const freshnessPolicy = input.freshnessPolicy ?? "retain";
+      await transaction
+        .insert(catalogSources)
+        .values({
+          ...input,
           termsUrl: input.termsUrl ?? null,
-          enabled: input.enabled ?? true,
+          enabled,
+          freshnessPolicy,
+          coverageState: input.initialCoverageState ?? "not-synced",
+          exclusionsJson: input.knownExclusions ? [...input.knownExclusions] : [],
+          createdAt: now,
           updatedAt: now,
-        },
-      });
+        })
+        .onConflictDoUpdate({
+          target: catalogSources.id,
+          set: {
+            name: input.name,
+            baseUrl: input.baseUrl,
+            mode: input.mode,
+            freshnessPolicy,
+            upstreamIdentifier: input.upstreamIdentifier,
+            termsUrl: input.termsUrl ?? null,
+            enabled,
+            updatedAt: now,
+          },
+        });
+      if (
+        previous &&
+        (previous.enabled !== enabled || previous.freshnessPolicy !== freshnessPolicy)
+      ) {
+        const affected = await transaction
+          .selectDistinct({ skillId: sourceListings.skillId })
+          .from(sourceListings)
+          .where(
+            and(
+              eq(sourceListings.sourceId, input.id),
+              isNotNull(sourceListings.skillId),
+            ),
+          );
+        await this.recomputeSkillCategoryMaterializationInTransaction(
+          transaction,
+          affected.flatMap(({ skillId }) => skillId ? [skillId] : []),
+        );
+      }
+    });
   }
 
   async markSourceNotConfigured(sourceId: string, exclusions: readonly string[]): Promise<void> {
-    await this.db
-      .update(catalogSources)
-      .set({
-        coverageState: "not-configured",
-        lastSuccessfulSyncAt: null,
-        lastError: null,
-        exclusionsJson: [...exclusions],
-        updatedAt: new Date(),
-      })
-      .where(eq(catalogSources.id, sourceId));
+    await this.db.transaction(async (transaction) => {
+      const affected = await transaction
+        .selectDistinct({ skillId: sourceListings.skillId })
+        .from(sourceListings)
+        .where(
+          and(
+            eq(sourceListings.sourceId, sourceId),
+            isNotNull(sourceListings.skillId),
+          ),
+        );
+      await transaction
+        .update(catalogSources)
+        .set({
+          coverageState: "not-configured",
+          lastSuccessfulSyncAt: null,
+          lastError: null,
+          exclusionsJson: [...exclusions],
+          updatedAt: new Date(),
+        })
+        .where(eq(catalogSources.id, sourceId));
+      await this.recomputeSkillCategoryMaterializationInTransaction(
+        transaction,
+        affected.flatMap(({ skillId }) => skillId ? [skillId] : []),
+      );
+    });
   }
 
   async search(options: CatalogSearchOptions = {}) {
@@ -1205,6 +1370,19 @@ export class CatalogRepository {
           updatedAt: now,
         })
         .where(eq(catalogSources.id, input.sourceId));
+      const categoryAffected = await transaction
+        .selectDistinct({ skillId: sourceListings.skillId })
+        .from(sourceListings)
+        .where(
+          and(
+            eq(sourceListings.sourceId, input.sourceId),
+            isNotNull(sourceListings.skillId),
+          ),
+        );
+      await this.recomputeSkillCategoryMaterializationInTransaction(
+        transaction,
+        categoryAffected.flatMap(({ skillId }) => skillId ? [skillId] : []),
+      );
     });
   }
 
@@ -1251,6 +1429,19 @@ export class CatalogRepository {
           updatedAt: now,
         })
         .where(eq(catalogSources.id, input.sourceId));
+      const categoryAffected = await transaction
+        .selectDistinct({ skillId: sourceListings.skillId })
+        .from(sourceListings)
+        .where(
+          and(
+            eq(sourceListings.sourceId, input.sourceId),
+            isNotNull(sourceListings.skillId),
+          ),
+        );
+      await this.recomputeSkillCategoryMaterializationInTransaction(
+        transaction,
+        categoryAffected.flatMap(({ skillId }) => skillId ? [skillId] : []),
+      );
     });
   }
 
@@ -1306,6 +1497,12 @@ export class CatalogRepository {
         previous.sourceHash === input.sourceHash,
       );
 
+      if (previous) {
+        await transaction
+          .delete(skillCategoryEvidence)
+          .where(eq(skillCategoryEvidence.sourceListingId, id));
+      }
+
       await transaction
         .insert(sourceListings)
         .values({
@@ -1351,6 +1548,12 @@ export class CatalogRepository {
       if (previous?.skillId && (invalidatesExistingBinding ||
         (restoresExistingBinding && previous.status !== "current"))) {
         await this.recomputeSkillLifecycleInTransaction(transaction, previous.skillId, now);
+      }
+      if (previous?.skillId) {
+        await this.recomputeSkillCategoryMaterializationInTransaction(
+          transaction,
+          [previous.skillId],
+        );
       }
 
       return {
@@ -1418,6 +1621,29 @@ export class CatalogRepository {
   }): Promise<void> {
     await this.db.transaction(async (transaction) => {
       await this.assertActiveSyncLease(transaction, input.fence);
+      const [listing] = await transaction
+        .select({
+          skillId: sourceListings.skillId,
+          sourceHash: sourceListings.sourceHash,
+        })
+        .from(sourceListings)
+        .where(
+          and(
+            eq(sourceListings.id, input.listingId),
+            eq(sourceListings.sourceId, input.fence.sourceId),
+            eq(sourceListings.lastSeenRunId, input.fence.runId),
+          ),
+        )
+        .limit(1);
+      if (!listing) {
+        throw new Error("Hydration target did not belong to the active sync observation");
+      }
+      const hashChanged = listing.sourceHash !== input.hash;
+      if (hashChanged) {
+        await transaction
+          .delete(skillCategoryEvidence)
+          .where(eq(skillCategoryEvidence.sourceListingId, input.listingId));
+      }
       const result = await transaction
         .update(sourceListings)
         .set({
@@ -1440,6 +1666,12 @@ export class CatalogRepository {
         );
       if (result.rowsAffected !== 1) {
         throw new Error("Hydration target did not belong to the active sync observation");
+      }
+      if (hashChanged && listing.skillId) {
+        await this.recomputeSkillCategoryMaterializationInTransaction(
+          transaction,
+          [listing.skillId],
+        );
       }
     });
   }
@@ -1805,6 +2037,14 @@ export class CatalogRepository {
           .onConflictDoNothing();
       }
 
+      if (
+        listingObservation.skillId &&
+        listingObservation.skillId !== skillId
+      ) {
+        await transaction
+          .delete(skillCategoryEvidence)
+          .where(eq(skillCategoryEvidence.sourceListingId, input.listingId));
+      }
       const listingLink = await transaction
         .update(sourceListings)
         .set({
@@ -1910,6 +2150,23 @@ export class CatalogRepository {
         });
       }
 
+      const categoryAffectedSkills = new Set([skillId]);
+      if (
+        listingObservation.skillId &&
+        listingObservation.skillId !== skillId
+      ) {
+        categoryAffectedSkills.add(listingObservation.skillId);
+        await this.recomputeSkillLifecycleInTransaction(
+          transaction,
+          listingObservation.skillId,
+          now,
+        );
+      }
+      await this.recomputeSkillCategoryMaterializationInTransaction(
+        transaction,
+        categoryAffectedSkills,
+      );
+
       return {
         conflict: false as const,
         skillId,
@@ -1971,6 +2228,10 @@ export class CatalogRepository {
           );
         if (listing.skillId) {
           await this.recomputeSkillLifecycleInTransaction(transaction, listing.skillId);
+          await this.recomputeSkillCategoryMaterializationInTransaction(
+            transaction,
+            [listing.skillId],
+          );
         }
       }
     });
@@ -1994,6 +2255,9 @@ export class CatalogRepository {
         .limit(1);
       if (!listing) return;
       await transaction
+        .delete(skillCategoryEvidence)
+        .where(eq(skillCategoryEvidence.sourceListingId, listing.id));
+      await transaction
         .update(sourceListings)
         .set({ status: "removed", lastCompletedObservationRunId: null })
         .where(
@@ -2004,6 +2268,10 @@ export class CatalogRepository {
         );
       if (listing.skillId) {
         await this.recomputeSkillLifecycleInTransaction(transaction, listing.skillId);
+        await this.recomputeSkillCategoryMaterializationInTransaction(
+          transaction,
+          [listing.skillId],
+        );
       }
     });
   }

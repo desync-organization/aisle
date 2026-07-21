@@ -31,6 +31,7 @@ import {
   packageMembers,
   packageVersions,
   packages,
+  skillCategoryEvidence,
   skillDuplicates,
   skillCategories,
   skillRevisions,
@@ -172,14 +173,13 @@ describe("CatalogRepository invariants", () => {
       mutationFence("skills-sh", run),
       categorized,
     );
-    const assigned = await connection.db
-      .select({ slug: categories.slug, attribution: skillCategories.attribution })
-      .from(skillCategories)
-      .innerJoin(categories, eq(categories.id, skillCategories.categoryId));
+    const evidence = await connection.db
+      .select({ slug: categories.slug })
+      .from(skillCategoryEvidence)
+      .innerJoin(categories, eq(categories.id, skillCategoryEvidence.categoryId));
 
-    expect(assigned).toEqual([
-      { slug: "security", attribution: "aisle:source-metadata-v1" },
-    ]);
+    expect(evidence).toEqual([{ slug: "security" }]);
+    expect(await connection.db.select().from(skillCategories)).toEqual([]);
     expect(await repository.search()).toEqual([]);
 
     await repository.failSyncRun({
@@ -188,12 +188,23 @@ describe("CatalogRepository invariants", () => {
       sourceId: "skills-sh",
       message: "Inert fixture transition.",
     });
+    const assigned = await connection.db
+      .select({ slug: categories.slug, attribution: skillCategories.attribution })
+      .from(skillCategories)
+      .innerJoin(categories, eq(categories.id, skillCategories.categoryId));
+    expect(assigned).toEqual([
+      { slug: "security", attribution: "aisle:source-metadata-v1" },
+    ]);
+    expect(await repository.search()).toEqual([]);
     await expect(
-      repository.replaceSkillCategories(
-        mutationFence("skills-sh", run),
-        persisted.skillId!,
-        ["frontend"],
-      ),
+      repository.replaceSkillCategoryEvidence({
+        fence: mutationFence("skills-sh", run),
+        listingId: persisted.listingId,
+        skillId: persisted.skillId!,
+        revisionId: persisted.revisionId!,
+        sourceHash: categorized.upstreamHash!,
+        categorySlugs: ["frontend"],
+      }),
     ).rejects.toThrow(/lease/i);
   });
 
