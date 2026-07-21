@@ -4,7 +4,7 @@ export const agentSkillsInSourceDescriptor = {
   id: "agentskills-in",
   name: "AgentSkills.in",
   baseUrl: "https://www.agentskills.in/api/skills",
-  mode: "full",
+  mode: "federated",
   freshnessPolicy: "retain",
   upstreamIdentifier: "AgentSkills.in public skills API",
   termsUrl: "https://www.agentskills.in",
