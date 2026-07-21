@@ -43,14 +43,17 @@ export const getSkillarySourceDescriptor = {
   name: "GetSkillary",
   baseUrl: "https://getskillary.com/skills.json",
   mode: "full",
+  freshnessPolicy: "latest-completed-observation",
   upstreamIdentifier: "GetSkillary declared selected-public JSON snapshot",
   termsUrl: "https://getskillary.com",
   enabled: false,
+  resumePartialRuns: false,
   initialCoverageState: "not-configured",
   knownExclusions: [
-    "The client contract is implemented, but catalog hydration and synchronization are not connected; no records are claimed.",
+    "Synchronization is an explicit opt-in; a disabled source performs no request and claims no current records.",
     "Completeness applies only to GetSkillary's declared selected-public boundary, not every skill on GetSkillary or the public internet.",
-    "A provider ZIP hash is an observation, not upstream repository, immutable revision, or license evidence; records lacking those proofs remain non-installable.",
+    "GetSkillary does not expose authoritative upstream repository and license proof in this snapshot, so every observation remains unresolved and non-installable.",
+    "A provider ZIP hash and size are stored only as typed coverage observations; Aisle does not request or persist the ZIP download URL, archive contents, or instructions.",
   ],
 } satisfies CatalogSourceDescriptor;
 
