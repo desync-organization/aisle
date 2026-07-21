@@ -52,9 +52,7 @@ export function SkillsExplorer({
 }) {
   const router = useRouter();
   const { actions, meta, state } = useSelection();
-  const [queryDraft, setQueryDraft] = useState({ source: initialQuery, value: initialQuery });
-  const query = queryDraft.source === initialQuery ? queryDraft.value : initialQuery;
-  const setQuery = (value: string) => setQueryDraft({ source: initialQuery, value });
+  const [query, setQuery] = useState(initialQuery);
   const [trust, setTrust] = useState<TrustFilter>("all");
   const [provenance, setProvenance] = useState<ProvenanceFilter>("all");
   const [sort, setSort] = useState<SortMode>("popular");
