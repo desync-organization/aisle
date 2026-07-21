@@ -1,9 +1,9 @@
 # Wider public-source boundaries
 
-Aisle has bounded client contracts for the sources below. AgentSkills.in and
-AskSkill have explicitly configured connectors that rebind registry identities to
-exact public GitHub artifacts. The other sources remain disabled descriptors until
-equivalent hydration and synchronization boundaries are implemented. A disabled
+Aisle has bounded client contracts for the sources below. AgentSkills.in, AskSkill,
+and GitHub Code Search have explicitly configured connectors that rebind discovery
+identities to exact public GitHub artifacts. GetSkillary remains a disabled descriptor
+until equivalent hydration and synchronization boundaries are implemented. A disabled
 source claims zero current records; the presence of a client is not a coverage claim.
 
 | Source | Discovery mode | What the client can observe | Coverage boundary |
@@ -11,7 +11,7 @@ source claims zero current records; the presence of a client is not a coverage c
 | AgentSkills.in | Opt-in partial sweep | Empty-search offset pages nominate exact public GitHub repository and `SKILL.md` paths | Pages are mutable and have no snapshot token. Every sweep is degraded, non-retiring partial coverage even when a terminal offset is observed. |
 | AskSkill | Opt-in federated sweep | Bounded list pages nominate exact public GitHub repository and `SKILL.md` paths | Totals may be estimated and the provider may limit the reachable page window. Every sweep is degraded, non-retiring partial coverage. |
 | GetSkillary | Full within declared boundary | A bounded JSON snapshot with declared count and package hash observations | Completeness covers only the provider's selected-public boundary. Missing upstream repository/license evidence keeps records non-installable. |
-| GitHub Code Search | Federated, query-only | Server-authenticated `SKILL.md` search results and bounded exact-commit tree resolution | Results depend on the query, are capped at 1,000, may be incomplete, and never prove global GitHub coverage. |
+| GitHub Code Search | Opt-in federated query sweep | Fixed required-metadata queries plus bounded configured terms nominate exact public GitHub repository and `SKILL.md` paths | Ranked results are capped at 1,000 per query, may be incomplete, and are rebound to the current public default branch. Every sweep remains partial and non-retiring. |
 
 ## Shared acceptance boundary
 
@@ -36,8 +36,6 @@ truncated, missing, private, or conflicting origins remain unresolved.
   rather than trusting registry payloads.
 - Persist GetSkillary rows as unresolved provenance unless an authoritative
   upstream origin can be proved.
-- Expose GitHub Code Search only as a labeled query result set; never feed it into
-  full-source retirement or source-wide totals.
 
 No connector may create, rewrite, vendor, or infer a `SKILL.md` on Aisle's behalf.
 
@@ -83,3 +81,31 @@ oversized, missing, or failed identities are excluded without producing syntheti
 records. Because page numbers, totals, and reachable windows are mutable, an
 AskSkill run never resumes an earlier partial sweep, reports no source-wide total,
 never declares a complete snapshot, and never retires a record solely by absence.
+
+## GitHub Code Search configuration and limits
+
+GitHub Code Search performs no request unless
+`AISLE_GITHUB_CODE_SEARCH_ENABLED=true` and `GITHUB_TOKEN` is present. The token
+must be public-only. Missing either setting keeps the source `not-configured`.
+
+The connector always runs the plain-text terms `name` and `description`, the two
+required `SKILL.md` frontmatter keys. Up to six configured terms may add bounded
+query slices. Raw qualifiers and Boolean syntax are rejected; Aisle supplies
+`filename:SKILL.md is:public`. Query pages are interleaved so one ranked slice does
+not consume every global candidate cap before another query is sampled, and exact
+identities are deduplicated across queries and pages.
+
+This strategy cannot enumerate GitHub. A required key may still be absent from the
+provider index or outside the returned ranked window; each query exposes at most
+1,000 results and can report incomplete results. Shared page, record, repository,
+hydration, tree, artifact, and exclusion caps may stop a run earlier. The connector
+therefore reports no source-wide total, never declares a complete snapshot, never
+resumes a partial query cursor, and never retires a prior record by absence.
+
+Search blob SHAs, result ranks, URL refs, and unknown response fields are not used
+as revision, trust, license, or install evidence. Search nominates only a repository
+and exact path. The GitHub repository adapter independently proves that the path
+exists on the current public default branch and supplies the immutable revision,
+artifact inventory, hashes, license evidence, and install binding. Missing or stale
+search paths fail closed, and neither search nor hydration persists instruction
+bodies in catalog source attribution.
