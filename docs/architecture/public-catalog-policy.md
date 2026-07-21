@@ -79,16 +79,16 @@ Unavailable and removed records retain source, revision, and audit history, but 
 
 Public does not mean safe. Trust labels have these exact meanings:
 
-| Label | Meaning | Installable by default |
+| Label | Meaning | Selectable / installable by default |
 | --- | --- | --- |
-| Official | Published by the organization responsible for the referenced product; source identity verified | Yes, unless another check blocks it |
-| Audited / no known findings | Named scanners reported no findings for this exact revision | Yes |
+| Official | Published by the organization responsible for the referenced product; source identity verified | No; identity alone is not an exact-revision Aisle assessment |
+| Audited / no known findings | Named scanners reported no findings for this exact revision and baseline validation passed | Yes |
 | Warning | Review found behavior or permissions requiring explicit user attention | Yes, with explicit acknowledgement |
 | Failed | A scanner reported a high-confidence dangerous condition | No |
 | Quarantined | Aisle blocked the revision pending investigation or due to confirmed policy violation | No |
-| Unreviewed | No current revision-scoped audit is available | Yes, with a visible warning |
+| Unreviewed | No current revision-scoped Aisle assessment is available; the record remains discoverable and provenance-visible | No; blocked until baseline validation passes |
 
-The interface must use “no known findings,” not “safe.” Audit results are revision-scoped; a new revision returns to `unreviewed` until scanned.
+The interface must use “no known findings,” not “safe.” Audit results are revision-scoped; a new revision returns to `unreviewed` until baseline validation and assessment complete. Selection fails closed unless the exact revision has a passed baseline validation and an Aisle assessment of `pass` or `warn`; `warn` also requires explicit acknowledgement.
 
 ## Package and selection invariants
 
@@ -96,6 +96,7 @@ Package manifests contain only canonical skill and revision references plus edit
 
 - unresolved or not public;
 - internal, unavailable, removed, failed, or quarantined;
+- unreviewed or missing a passed baseline validation and exact-revision `pass` or `warn` assessment;
 - missing an immutable revision or expected content hash;
 - a duplicate of another selected canonical skill;
 - represented by embedded or generated skill content.

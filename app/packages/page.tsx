@@ -1,11 +1,13 @@
 import type { Metadata } from "next";
 
 import { RoutePlaceholder } from "@/components/route-placeholder";
+import { createPageMetadata } from "@/lib/seo";
 
-export const metadata: Metadata = {
+export const metadata: Metadata = createPageMetadata({
   title: "Packages",
   description: "Curated references to complementary public Agent Skills.",
-};
+  path: "/packages",
+});
 
 export default function PackagesPage() {
   return (

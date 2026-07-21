@@ -15,6 +15,9 @@ export function SiteFooter() {
           <Link href="/skills">Skills</Link>
           <Link href="/packages">Packages</Link>
           <Link href="/docs">Documentation</Link>
+          <Link href="/safety">Safety</Link>
+          <Link href="/coverage">Coverage</Link>
+          <Link href="/privacy">Privacy</Link>
           <a
             href="https://agentskills.io/specification"
             rel="noreferrer"

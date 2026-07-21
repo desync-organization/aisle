@@ -34,6 +34,9 @@ describe("public-only repository policy", () => {
     expect(policy).toContain("Public does not mean safe");
     expect(policy).toContain("Package manifests contain only canonical skill and revision references");
     expect(policy).toContain("fail closed for installation");
+    expect(policy).toContain("blocked until baseline validation passes");
+    expect(policy).toContain("passed baseline validation and an Aisle assessment of `pass` or `warn`");
+    expect(policy).toContain("`warn` also requires explicit acknowledgement");
   });
 
   it("keeps the mobile shell inset inside the viewport", () => {

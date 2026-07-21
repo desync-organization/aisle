@@ -1,11 +1,13 @@
 import type { Metadata } from "next";
 
 import { RoutePlaceholder } from "@/components/route-placeholder";
+import { createPageMetadata } from "@/lib/seo";
 
-export const metadata: Metadata = {
+export const metadata: Metadata = createPageMetadata({
   title: "Skills",
   description: "Browse public Agent Skills with clear upstream provenance.",
-};
+  path: "/skills",
+});
 
 export default function SkillsPage() {
   return (
