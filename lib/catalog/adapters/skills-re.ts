@@ -204,6 +204,7 @@ export class SkillsReConnector implements CatalogSourceConnector {
     }
 
     const seenSourceRecordIds = new Set<string>();
+    const seenCursors = new Set<string>();
     let cursor: string | null = null;
     let pageCount = 0;
     let providerRecordCount = 0;
@@ -238,6 +239,9 @@ export class SkillsReConnector implements CatalogSourceConnector {
       const providerCapReached =
         providerRecordCount >= this.maxRecords && !page.pagination.isDone;
       const pageCapReached = pageCount >= this.maxPages && !page.pagination.isDone;
+      const cursorCycle =
+        page.pagination.nextCursor !== null &&
+        seenCursors.has(page.pagination.nextCursor);
       if (providerCapReached) {
         exclusions.push(
           `Skills.re coverage stopped at the ${this.maxRecords}-record observation limit.`,
@@ -246,8 +250,12 @@ export class SkillsReConnector implements CatalogSourceConnector {
       if (pageCapReached) {
         exclusions.push(`Skills.re coverage stopped at the ${this.maxPages}-page limit.`);
       }
+      if (cursorCycle) {
+        exclusions.push("Skills.re returned a previously observed continuation cursor.");
+      }
 
-      const stop = page.pagination.isDone || providerCapReached || pageCapReached;
+      const stop =
+        page.pagination.isDone || providerCapReached || pageCapReached || cursorCycle;
       yield {
         records,
         nextCursor: stop ? null : page.pagination.nextCursor,
@@ -262,6 +270,7 @@ export class SkillsReConnector implements CatalogSourceConnector {
       if (page.pagination.nextCursor === null) {
         throw new Error("Skills.re pagination ended without a terminal isDone response");
       }
+      seenCursors.add(page.pagination.nextCursor);
       cursor = page.pagination.nextCursor;
     }
   }
