@@ -52,16 +52,20 @@ export function SkillsExplorer({
 }) {
   const router = useRouter();
   const { actions, meta, state } = useSelection();
-  const [query, setQuery] = useState(initialQuery);
+  const [queryDraft, setQueryDraft] = useState({ source: initialQuery, value: initialQuery });
+  const query = queryDraft.source === initialQuery ? queryDraft.value : initialQuery;
+  const setQuery = (value: string) => setQueryDraft({ source: initialQuery, value });
   const [trust, setTrust] = useState<TrustFilter>("all");
   const [provenance, setProvenance] = useState<ProvenanceFilter>("all");
   const [sort, setSort] = useState<SortMode>("popular");
   const deferredQuery = useDeferredValue(query.trim().toLowerCase());
+  const appliedQuery = initialQuery.trim().toLowerCase();
+  const localDraftQuery = deferredQuery === appliedQuery ? "" : deferredQuery;
 
   const visibleSkills = useMemo(() => {
     const next = skills.filter((skill) => {
-      const matchesQuery = !deferredQuery || [skill.name, skill.description ?? "", skill.sourceUrl]
-        .some((value) => value.toLowerCase().includes(deferredQuery));
+      const matchesQuery = !localDraftQuery || [skill.name, skill.description ?? "", skill.sourceUrl]
+        .some((value) => value.toLowerCase().includes(localDraftQuery));
       const matchesTrust = trust === "all" || skill.trustState === trust;
       const matchesProvenance = provenance === "all" ||
         (provenance === "official" ? skill.officialProvenance : !skill.officialProvenance);
@@ -81,7 +85,7 @@ export function SkillsExplorer({
       }
       return right.installs - left.installs || left.name.localeCompare(right.name);
     });
-  }, [deferredQuery, provenance, skills, sort, trust]);
+  }, [localDraftQuery, provenance, skills, sort, trust]);
 
   const emptyCopy = availabilityCopy[availability];
 

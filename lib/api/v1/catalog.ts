@@ -725,6 +725,20 @@ export async function getPublicPackage(
   };
 }
 
+function boundedPublicExclusions(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const exclusions = new Set<string>();
+  for (const candidate of value.slice(0, 50)) {
+    if (typeof candidate !== "string") continue;
+    const normalized = candidate
+      .replace(/[\u0000-\u001f\u007f]+/gu, " ")
+      .trim()
+      .slice(0, 512);
+    if (normalized) exclusions.add(normalized);
+  }
+  return [...exclusions];
+}
+
 export async function publicCoverage(repository: CatalogRepository) {
   const rows = await repository.coverage(new Date());
   const sources = rows.map((row) => ({
@@ -737,7 +751,7 @@ export async function publicCoverage(repository: CatalogRepository) {
     lastSuccessfulSyncAt: row.lastSuccessfulSyncAt?.toISOString() ?? null,
     lagMs: row.lagMs,
     degraded: Boolean(row.error) || !["current", "not-configured"].includes(row.state),
-    exclusions: row.exclusions,
+    exclusions: boundedPublicExclusions(row.exclusions),
   }));
   return {
     summary: {
