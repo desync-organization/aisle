@@ -7,7 +7,7 @@ import { SkillsExplorer } from "@/components/marketplace/skills-explorer";
 import { SiteFooter } from "@/components/site-footer";
 import { SiteHeader } from "@/components/site-header";
 import { Badge } from "@/components/ui/badge";
-import { getMarketplaceCategory, marketplaceCategories } from "@/lib/marketplace/categories";
+import { catalogCategories, getCatalogCategory } from "@/lib/marketplace/categories";
 import { loadMarketplaceCatalog } from "@/lib/marketplace/catalog";
 import { createPageMetadata } from "@/lib/seo";
 
@@ -16,6 +16,8 @@ export const metadata: Metadata = createPageMetadata({
   description: "Search, filter, compare, and select eligible public Agent Skills without losing upstream provenance.",
   path: "/skills",
 });
+
+export const dynamic = "force-dynamic";
 
 type SkillsPageProps = Readonly<{
   searchParams: Promise<Record<string, string | string[] | undefined>>;
@@ -29,7 +31,7 @@ export default async function SkillsPage({ searchParams }: SkillsPageProps) {
   const params = await searchParams;
   const query = firstValue(params.q).slice(0, 160);
   const requestedCategory = firstValue(params.category);
-  const category = getMarketplaceCategory(requestedCategory);
+  const category = getCatalogCategory(requestedCategory);
   const catalog = await loadMarketplaceCatalog({ query, category: category?.slug, limit: 100 });
   const facetCounts = new Map(catalog.categories.map((facet) => [facet.key, facet.count]));
 
@@ -62,7 +64,7 @@ export default async function SkillsPage({ searchParams }: SkillsPageProps) {
 
           <nav aria-label="Filter skills by category" className="category-filter-rail">
             <Link aria-current={!category ? "page" : undefined} href="/skills">All skills</Link>
-            {marketplaceCategories.map((item) => {
+            {catalogCategories.map((item) => {
               const count = facetCounts.get(item.slug);
               return (
                 <Link

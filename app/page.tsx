@@ -18,7 +18,7 @@ import { SiteFooter } from "@/components/site-footer";
 import { SiteHeader } from "@/components/site-header";
 import { Badge } from "@/components/ui/badge";
 import { ButtonLink } from "@/components/ui/button";
-import { marketplaceCategories } from "@/lib/marketplace/categories";
+import { catalogCategories } from "@/lib/marketplace/categories";
 import { loadMarketplaceCatalog } from "@/lib/marketplace/catalog";
 import { launchPackageBlueprints } from "@/lib/packages";
 
@@ -42,6 +42,8 @@ const principles = [
     body: "Your browser stores opaque catalog IDs. Install planning resolves and revalidates the source again.",
   },
 ] as const;
+
+export const dynamic = "force-dynamic";
 
 export default async function HomePage() {
   const catalog = await loadMarketplaceCatalog({ limit: 6 });
@@ -126,7 +128,7 @@ export default async function HomePage() {
               <p>Move across domains without turning publisher names into the taxonomy.</p>
             </div>
             <div className="home-category-rail">
-              {marketplaceCategories.map((category, index) => (
+              {catalogCategories.map((category, index) => (
                 <Link data-color={category.colorToken} href={`/categories/${category.slug}`} key={category.slug}>
                   <span className="home-category-rail__index">{String(index + 1).padStart(2, "0")}</span>
                   <span className="home-category-rail__icon"><CategoryIcon token={category.iconToken} /></span>

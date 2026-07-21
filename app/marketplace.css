@@ -1203,6 +1203,7 @@
 
 .category-live-section__action .button { margin-top: 15px; }
 .category-package-feature { display: grid; grid-template-columns: minmax(0, 1fr) 230px; gap: 12px; }
+.category-package-feature > .package-grid { grid-template-columns: 1fr; }
 .category-package-feature__notes { display: grid; align-content: start; border-top: 1px solid var(--line); }
 .category-package-feature__notes span { display: flex; min-height: 64px; align-items: center; gap: 8px; border-bottom: 1px solid var(--line); color: var(--muted); font-size: 0.63rem; }
 .category-package-feature__notes svg { color: var(--iris-bright); }

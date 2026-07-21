@@ -7,7 +7,10 @@ import { ExploreRail } from "@/components/marketplace/explore-rail";
 import { SiteFooter } from "@/components/site-footer";
 import { SiteHeader } from "@/components/site-header";
 import { Badge } from "@/components/ui/badge";
-import { marketplaceCategories } from "@/lib/marketplace/categories";
+import {
+  catalogCategories,
+  packageBelongsToCatalogCategory,
+} from "@/lib/marketplace/categories";
 import { loadMarketplaceCatalog } from "@/lib/marketplace/catalog";
 import { launchPackageBlueprints } from "@/lib/packages";
 import { createPageMetadata } from "@/lib/seo";
@@ -18,10 +21,11 @@ export const metadata: Metadata = createPageMetadata({
   path: "/categories",
 });
 
+export const dynamic = "force-dynamic";
+
 export default async function CategoriesPage() {
   const catalog = await loadMarketplaceCatalog({ limit: 1 });
   const liveCounts = new Map(catalog.categories.map((facet) => [facet.key, facet.count]));
-  const packages = new Map(launchPackageBlueprints.map((blueprint) => [blueprint.editorial.category, blueprint]));
 
   return (
     <div className="site-frame">
@@ -34,11 +38,11 @@ export default async function CategoriesPage() {
               <Badge tone="iris"><Grid2X2 aria-hidden="true" size={12} /> Outcome-led discovery</Badge>
               <h1>Start with the work, not the tool.</h1>
               <p>
-                Eight durable categories cut across publishers and registries. Each one keeps package curation separate from live, catalog-eligible skills.
+                Ten seeded catalog categories cut across publishers and registries. Package labels remain a separate editorial layer with explicit mappings.
               </p>
             </div>
             <dl className="marketplace-hero__ledger">
-              <div><dt>Categories</dt><dd>{marketplaceCategories.length}</dd></div>
+              <div><dt>Categories</dt><dd>{catalogCategories.length}</dd></div>
               <div><dt>Curated workflows</dt><dd>{launchPackageBlueprints.length}</dd></div>
               <div><dt>Taxonomy</dt><dd>v1</dd></div>
             </dl>
@@ -53,8 +57,10 @@ export default async function CategoriesPage() {
               <p>Catalog counts appear only when this environment has a provisioned source sync. Package member counts come from reviewed public-upstream manifests.</p>
             </div>
             <div className="category-grid">
-              {marketplaceCategories.map((category, index) => {
-                const blueprint = packages.get(category.slug);
+              {catalogCategories.map((category, index) => {
+                const blueprints = launchPackageBlueprints.filter((blueprint) =>
+                  packageBelongsToCatalogCategory(blueprint, category.slug));
+                const curatedReferences = blueprints.reduce((total, blueprint) => total + blueprint.members.length, 0);
                 const liveCount = liveCounts.get(category.slug);
                 return (
                   <article data-color={category.colorToken} key={category.slug}>
@@ -66,7 +72,7 @@ export default async function CategoriesPage() {
                     <p>{category.description}</p>
                     <dl>
                       <div><dt>Catalog ready</dt><dd>{liveCount ?? "—"}</dd></div>
-                      <div><dt>Curated refs</dt><dd>{blueprint?.members.length ?? "—"}</dd></div>
+                      <div><dt>Curated refs</dt><dd>{curatedReferences || "—"}</dd></div>
                     </dl>
                     <Link className="category-card__link" href={`/categories/${category.slug}`}>
                       Explore category <ArrowUpRight aria-hidden="true" size={15} />

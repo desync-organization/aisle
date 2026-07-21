@@ -1,12 +1,11 @@
-import { packageCategories } from "@/lib/packages";
+import { taxonomySeed } from "@/lib/db/seed";
+import { packageCategories, type PackageBlueprint } from "@/lib/packages";
 
-export type MarketplaceCategorySlug = (typeof packageCategories)[number];
+export type CatalogCategorySlug = (typeof taxonomySeed)[number][0];
+export type EditorialPackageCategory = (typeof packageCategories)[number];
 
-export type MarketplaceCategory = Readonly<{
-  slug: MarketplaceCategorySlug;
-  name: string;
+type CategoryDesign = Readonly<{
   shortName: string;
-  description: string;
   prompt: string;
   iconToken:
     | "brackets"
@@ -20,81 +19,106 @@ export type MarketplaceCategory = Readonly<{
   colorToken: "iris" | "magenta" | "amber" | "emerald" | "coral" | "blue" | "cyan" | "lime";
 }>;
 
-export const marketplaceCategories: ReadonlyArray<MarketplaceCategory> = [
-  {
-    slug: "frontend",
-    name: "Frontend engineering",
+export type CatalogCategory = CategoryDesign & Readonly<{
+  slug: CatalogCategorySlug;
+  name: string;
+  description: string;
+}>;
+
+const categoryDesign = {
+  frontend: {
     shortName: "Frontend",
-    description: "React architecture, component systems, interface craft, and performance-aware product work.",
-    prompt: "Build interfaces that stay coherent as the product and team grow.",
+    prompt: "Build browser experiences that stay coherent as the product and team grow.",
     iconToken: "brackets",
     colorToken: "iris",
   },
-  {
-    slug: "motion-3d",
-    name: "Motion & 3D",
-    shortName: "Motion & 3D",
-    description: "Animation choreography, WebGL, Three.js, React 3D, and cinematic interaction systems.",
-    prompt: "Move from static screens to expressive, performant scenes.",
-    iconToken: "orbit",
-    colorToken: "magenta",
+  backend: {
+    shortName: "Backend",
+    prompt: "Shape dependable APIs, services, and server-side application boundaries.",
+    iconToken: "network",
+    colorToken: "cyan",
   },
-  {
-    slug: "deployment",
-    name: "Deployment",
-    shortName: "Deployment",
-    description: "Cloud platforms, release workflows, infrastructure tooling, and app-store delivery.",
-    prompt: "Carry a working application through the last mile to production.",
-    iconToken: "rocket",
-    colorToken: "amber",
-  },
-  {
-    slug: "cybersecurity",
-    name: "Cybersecurity",
-    shortName: "Security",
-    description: "Application review, identity boundaries, compliance, policy, and abuse prevention.",
-    prompt: "Inspect the trust boundary before an attacker does.",
-    iconToken: "shield",
-    colorToken: "emerald",
-  },
-  {
-    slug: "mobile",
-    name: "Mobile development",
+  mobile: {
     shortName: "Mobile",
-    description: "Expo, React Native, native-feeling UI, routing, data, styling, and release maintenance.",
     prompt: "Build for touch, platform conventions, and a durable release cycle.",
     iconToken: "device-mobile",
     colorToken: "coral",
   },
-  {
-    slug: "data-ai",
-    name: "Data & AI",
-    shortName: "Data & AI",
-    description: "Databases, datasets, model workflows, application data layers, and AI-enabled products.",
-    prompt: "Give intelligent products dependable data foundations.",
+  "ai-agents": {
+    shortName: "AI & Agents",
+    prompt: "Turn model capability into a system with explicit tools, state, and safety boundaries.",
+    iconToken: "orbit",
+    colorToken: "magenta",
+  },
+  data: {
+    shortName: "Data",
+    prompt: "Give application and model workflows dependable data foundations.",
     iconToken: "database",
     colorToken: "blue",
   },
-  {
-    slug: "agent-engineering",
-    name: "Agent engineering",
-    shortName: "Agents",
-    description: "Skills, tool protocols, state, sandboxing, orchestration, and browser-capable agents.",
-    prompt: "Turn model capability into a system with explicit boundaries.",
-    iconToken: "network",
-    colorToken: "cyan",
+  devops: {
+    shortName: "DevOps",
+    prompt: "Operate delivery, infrastructure, observability, and reliability as one system.",
+    iconToken: "rocket",
+    colorToken: "lime",
   },
-  {
-    slug: "testing-quality",
-    name: "Testing & quality",
-    shortName: "Quality",
-    description: "Browser testing, debugging, code review, verification, and measured web performance.",
+  deployment: {
+    shortName: "Deployment",
+    prompt: "Carry a working application through the last mile to production.",
+    iconToken: "rocket",
+    colorToken: "amber",
+  },
+  security: {
+    shortName: "Security",
+    prompt: "Inspect the trust boundary before an attacker does.",
+    iconToken: "shield",
+    colorToken: "emerald",
+  },
+  testing: {
+    shortName: "Testing",
     prompt: "Close the gap between code that exists and work that is proven.",
     iconToken: "check-circle",
     colorToken: "lime",
   },
-] as const;
+  productivity: {
+    shortName: "Productivity",
+    prompt: "Make documentation, collaboration, and developer workflows easier to repeat.",
+    iconToken: "check-circle",
+    colorToken: "iris",
+  },
+} as const satisfies Record<CatalogCategorySlug, CategoryDesign>;
 
-export function getMarketplaceCategory(slug: string): MarketplaceCategory | undefined {
-  return marketplaceCategories.find((category) => category.slug === slug);
+export const catalogCategories: ReadonlyArray<CatalogCategory> = taxonomySeed.map(
+  ([slug, name, description]) => ({ slug, name, description, ...categoryDesign[slug] }),
+);
+
+export const editorialPackageCategoryToCatalogCategory = {
+  frontend: "frontend",
+  "motion-3d": "frontend",
+  deployment: "deployment",
+  cybersecurity: "security",
+  mobile: "mobile",
+  "data-ai": "data",
+  "agent-engineering": "ai-agents",
+  "testing-quality": "testing",
+} as const satisfies Record<EditorialPackageCategory, CatalogCategorySlug>;
+
+export function getCatalogCategory(slug: string): CatalogCategory | undefined {
+  return catalogCategories.find((category) => category.slug === slug);
+}
+
+export function getCatalogCategoryForEditorial(
+  category: EditorialPackageCategory,
+): CatalogCategory {
+  const slug = editorialPackageCategoryToCatalogCategory[category];
+  const match = getCatalogCategory(slug);
+  if (!match) throw new Error(`Missing seeded catalog category: ${slug}`);
+  return match;
+}
+
+export function packageBelongsToCatalogCategory(
+  blueprint: PackageBlueprint,
+  catalogCategory: CatalogCategorySlug,
+): boolean {
+  return editorialPackageCategoryToCatalogCategory[blueprint.editorial.category] === catalogCategory;
 }

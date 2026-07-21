@@ -9,16 +9,14 @@ import { PackageSelection } from "@/components/marketplace/package-selection";
 import { SiteFooter } from "@/components/site-footer";
 import { SiteHeader } from "@/components/site-header";
 import { Badge } from "@/components/ui/badge";
-import { getMarketplaceCategory } from "@/lib/marketplace/categories";
+import { getCatalogCategoryForEditorial } from "@/lib/marketplace/categories";
 import { loadResolvedPackage } from "@/lib/marketplace/catalog";
-import { getLaunchPackageBlueprint, launchPackageBlueprints } from "@/lib/packages";
+import { getLaunchPackageBlueprint } from "@/lib/packages";
 import { createPageMetadata } from "@/lib/seo";
 
 type PackagePageProps = Readonly<{ params: Promise<{ slug: string }> }>;
 
-export function generateStaticParams() {
-  return launchPackageBlueprints.map(({ slug }) => ({ slug }));
-}
+export const dynamic = "force-dynamic";
 
 export async function generateMetadata({ params }: PackagePageProps): Promise<Metadata> {
   const { slug } = await params;
@@ -41,7 +39,7 @@ export default async function PackagePage({ params }: PackagePageProps) {
   if (!blueprint) notFound();
 
   const resolved = await loadResolvedPackage(slug);
-  const category = getMarketplaceCategory(blueprint.editorial.category);
+  const category = getCatalogCategoryForEditorial(blueprint.editorial.category);
   const resolvedByPosition = new Map(resolved.members.map((member) => [member.position, member]));
   const resolvedSkillIds = blueprint.members
     .map((member) => resolvedByPosition.get(member.position)?.skillId)
@@ -78,7 +76,7 @@ export default async function PackagePage({ params }: PackagePageProps) {
           <section aria-labelledby="package-outcome" className="package-outcome">
             <span>Designed outcome</span>
             <h2 id="package-outcome">{blueprint.editorial.outcome}</h2>
-            {category ? <Link href={`/categories/${category.slug}`}>Explore {category.shortName} <ArrowUpRight aria-hidden="true" size={15} /></Link> : null}
+            <Link href={`/categories/${category.slug}`}>Explore {category.shortName} <ArrowUpRight aria-hidden="true" size={15} /></Link>
           </section>
 
           <section aria-labelledby="package-members" className="package-members-section">
