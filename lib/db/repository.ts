@@ -135,7 +135,7 @@ function hasActiveSourceListing() {
       and active_listing.status in ('current', 'stale')
       and active_listing.source_hash = ${skillRevisions.upstreamHash}
       and active_source.enabled = 1
-      and active_source.coverage_state <> 'not-configured'
+      and active_source.coverage_state in ('current', 'partial')
   )`;
 }
 
