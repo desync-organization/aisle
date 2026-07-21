@@ -123,9 +123,11 @@ export const discoveredSkillRecordSchema = z.object({
           ? "github-skill"
           : record.provider === "getskillary"
             ? "getskillary-observation"
-            : record.provider === "well-known"
-              ? "well-known-skill"
-              : null;
+            : record.provider === "skills-re"
+              ? "skills-re-observation"
+              : record.provider === "well-known"
+                ? "well-known-skill"
+                : null;
   if (!expectedKind || record.raw.kind !== expectedKind) {
     context.addIssue({
       code: "custom",
