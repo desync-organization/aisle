@@ -74,6 +74,74 @@ interface GitHubSnapshot {
   tree: z.infer<typeof treeSchema>;
 }
 
+function boundedProviderText(value: string, maximumLength: number): string {
+  return value.slice(0, maximumLength);
+}
+
+function boundedNullableProviderText(
+  value: string | null | undefined,
+  maximumLength: number,
+): string | null {
+  return value === null || value === undefined
+    ? null
+    : boundedProviderText(value, maximumLength);
+}
+
+function persistedSkillMdListing(item: SkillMdListItem): Record<string, unknown> {
+  return {
+    slug: boundedProviderText(item.slug, 512),
+    type: boundedProviderText(item.type, 64),
+    title: boundedProviderText(item.title, 256),
+    description: boundedProviderText(item.description, 4_096),
+    verified: item.verified,
+    verifiedScope: item.verified_scope,
+    agents: boundedNullableProviderText(item.agents, 1_024),
+    category: boundedNullableProviderText(item.category, 128),
+    averageRating: item.avg_rating ?? null,
+    ratingCount: item.rating_count ?? null,
+  };
+}
+
+function persistedSkillMdDetail(
+  detail: SkillMdSkillMetadata | null,
+): Record<string, unknown> | null {
+  if (!detail) return null;
+  const inventory = detail.inventory.slice(0, 100_000);
+  return {
+    slug: boundedProviderText(detail.slug, 512),
+    type: boundedProviderText(detail.type, 64),
+    title: boundedProviderText(detail.title, 256),
+    description: boundedProviderText(detail.description, 4_096),
+    verified: detail.verified,
+    verifiedScope: detail.verified_scope,
+    license: boundedNullableProviderText(detail.license, 256),
+    sourceRepository: boundedNullableProviderText(detail.source_repo, 2_048),
+    commitSha: boundedNullableProviderText(detail.commit_sha, 256),
+    lastSyncedAt: boundedNullableProviderText(detail.last_synced_at, 128),
+    category: boundedNullableProviderText(detail.category, 128),
+    averageRating: detail.avg_rating ?? null,
+    ratingCount: detail.rating_count ?? null,
+    installCount: detail.install_count ?? null,
+    inventory: {
+      fileCount: inventory.length,
+      truncated: detail.inventory.length > inventory.length,
+      totalBytes: inventory.reduce(
+        (total, file) =>
+          total > Number.MAX_SAFE_INTEGER - file.size_bytes
+            ? Number.MAX_SAFE_INTEGER
+            : total + file.size_bytes,
+        0,
+      ),
+      scriptCount: inventory.filter((file) => file.is_script === true || file.is_script === 1)
+        .length,
+    },
+  };
+}
+
+function boundedUnresolvedReason(reason: string): string {
+  return boundedProviderText(reason, 1_024);
+}
+
 function parseGitHubCoordinates(source: string | null): GitHubCoordinates | null {
   if (!source) return null;
   let url: URL;
@@ -375,8 +443,8 @@ export class SkillMdAdapter implements CatalogSourceConnector {
           }
         : null,
       raw: {
-        listing: item,
-        detail,
+        listing: persistedSkillMdListing(item),
+        detail: persistedSkillMdDetail(detail),
         sourceTreeSha: snapshot.tree.sha,
         providerVerifiedScope: detail.verified_scope,
       },
@@ -408,7 +476,11 @@ export class SkillMdAdapter implements CatalogSourceConnector {
       aliases: [item.slug],
       repository: null,
       artifact: null,
-      raw: { listing: item, detail, unresolved: reason },
+      raw: {
+        listing: persistedSkillMdListing(item),
+        detail: persistedSkillMdDetail(detail),
+        unresolved: boundedUnresolvedReason(reason),
+      },
     };
   }
 

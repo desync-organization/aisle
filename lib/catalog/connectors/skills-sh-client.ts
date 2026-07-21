@@ -5,70 +5,67 @@ import { readBoundedResponse, requestTimeout } from "../http-safety";
 
 const v1SkillSchema = z
   .object({
-    id: z.string().min(1),
-    slug: z.string().min(1),
-    name: z.string().min(1),
-    source: z.string().min(1),
-    installs: z.number().int().nonnegative(),
-    sourceType: z.string().min(1),
-    installUrl: z.url().nullable(),
-    url: z.url(),
-    hash: z.string().min(1).nullable().optional(),
+    id: z.string().min(1).max(1_024),
+    slug: z.string().min(1).max(256),
+    name: z.string().min(1).max(256),
+    source: z.string().min(1).max(512),
+    installs: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+    sourceType: z.string().min(1).max(64),
+    installUrl: z.url().max(2_048).nullable(),
+    url: z.url().max(2_048),
+    hash: z.string().min(1).max(256).nullable().optional(),
     duplicate: z.boolean().optional(),
     isDuplicate: z.boolean().optional(),
-  })
-  .passthrough();
+  });
 
 const paginationSchema = z.object({
-  page: z.number().int().nonnegative(),
+  page: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
   perPage: z.number().int().positive().max(500),
-  total: z.number().int().nonnegative(),
+  total: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
   hasMore: z.boolean(),
 });
 
 export const skillsShListResponseSchema = z.object({
-  data: z.array(v1SkillSchema),
+  data: z.array(v1SkillSchema).max(500),
   pagination: paginationSchema,
 });
 
 const detailFileSchema = z.object({
-  path: z.string().min(1),
+  path: z.string().min(1).max(4_096),
   contents: z.string(),
 });
 
 export const skillsShDetailResponseSchema = z.object({
-  id: z.string().min(1),
-  source: z.string().min(1),
-  slug: z.string().min(1),
-  installs: z.number().int().nonnegative(),
-  hash: z.string().min(1).nullable(),
+  id: z.string().min(1).max(1_024),
+  source: z.string().min(1).max(512),
+  slug: z.string().min(1).max(256),
+  installs: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+  hash: z.string().min(1).max(256).nullable(),
   files: z.array(detailFileSchema).nullable(),
 });
 
 const auditEntrySchema = z
   .object({
-    provider: z.string().min(1),
-    slug: z.string().min(1),
+    provider: z.string().min(1).max(128),
+    slug: z.string().min(1).max(128),
     status: z.enum(["pass", "warn", "fail"]),
-    summary: z.string().min(1),
+    summary: z.string().min(1).max(4_096),
     auditedAt: z.iso.datetime().optional(),
-    riskLevel: z.string().min(1).optional(),
-  })
-  .passthrough();
+    riskLevel: z.string().min(1).max(128).optional(),
+  });
 
 export const skillsShAuditResponseSchema = z.object({
-  id: z.string().min(1),
-  source: z.string().min(1),
-  slug: z.string().min(1),
-  audits: z.array(auditEntrySchema),
+  id: z.string().min(1).max(1_024),
+  source: z.string().min(1).max(512),
+  slug: z.string().min(1).max(256),
+  audits: z.array(auditEntrySchema).max(128),
 });
 
 const errorResponseSchema = z
   .object({
-    error: z.string().optional(),
-    message: z.string().optional(),
-  })
-  .passthrough();
+    error: z.string().max(4_096).optional(),
+    message: z.string().max(4_096).optional(),
+  });
 
 export type SkillsShListResponse = z.infer<typeof skillsShListResponseSchema>;
 export type SkillsShSkill = z.infer<typeof v1SkillSchema>;

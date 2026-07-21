@@ -1,10 +1,19 @@
 // @vitest-environment node
 
 import { createHash } from "node:crypto";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { describe, expect, it, vi } from "vitest";
 
-import { validateAgentSkillRecord } from "../security";
+import { createCatalogDatabase } from "../../db/client";
+import { migrateCatalogDatabase } from "../../db/migrate";
+import { CatalogRepository } from "../../db/repository";
+import { sourceListings } from "../../db/schema";
+import { seedCatalog } from "../../db/seed";
+import { CatalogIngestionService } from "../ingestion";
+import { createAgentSkillValidator, validateAgentSkillRecord } from "../security";
 import type { DiscoveredSkillRecord } from "../source-contract";
 import type { SkillMdListItem, SkillMdSkillMetadata } from "./skillmd-client";
 import { SkillMdAdapter } from "./skillmd";
@@ -61,10 +70,10 @@ function detail(overrides: Partial<SkillMdSkillMetadata> = {}): SkillMdSkillMeta
   };
 }
 
-function client(metadata = detail()) {
+function client(metadata = detail(), listing = item()) {
   return {
     listSkills: vi.fn(async () => ({
-      items: [item()],
+      items: [listing],
       limit: 100,
       offset: 0,
       nextOffset: null,
@@ -78,51 +87,55 @@ async function firstPage(adapter: SkillMdAdapter) {
   throw new Error("adapter did not yield a page");
 }
 
+function githubFetch(): ReturnType<typeof vi.fn<typeof fetch>> {
+  return vi.fn<typeof fetch>(async (input) => {
+    const url = new URL(String(input));
+    if (url.hostname === "api.github.com" && url.pathname.endsWith("fixture-repository")) {
+      return json({
+        full_name: "fixture-owner/fixture-repository",
+        html_url: "https://github.com/fixture-owner/fixture-repository",
+        private: false,
+        visibility: "public",
+        owner: { login: "fixture-owner" },
+        name: "fixture-repository",
+        default_branch: "main",
+      });
+    }
+    if (url.hostname === "api.github.com" && url.pathname.includes("/git/commits/")) {
+      return json({ sha: COMMIT, tree: { sha: "tree-sha" } });
+    }
+    if (url.hostname === "api.github.com" && url.pathname.includes("/git/trees/")) {
+      return json({
+        sha: "tree-sha",
+        truncated: false,
+        tree: [
+          {
+            path: "skills/fixture-safe/SKILL.md",
+            mode: "100644",
+            type: "blob",
+            sha: gitBlobSha(SKILL),
+            size: Buffer.byteLength(SKILL),
+          },
+          {
+            path: "skills/fixture-safe/reference.md",
+            mode: "100644",
+            type: "blob",
+            sha: gitBlobSha(REFERENCE),
+            size: Buffer.byteLength(REFERENCE),
+          },
+        ],
+      });
+    }
+    if (url.hostname === "raw.githubusercontent.com") {
+      return new Response(url.pathname.endsWith("SKILL.md") ? SKILL : REFERENCE);
+    }
+    return new Response(null, { status: 404 });
+  });
+}
+
 describe("SkillMdAdapter", () => {
   it("binds SkillMD discovery to exact public GitHub tree bytes", async () => {
-    const fetchMock = vi.fn<typeof fetch>(async (input) => {
-      const url = new URL(String(input));
-      if (url.hostname === "api.github.com" && url.pathname.endsWith("fixture-repository")) {
-        return json({
-          full_name: "fixture-owner/fixture-repository",
-          html_url: "https://github.com/fixture-owner/fixture-repository",
-          private: false,
-          visibility: "public",
-          owner: { login: "fixture-owner" },
-          name: "fixture-repository",
-          default_branch: "main",
-        });
-      }
-      if (url.hostname === "api.github.com" && url.pathname.includes("/git/commits/")) {
-        return json({ sha: COMMIT, tree: { sha: "tree-sha" } });
-      }
-      if (url.hostname === "api.github.com" && url.pathname.includes("/git/trees/")) {
-        return json({
-          sha: "tree-sha",
-          truncated: false,
-          tree: [
-            {
-              path: "skills/fixture-safe/SKILL.md",
-              mode: "100644",
-              type: "blob",
-              sha: gitBlobSha(SKILL),
-              size: Buffer.byteLength(SKILL),
-            },
-            {
-              path: "skills/fixture-safe/reference.md",
-              mode: "100644",
-              type: "blob",
-              sha: gitBlobSha(REFERENCE),
-              size: Buffer.byteLength(REFERENCE),
-            },
-          ],
-        });
-      }
-      if (url.hostname === "raw.githubusercontent.com") {
-        return new Response(url.pathname.endsWith("SKILL.md") ? SKILL : REFERENCE);
-      }
-      return new Response(null, { status: 404 });
-    });
+    const fetchMock = githubFetch();
     const page = await firstPage(
       new SkillMdAdapter({
         client: client(),
@@ -156,6 +169,87 @@ describe("SkillMdAdapter", () => {
         .filter(([input]) => new URL(String(input)).hostname === "api.github.com")
         .every(([, init]) => new Headers(init?.headers).get("authorization") === "Bearer fixture-github-token"),
     ).toBe(true);
+  });
+
+  it("persists only a bounded SkillMD metadata summary", async () => {
+    const providerMarker = "skillmd-opaque-marker-must-not-persist";
+    const installCommandMarker = "skillmd-install-command-must-not-persist";
+    const inventoryPathMarker = "references/provider-inventory-path-must-not-persist.md";
+    const markedItem = {
+      ...item(),
+      futureOpaqueListingPayload: { nested: providerMarker },
+    } as SkillMdListItem;
+    const markedDetail = {
+      ...detail({
+        install_snippet: installCommandMarker,
+        raw_url: "https://registry.example/raw/provider-body",
+        bundle_url: "https://registry.example/bundle/provider-body",
+        inventory: [
+          {
+            path: inventoryPathMarker,
+            size_bytes: Number.MAX_SAFE_INTEGER,
+            is_script: 1,
+            storage: "provider",
+          },
+          {
+            path: "references/second-provider-path.md",
+            size_bytes: 42,
+            is_script: 0,
+            storage: "provider",
+          },
+        ],
+      }),
+      futureOpaqueDetailPayload: { nested: providerMarker },
+    } as SkillMdSkillMetadata;
+    const page = await firstPage(
+      new SkillMdAdapter({
+        client: client(markedDetail, markedItem),
+        fetch: githubFetch(),
+        githubToken: "fixture-github-token",
+      }),
+    );
+    const record = page.records[0] as DiscoveredSkillRecord;
+    const temporaryDirectory = mkdtempSync(join(tmpdir(), "aisle-skillmd-boundary-test-"));
+    const connection = createCatalogDatabase({
+      url: `file:${join(temporaryDirectory, "catalog.db").replaceAll("\\", "/")}`,
+    });
+
+    try {
+      await migrateCatalogDatabase(connection.client);
+      const repository = new CatalogRepository(connection.db);
+      await seedCatalog(repository);
+      const run = await repository.acquireSyncRun("skillmd");
+      const persisted = await new CatalogIngestionService(
+        repository,
+        createAgentSkillValidator(),
+      ).persist("skillmd", run.id, record);
+      const [storedListing] = await connection.db.select().from(sourceListings);
+      const persistedJson = JSON.stringify(storedListing?.rawJson);
+
+      expect(persisted.resolved).toBe(true);
+      expect(storedListing?.rawJson).toMatchObject({
+        listing: {
+          slug: "fixture-owner/fixture-safe",
+          verifiedScope: "provider-badge-only",
+        },
+        detail: {
+          commitSha: COMMIT,
+          inventory: {
+            fileCount: 2,
+            totalBytes: Number.MAX_SAFE_INTEGER,
+            scriptCount: 1,
+          },
+        },
+        sourceTreeSha: "tree-sha",
+      });
+      expect(persistedJson).not.toContain(providerMarker);
+      expect(persistedJson).not.toContain(installCommandMarker);
+      expect(persistedJson).not.toContain(inventoryPathMarker);
+      expect(persistedJson).not.toContain("raw/provider-body");
+      expect(persistedJson).not.toContain("bundle/provider-body");
+    } finally {
+      connection.client.close();
+    }
   });
 
   it("keeps entries without immutable public source metadata unresolved", async () => {

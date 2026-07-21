@@ -25,28 +25,31 @@ const ownerSchema = z
   .max(128)
   .regex(/^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$/);
 const displayNameSchema = z.string().min(1).max(256);
+const versionIdentifierSchema = z.string().min(1).max(256);
+const licenseSchema = z.string().max(256).nullable().optional();
+const timestampSchema = z
+  .number()
+  .finite()
+  .min(-Number.MAX_SAFE_INTEGER)
+  .max(Number.MAX_SAFE_INTEGER);
+const latestVersionSchema = z.object({
+  version: versionIdentifierSchema,
+  createdAt: timestampSchema,
+  license: licenseSchema,
+});
 
 const listItemSchema = z.object({
   slug: slugSchema,
   displayName: displayNameSchema,
   summary: z.string().max(4_096).nullable(),
-  tags: z.record(z.string(), z.unknown()).default({}),
-  stats: z.record(z.string(), z.unknown()).default({}),
-  createdAt: z.number(),
-  updatedAt: z.number(),
-  latestVersion: z
-    .object({
-      version: z.string().min(1),
-      createdAt: z.number(),
-      changelog: z.string().default(""),
-      license: z.string().nullable().optional(),
-    })
-    .nullable(),
+  createdAt: timestampSchema,
+  updatedAt: timestampSchema,
+  latestVersion: latestVersionSchema.nullable(),
 });
 
 const listResponseSchema = z.object({
-  items: z.array(listItemSchema),
-  nextCursor: z.string().min(1).nullable(),
+  items: z.array(listItemSchema).max(200),
+  nextCursor: z.string().min(1).max(2_048).nullable(),
 });
 
 const moderationSchema = z
@@ -55,62 +58,50 @@ const moderationSchema = z
     isMalwareBlocked: z.boolean().default(false),
     isHiddenByMod: z.boolean().optional(),
     isRemoved: z.boolean().optional(),
-    verdict: z.string().optional(),
-    reasonCodes: z.array(z.string()).default([]),
-    summary: z.string().nullable().optional(),
-    engineVersion: z.string().nullable().optional(),
-    updatedAt: z.number().nullable().optional(),
-  })
-  .passthrough();
+    verdict: z.string().max(128).nullable().optional(),
+    reasonCodes: z.array(z.string().min(1).max(128)).max(64).default([]),
+    summary: z.string().max(4_096).nullable().optional(),
+    engineVersion: z.string().max(128).nullable().optional(),
+    updatedAt: timestampSchema.nullable().optional(),
+  });
 
 const detailResponseSchema = z.object({
   skill: z.object({
     slug: slugSchema,
     displayName: displayNameSchema,
     summary: z.string().max(4_096).nullable(),
-    url: z.url().optional(),
-    stats: z.record(z.string(), z.unknown()).default({}),
-    createdAt: z.number(),
-    updatedAt: z.number(),
+    url: z.url().max(2_048).optional(),
+    createdAt: timestampSchema,
+    updatedAt: timestampSchema,
   }),
-  latestVersion: z
-    .object({
-      version: z.string().min(1),
-      createdAt: z.number(),
-      changelog: z.string().default(""),
-      license: z.string().nullable().optional(),
-    })
-    .nullable(),
-  metadata: z.record(z.string(), z.unknown()).nullable().optional(),
+  latestVersion: latestVersionSchema.nullable(),
   owner: z.object({ handle: ownerSchema }).nullable(),
   moderation: moderationSchema.nullable().optional(),
 });
 
 const fileSchema = z.object({
-  path: z.string().min(1),
-  size: z.number().int().nonnegative(),
+  path: z.string().min(1).max(4_096),
+  size: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
   sha256: z.string().regex(/^(?:sha256:)?[a-fA-F0-9]{64}$/),
-  contentType: z.string().nullable(),
+  contentType: z.string().max(256).nullable(),
 });
 
 const securitySchema = z
   .object({
-    status: z.string().min(1),
+    status: z.string().min(1).max(128),
     hasWarnings: z.boolean().optional(),
-    checkedAt: z.number().nullable().optional(),
-    sha256hash: z.string().nullable().optional(),
-  })
-  .passthrough();
+    checkedAt: timestampSchema.nullable().optional(),
+    sha256hash: z.string().max(256).nullable().optional(),
+  });
 
 const versionResponseSchema = z.object({
   skill: z.object({ slug: slugSchema, displayName: displayNameSchema }).nullable(),
   version: z
     .object({
-      version: z.string().min(1),
-      createdAt: z.number(),
-      changelog: z.string().default(""),
-      license: z.string().nullable().optional(),
-      files: z.array(fileSchema),
+      version: versionIdentifierSchema,
+      createdAt: timestampSchema,
+      license: licenseSchema,
+      files: z.array(fileSchema).max(100_000),
       security: securitySchema.optional(),
     })
     .nullable(),
@@ -120,25 +111,20 @@ const scanResponseSchema = z
   .object({
     moderation: moderationSchema.nullable().optional(),
     security: securitySchema.nullable().optional(),
-  })
-  .passthrough();
+  });
 
 const verificationSchema = z
   .object({
-    schema: z.string().optional(),
+    schema: z.string().max(128).optional(),
     ok: z.boolean(),
-    decision: z.string().min(1),
-    version: z.string().min(1),
-    publisherHandle: z.string().min(1),
+    decision: z.string().min(1).max(128),
+    version: versionIdentifierSchema,
+    publisherHandle: ownerSchema,
     artifact: z.object({
       sourceFingerprint: z.string().regex(/^[a-fA-F0-9]{64}$/),
-      files: z.array(fileSchema).default([]),
+      files: z.array(fileSchema).max(100_000).default([]),
     }),
-    provenance: z.record(z.string(), z.unknown()).nullable().optional(),
-    security: z.record(z.string(), z.unknown()).nullable().optional(),
-    signature: z.record(z.string(), z.unknown()).nullable().optional(),
-  })
-  .passthrough();
+  });
 
 const ambiguitySchema = z.object({
   code: z.literal("AMBIGUOUS_SKILL_SLUG"),
@@ -148,16 +134,22 @@ const ambiguitySchema = z.object({
       z.object({
         ownerHandle: ownerSchema,
         slug: slugSchema,
-        ref: z.string().min(1),
-        url: z.url(),
+        ref: z.string().min(1).max(512),
+        url: z.url().max(2_048),
       }),
     )
-    .min(2),
+    .min(2)
+    .max(100),
 });
 
 type ListItem = z.infer<typeof listItemSchema>;
 type Detail = z.infer<typeof detailResponseSchema>;
 type FileDescriptor = z.infer<typeof fileSchema>;
+type Moderation = z.infer<typeof moderationSchema>;
+type Scan = z.infer<typeof scanResponseSchema>;
+type Security = z.infer<typeof securitySchema>;
+type Verification = z.infer<typeof verificationSchema>;
+type Version = NonNullable<z.infer<typeof versionResponseSchema>["version"]>;
 
 export interface ClawHubAdapterOptions {
   fetch?: typeof fetch;
@@ -195,6 +187,118 @@ function assertUniqueInventory(files: readonly FileDescriptor[], label: string):
     }
     paths.add(path);
   }
+}
+
+function latestVersionSummary(
+  latestVersion: ListItem["latestVersion"] | Detail["latestVersion"],
+): Record<string, unknown> | null {
+  if (!latestVersion) return null;
+  return {
+    version: latestVersion.version,
+    createdAt: latestVersion.createdAt,
+    license: latestVersion.license ?? null,
+  };
+}
+
+function persistedClawHubListing(item: ListItem): Record<string, unknown> {
+  return {
+    slug: item.slug,
+    displayName: item.displayName,
+    summary: item.summary,
+    createdAt: item.createdAt,
+    updatedAt: item.updatedAt,
+    latestVersion: latestVersionSummary(item.latestVersion),
+  };
+}
+
+function persistedClawHubDetail(detail: Detail): Record<string, unknown> {
+  return {
+    slug: detail.skill.slug,
+    displayName: detail.skill.displayName,
+    summary: detail.skill.summary,
+    url: detail.skill.url ?? null,
+    createdAt: detail.skill.createdAt,
+    updatedAt: detail.skill.updatedAt,
+    owner: detail.owner?.handle ?? null,
+    latestVersion: latestVersionSummary(detail.latestVersion),
+  };
+}
+
+function persistedModerationSummary(
+  moderation: Moderation | null | undefined,
+): Record<string, unknown> | null {
+  if (!moderation) return null;
+  return {
+    isSuspicious: moderation.isSuspicious,
+    isMalwareBlocked: moderation.isMalwareBlocked,
+    isHiddenByMod: moderation.isHiddenByMod ?? false,
+    isRemoved: moderation.isRemoved ?? false,
+    verdict: moderation.verdict ?? null,
+    reasonCodes: moderation.reasonCodes,
+    summary: moderation.summary ?? null,
+    engineVersion: moderation.engineVersion ?? null,
+    updatedAt: moderation.updatedAt ?? null,
+  };
+}
+
+function persistedSecuritySummary(
+  security: Security | null | undefined,
+): Record<string, unknown> | null {
+  if (!security) return null;
+  return {
+    status: security.status,
+    hasWarnings: security.hasWarnings ?? false,
+    checkedAt: security.checkedAt ?? null,
+    sha256hash: security.sha256hash ?? null,
+  };
+}
+
+function persistedScanSummary(scan: Scan | null): Record<string, unknown> | null {
+  if (!scan) return null;
+  return {
+    moderation: persistedModerationSummary(scan.moderation),
+    security: persistedSecuritySummary(scan.security),
+  };
+}
+
+function inventorySummary(files: readonly FileDescriptor[]): Record<string, unknown> {
+  return {
+    fileCount: files.length,
+    totalBytes: files.reduce(
+      (total, file) =>
+        total > Number.MAX_SAFE_INTEGER - file.size
+          ? Number.MAX_SAFE_INTEGER
+          : total + file.size,
+      0,
+    ),
+  };
+}
+
+function persistedVersionSummary(version: Version): Record<string, unknown> {
+  return {
+    version: version.version,
+    createdAt: version.createdAt,
+    license: version.license ?? null,
+    inventory: inventorySummary(version.files),
+    security: persistedSecuritySummary(version.security),
+  };
+}
+
+function persistedVerificationSummary(
+  verification: Verification | null,
+): Record<string, unknown> | null {
+  if (!verification) return null;
+  return {
+    schema: verification.schema ?? null,
+    ok: verification.ok,
+    decision: verification.decision,
+    version: verification.version,
+    publisherHandle: verification.publisherHandle,
+    artifact: {
+      sourceFingerprint: verification.artifact.sourceFingerprint,
+      ...inventorySummary(verification.artifact.files),
+    },
+  };
 }
 
 export class ClawHubAdapter implements CatalogSourceConnector {
@@ -508,20 +612,14 @@ export class ClawHubAdapter implements CatalogSourceConnector {
           }
         : null,
       raw: {
-        listing: item,
-        detail: {
-          slug,
-          displayName: detail.skill.displayName,
-          summary: detail.skill.summary,
-          owner,
-          latestVersion: detail.latestVersion,
-        },
+        listing: persistedClawHubListing(item),
+        detail: persistedClawHubDetail(detail),
         inventoryHash,
         sourceFingerprint,
-        version: { ...versionResult.version, files },
-        moderation: effectiveModeration,
-        scan,
-        verification,
+        version: persistedVersionSummary(versionResult.version),
+        moderation: persistedModerationSummary(effectiveModeration),
+        scan: persistedScanSummary(scan),
+        verification: persistedVerificationSummary(verification),
       },
     };
   }
@@ -549,7 +647,11 @@ export class ClawHubAdapter implements CatalogSourceConnector {
       aliases: [identity],
       repository: null,
       artifact: null,
-      raw: { listing: item, owner, unresolved: "exact version unavailable" },
+      raw: {
+        listing: persistedClawHubListing(item),
+        detail: persistedClawHubDetail(detail),
+        unresolved: "exact version unavailable",
+      },
     };
   }
 

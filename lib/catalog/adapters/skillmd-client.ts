@@ -9,60 +9,54 @@ const RETRYABLE_STATUSES = new Set([408, 429, 500, 502, 503, 504]);
 
 const skillMdListItemWireSchema = z
   .object({
-    slug: z.string().min(1),
-    type: z.string().min(1),
-    title: z.string().min(1),
-    description: z.string(),
+    slug: z.string().min(1).max(512),
+    type: z.string().min(1).max(64),
+    title: z.string().min(1).max(256),
+    description: z.string().max(4_096),
     verified: z.boolean(),
-    agents: z.string().nullable().optional(),
-    category: z.string().nullable().optional(),
+    agents: z.string().max(1_024).nullable().optional(),
+    category: z.string().max(128).nullable().optional(),
     avg_rating: z.number().nonnegative().nullable().optional(),
-    rating_count: z.number().int().nonnegative().optional(),
-    raw_url: z.string().url().nullable().optional(),
-  })
-  .passthrough();
+    rating_count: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional(),
+    raw_url: z.url().max(2_048).nullable().optional(),
+  });
 
 export const skillMdListResponseSchema = z
   .object({
-    items: z.array(skillMdListItemWireSchema),
+    items: z.array(skillMdListItemWireSchema).max(100),
     limit: z.number().int().min(1).max(100),
-    offset: z.number().int().nonnegative(),
-  })
-  .passthrough();
+    offset: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+  });
 
 const skillMdInventoryItemWireSchema = z
   .object({
-    path: z.string().min(1),
-    size_bytes: z.number().int().nonnegative(),
+    path: z.string().min(1).max(4_096),
+    size_bytes: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
     is_script: z.union([z.boolean(), z.literal(0), z.literal(1)]),
-    storage: z.string().min(1),
-  })
-  .passthrough();
+    storage: z.string().min(1).max(64),
+  });
 
 const skillMdDetailWireSchema = z
   .object({
-    slug: z.string().min(1),
-    title: z.string().min(1),
-    description: z.string(),
-    type: z.string().min(1),
+    slug: z.string().min(1).max(512),
+    title: z.string().min(1).max(256),
+    description: z.string().max(4_096),
+    type: z.string().min(1).max(64),
     verified: z.boolean(),
     avg_rating: z.number().nonnegative().nullable().optional(),
-    rating_count: z.number().int().nonnegative().optional(),
-    install_count: z.number().int().nonnegative().optional(),
-    license: z.string().nullable(),
-    source_repo: z.string().nullable(),
-    commit_sha: z.string().min(1).nullable(),
-    last_synced_at: z.string().nullable().optional(),
-    category: z.string().nullable().optional(),
-    install_snippet: z.string().nullable(),
-    raw_url: z.string().url().nullable().optional(),
-    bundle_url: z.string().url().nullable().optional(),
-    files: z.array(skillMdInventoryItemWireSchema).nullable().optional(),
-    inventory: z.array(skillMdInventoryItemWireSchema).nullable().optional(),
-    body_md: z.string().optional(),
-    raw_md: z.string().optional(),
-  })
-  .passthrough();
+    rating_count: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional(),
+    install_count: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional(),
+    license: z.string().max(256).nullable(),
+    source_repo: z.string().max(2_048).nullable(),
+    commit_sha: z.string().min(1).max(256).nullable(),
+    last_synced_at: z.string().max(128).nullable().optional(),
+    category: z.string().max(128).nullable().optional(),
+    install_snippet: z.string().max(4_096).nullable(),
+    raw_url: z.url().max(2_048).nullable().optional(),
+    bundle_url: z.url().max(2_048).nullable().optional(),
+    files: z.array(skillMdInventoryItemWireSchema).max(100_000).nullable().optional(),
+    inventory: z.array(skillMdInventoryItemWireSchema).max(100_000).nullable().optional(),
+  });
 
 export interface SkillMdListItem {
   slug: string;

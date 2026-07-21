@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   SkillsShAuthenticationError,
   SkillsShClient,
+  SkillsShContractError,
   parseRetryAfter,
 } from "./skills-sh-client";
 
@@ -77,6 +78,33 @@ describe("SkillsShClient", () => {
         audits: [],
       },
     });
+  });
+
+  it("rejects numeric metadata outside JavaScript's safe integer range", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+      response({
+        data: [
+          {
+            id: "fixture-org/fixture-repo/fixture-skill",
+            slug: "fixture-skill",
+            name: "Fixture skill",
+            source: "fixture-org/fixture-repo",
+            installs: Number.MAX_SAFE_INTEGER + 1,
+            sourceType: "github",
+            installUrl: "https://github.com/fixture-org/fixture-repo",
+            url: "https://skills.sh/fixture-org/fixture-repo/fixture-skill",
+          },
+        ],
+        pagination: { page: 0, perPage: 1, total: 1, hasMore: false },
+      }),
+    );
+    const client = new SkillsShClient({
+      fetch: fetchMock,
+      tokenProvider: async () => "fixture-request-token",
+      maxAttempts: 1,
+    });
+
+    await expect(client.listSkills(0, 1)).rejects.toBeInstanceOf(SkillsShContractError);
   });
 
   it("parses delta-seconds and HTTP-date Retry-After values", () => {

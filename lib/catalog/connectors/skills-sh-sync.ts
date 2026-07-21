@@ -9,6 +9,7 @@ import {
   SkillsShAuthenticationError,
   SkillsShClient,
   SkillsShHttpError,
+  type SkillsShAuditResponse,
   type SkillsShSkill,
 } from "./skills-sh-client";
 
@@ -33,6 +34,34 @@ export interface SkillsShSyncResult {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function persistedListingSummary(listing: SkillsShSkill): Record<string, unknown> {
+  return {
+    id: listing.id,
+    slug: listing.slug,
+    name: listing.name,
+    source: listing.source,
+    sourceType: listing.sourceType,
+    installs: listing.installs,
+    installUrl: listing.installUrl,
+    url: listing.url,
+    hash: listing.hash ?? null,
+    duplicate: listing.duplicate ?? listing.isDuplicate ?? false,
+  };
+}
+
+function persistedAuditSummary(
+  entry: SkillsShAuditResponse["audits"][number],
+): Record<string, unknown> {
+  return {
+    provider: entry.provider,
+    slug: entry.slug,
+    status: entry.status,
+    summary: entry.summary,
+    auditedAt: entry.auditedAt ?? null,
+    riskLevel: entry.riskLevel ?? null,
+  };
 }
 
 async function mapWithConcurrency<T, R>(
@@ -259,7 +288,7 @@ export class SkillsShSync {
       sourceHash: listingHash,
       installs: listing.installs,
       duplicateIndicator: listing.duplicate ?? listing.isDuplicate ?? false,
-      raw: listing,
+      raw: persistedListingSummary(listing),
     });
 
     let observedContentHash = listingHash ?? stored.previousHash;
@@ -367,21 +396,14 @@ export class SkillsShSync {
                 }
               : null,
             raw: {
-              listing: {
-                id: listing.id,
-                slug: listing.slug,
-                name: listing.name,
-                source: listing.source,
-                sourceType: listing.sourceType,
-                installs: listing.installs,
-                url: listing.url,
-              },
+              listing: persistedListingSummary(listing),
               detail: {
                 id: detail.data.id,
                 slug: detail.data.slug,
                 source: detail.data.source,
                 hash: detail.data.hash,
-                fileInventory: textFiles.map(({ path, sha256 }) => ({ path, sha256 })),
+                fileCount: detail.data.files?.length ?? null,
+                artifactContentHash,
               },
             },
           }, { installs: listing.installs });
@@ -408,7 +430,7 @@ export class SkillsShSync {
         summary: entry.summary,
         riskLevel: entry.riskLevel,
         auditedAt: entry.auditedAt,
-        raw: entry,
+        raw: persistedAuditSummary(entry),
       })),
     });
 

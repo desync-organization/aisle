@@ -1,10 +1,19 @@
 // @vitest-environment node
 
 import { createHash } from "node:crypto";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { describe, expect, it, vi } from "vitest";
 
-import { validateAgentSkillRecord } from "../security";
+import { createCatalogDatabase } from "../../db/client";
+import { migrateCatalogDatabase } from "../../db/migrate";
+import { CatalogRepository } from "../../db/repository";
+import { auditRecords, sourceListings } from "../../db/schema";
+import { seedCatalog } from "../../db/seed";
+import { CatalogIngestionService } from "../ingestion";
+import { createAgentSkillValidator, validateAgentSkillRecord } from "../security";
 import type { DiscoveredSkillRecord } from "../source-contract";
 import { ClawHubAdapter } from "./clawhub";
 
@@ -62,6 +71,7 @@ function clawHubFetch(options: {
   fileBody?: string;
   versionSkill?: { slug: string; displayName: string } | null;
   duplicateVersionPath?: boolean;
+  providerMarker?: string;
 } = {}) {
   let listCalls = 0;
   return vi.fn<typeof fetch>(async (input) => {
@@ -70,7 +80,21 @@ function clawHubFetch(options: {
       listCalls += 1;
       return listCalls === 1
         ? json({ items: [], nextCursor: "opaque-short-page" })
-        : json({ items: [item()], nextCursor: null });
+        : json({
+            items: [
+              {
+                ...item(),
+                ...(options.providerMarker
+                  ? {
+                      tags: { opaque: options.providerMarker },
+                      stats: { opaque: options.providerMarker },
+                      futureOpaqueListingPayload: { nested: options.providerMarker },
+                    }
+                  : {}),
+              },
+            ],
+            nextCursor: null,
+          });
     }
     if (url.pathname === "/api/v1/skills/fixture-safe" && !url.searchParams.has("owner")) {
       return json(
@@ -88,10 +112,51 @@ function clawHubFetch(options: {
       );
     }
     const owner = url.searchParams.get("owner") ?? "alpha";
-    if (url.pathname === "/api/v1/skills/fixture-safe") return json(detail(owner));
-    if (url.pathname.endsWith("/moderation")) return json({ moderation: null });
+    if (url.pathname === "/api/v1/skills/fixture-safe") {
+      const value = detail(owner);
+      return json(
+        options.providerMarker
+          ? {
+              ...value,
+              skill: {
+                ...value.skill,
+                stats: { opaque: options.providerMarker },
+                futureOpaqueDetailPayload: { nested: options.providerMarker },
+              },
+              latestVersion: {
+                ...value.latestVersion,
+                changelog: options.providerMarker,
+              },
+              metadata: { opaque: options.providerMarker },
+            }
+          : value,
+      );
+    }
+    if (url.pathname.endsWith("/moderation")) {
+      return json({
+        moderation: options.providerMarker
+          ? {
+              isSuspicious: false,
+              isMalwareBlocked: false,
+              reasonCodes: [],
+              futureOpaqueModerationPayload: { nested: options.providerMarker },
+            }
+          : null,
+      });
+    }
     if (url.pathname.endsWith("/scan")) {
-      return json({ moderation: null, security: { status: "clean" } });
+      return json({
+        moderation: null,
+        security: {
+          status: "clean",
+          ...(options.providerMarker
+            ? { futureOpaqueSecurityPayload: { nested: options.providerMarker } }
+            : {}),
+        },
+        ...(options.providerMarker
+          ? { futureOpaqueScanPayload: { nested: options.providerMarker } }
+          : {}),
+      });
     }
     if (url.pathname.endsWith("/versions/1.0.0")) {
       const files = [
@@ -115,8 +180,21 @@ function clawHubFetch(options: {
           createdAt: 2,
           changelog: "",
           license: "MIT",
-          files,
-          security: { status: "clean" },
+          files: files.map((file) => ({
+            ...file,
+            ...(options.providerMarker
+              ? { futureOpaqueFilePayload: { nested: options.providerMarker } }
+              : {}),
+          })),
+          security: {
+            status: "clean",
+            ...(options.providerMarker
+              ? { futureOpaqueSecurityPayload: { nested: options.providerMarker } }
+              : {}),
+          },
+          ...(options.providerMarker
+            ? { futureOpaqueVersionPayload: { nested: options.providerMarker } }
+            : {}),
         },
       });
     }
@@ -138,9 +216,12 @@ function clawHubFetch(options: {
             },
           ],
         },
-        provenance: { source: "fixture" },
-        security: { status: "clean" },
-        signature: { status: "unsigned" },
+        provenance: { source: "fixture", opaque: options.providerMarker },
+        security: { status: "clean", opaque: options.providerMarker },
+        signature: { status: "unsigned", opaque: options.providerMarker },
+        ...(options.providerMarker
+          ? { futureOpaqueVerificationPayload: { nested: options.providerMarker } }
+          : {}),
       });
     }
     if (url.pathname.endsWith("/file")) return new Response(options.fileBody ?? SKILL);
@@ -192,6 +273,66 @@ describe("ClawHubAdapter", () => {
       ["@alpha/fixture-safe"],
       ["@beta/fixture-safe"],
     ]);
+  });
+
+  it("persists only allowlisted ClawHub metadata and audit summaries", async () => {
+    const providerMarker = "clawhub-opaque-marker-must-not-persist";
+    const pages = await allPages(
+      new ClawHubAdapter({ fetch: clawHubFetch({ providerMarker }) }),
+    );
+    const record = pages[1]?.records[0] as DiscoveredSkillRecord;
+    const temporaryDirectory = mkdtempSync(join(tmpdir(), "aisle-clawhub-boundary-test-"));
+    const connection = createCatalogDatabase({
+      url: `file:${join(temporaryDirectory, "catalog.db").replaceAll("\\", "/")}`,
+    });
+
+    try {
+      await migrateCatalogDatabase(connection.client);
+      const repository = new CatalogRepository(connection.db);
+      await seedCatalog(repository);
+      const run = await repository.acquireSyncRun("clawhub");
+      const persisted = await new CatalogIngestionService(
+        repository,
+        createAgentSkillValidator(),
+      ).persist("clawhub", run.id, record);
+      const [storedListing] = await connection.db.select().from(sourceListings);
+      const storedAudits = await connection.db.select().from(auditRecords);
+      const persistedJson = JSON.stringify({
+        listing: storedListing?.rawJson,
+        audits: storedAudits.map((audit) => audit.rawJson),
+      });
+
+      expect(persisted.resolved).toBe(true);
+      expect(storedListing?.rawJson).toMatchObject({
+        listing: { slug: "fixture-safe", displayName: "Fixture Safe" },
+        detail: { owner: "alpha", slug: "fixture-safe" },
+        sourceFingerprint: FINGERPRINT,
+        version: {
+          version: "1.0.0",
+          inventory: { fileCount: 1, totalBytes: Buffer.byteLength(SKILL) },
+          security: { status: "clean" },
+        },
+        verification: {
+          ok: true,
+          decision: "pass",
+          publisherHandle: "alpha",
+          artifact: { sourceFingerprint: FINGERPRINT, fileCount: 1 },
+        },
+      });
+      expect(storedAudits).toHaveLength(1);
+      expect(storedAudits[0]?.rawJson).toEqual({
+        decision: "pass",
+        ok: true,
+        securityStatus: "clean",
+      });
+      expect(persistedJson).not.toContain(providerMarker);
+      expect(persistedJson).not.toContain("# Fixture");
+      expect(persistedJson).not.toContain("changelog");
+      expect(persistedJson).not.toContain("signature");
+      expect(persistedJson).not.toContain("provenance");
+    } finally {
+      connection.client.close();
+    }
   });
 
   it("keeps exact-inventory mismatch and aggregate-byte overflow nonselectable", async () => {

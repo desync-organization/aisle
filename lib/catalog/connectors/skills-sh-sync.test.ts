@@ -437,6 +437,110 @@ license: MIT
     expect(storedListing?.skillId).toBe(selected[0]?.id);
   });
 
+  it("persists only allowlisted skills.sh listing and audit metadata", async () => {
+    const providerMarker = "provider-opaque-marker-must-not-persist";
+    const artifactBodyMarker = "transient-artifact-body-must-not-persist";
+    const manifest = `---
+name: fixture-skill-0
+description: Inert skills.sh provider-boundary fixture.
+license: MIT
+---
+
+# ${artifactBodyMarker}
+`;
+    const providerHash = "d".repeat(64);
+    const fetchMock = vi.fn<typeof fetch>(async (input) => {
+      const url = requestUrl(input);
+      if (url.pathname.endsWith("/api/v1/skills")) {
+        return json({
+          data: [
+            {
+              ...listing(0),
+              hash: providerHash,
+              futureOpaqueListingPayload: { nested: providerMarker },
+            },
+          ],
+          pagination: { page: 0, perPage: 1, total: 1, hasMore: false },
+        });
+      }
+      if (url.pathname.includes("/skills/audit/")) {
+        return json({
+          id: "fixture-org/fixture-repo/fixture-skill-0",
+          source: "fixture-org/fixture-repo",
+          slug: "fixture-skill-0",
+          audits: [
+            {
+              provider: "Fixture Auditor",
+              slug: "fixture-auditor",
+              status: "pass",
+              summary: "No findings in the inert fixture.",
+              auditedAt: "2026-07-20T12:00:00.000Z",
+              futureOpaqueAuditPayload: { nested: providerMarker },
+            },
+          ],
+          futureOpaqueAuditEnvelope: providerMarker,
+        });
+      }
+      return json({
+        id: "fixture-org/fixture-repo/fixture-skill-0",
+        source: "fixture-org/fixture-repo",
+        slug: "fixture-skill-0",
+        installs: 1,
+        hash: providerHash,
+        files: [
+          {
+            path: "SKILL.md",
+            contents: manifest,
+            futureOpaqueFilePayload: providerMarker,
+          },
+        ],
+        futureOpaqueDetailPayload: { nested: providerMarker },
+      });
+    });
+    const result = await new SkillsShSync(
+      repository,
+      new SkillsShClient({
+        fetch: fetchMock,
+        tokenProvider: async () => "fixture-token",
+        maxAttempts: 1,
+      }),
+      {
+        perPage: 1,
+        ingestion: new CatalogIngestionService(repository, createAgentSkillValidator()),
+      },
+    ).run();
+    const [storedListing] = await connection.db.select().from(sourceListings);
+    const storedAudits = await connection.db.select().from(auditRecords);
+    const persistedJson = JSON.stringify({
+      listing: storedListing?.rawJson,
+      audits: storedAudits.map((audit) => audit.rawJson),
+    });
+
+    expect(result.status).toBe("current");
+    expect(storedListing?.rawJson).toMatchObject({
+      listing: {
+        id: "fixture-org/fixture-repo/fixture-skill-0",
+        hash: providerHash,
+      },
+      detail: {
+        id: "fixture-org/fixture-repo/fixture-skill-0",
+        fileCount: 1,
+      },
+    });
+    expect(storedAudits).toHaveLength(1);
+    expect(storedAudits[0]?.rawJson).toEqual({
+      provider: "Fixture Auditor",
+      slug: "fixture-auditor",
+      status: "pass",
+      summary: "No findings in the inert fixture.",
+      auditedAt: "2026-07-20T12:00:00.000Z",
+      riskLevel: null,
+    });
+    expect(persistedJson).not.toContain(providerMarker);
+    expect(persistedJson).not.toContain(artifactBodyMarker);
+    expect(persistedJson).not.toContain("fileInventory");
+  });
+
   it("never sends old validators after a listing hash changes or audits new hash against old bytes", async () => {
     let run = 0;
     let audits = 0;
