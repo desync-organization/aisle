@@ -155,7 +155,7 @@ export const githubBranchSchema = z
     "must be an unambiguous branch name, not a commit SHA or unsafe Git ref",
   );
 
-export const githubDiscoveryPathSchema = z
+const githubSubdirectoryPathSchema = z
   .string()
   .min(1)
   .max(512)
@@ -167,6 +167,16 @@ export const githubDiscoveryPathSchema = z
     (path) => path.split("/").every((segment) => segment !== "." && segment !== ".."),
     "must not contain traversal path segments",
   );
+
+/**
+ * The pinned skills CLI treats a branch-only GitHub tree URL as a full-depth
+ * repository scope. A literal dot represents that root without ever being
+ * interpolated into the URL as a path segment.
+ */
+export const githubDiscoveryPathSchema = z.union([
+  z.literal("."),
+  githubSubdirectoryPathSchema,
+]);
 
 export const githubDiscoveryScopeSchema = z.strictObject({
   branch: githubBranchSchema,

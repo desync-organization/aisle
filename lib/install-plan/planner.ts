@@ -90,6 +90,9 @@ function encodedPath(path: string): string {
 function trustedScopeUrl(skill: ResolvedGithubSkill): string {
   const repository = canonicalRepository(skill);
   const { branch, path } = skill.source.discoveryScope;
+  if (path === ".") {
+    return `https://github.com/${repository}/tree/${encodeURIComponent(branch)}`;
+  }
   return `https://github.com/${repository}/tree/${encodeURIComponent(branch)}/${encodedPath(path)}`;
 }
 

@@ -174,7 +174,8 @@ const selectorCountExpression = sql<number>`(
     and stack_peer.lifecycle = 'current'
     and lower(stack_peer.upstream_name) = lower(${skills.upstreamName})
     and (
-      stack_peer.skill_path = ${skills.skillPath}
+      ${skills.skillPath} = '.'
+      or stack_peer.skill_path = ${skills.skillPath}
       or substr(stack_peer.skill_path, 1, length(${skills.skillPath}) + 1) = ${skills.skillPath} || '/'
     )
 )`;
@@ -274,14 +275,25 @@ function exactGithubBinding(row: PersistedStackSelection): boolean {
   }
 
   try {
-    const source = new URL(normalizeSourceUrl(row.sourceUrl));
+    const sourceUrl = normalizeSourceUrl(row.sourceUrl);
+    const repositoryUrl = normalizeSourceUrl(row.repositoryUrl);
+    const source = new URL(sourceUrl);
+    const repository = new URL(repositoryUrl);
+    const coordinates = repository.pathname.split("/").filter(Boolean);
     return (
       source.protocol === "https:" &&
       source.hostname === "github.com" &&
       source.username === "" &&
       source.password === "" &&
-      normalizeSourceUrl(row.sourceUrl) === normalizeSourceUrl(row.repositoryUrl) &&
-      normalizeSourceUrl(installSpec.data.sourceUrl) === normalizeSourceUrl(row.sourceUrl) &&
+      repository.protocol === "https:" &&
+      repository.hostname === "github.com" &&
+      repository.username === "" &&
+      repository.password === "" &&
+      coordinates.length === 2 &&
+      coordinates[0]!.toLowerCase() === row.repositoryOwner?.toLowerCase() &&
+      coordinates[1]!.toLowerCase() === row.repositoryName?.toLowerCase() &&
+      sourceUrl === repositoryUrl &&
+      normalizeSourceUrl(installSpec.data.sourceUrl) === sourceUrl &&
       normalizeSkillPath(installSpec.data.skillPath) === normalizeSkillPath(row.skillPath) &&
       installSpec.data.immutableRef === row.immutableRef
     );
