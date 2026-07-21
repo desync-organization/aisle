@@ -278,7 +278,6 @@ function hasEnabledSyncSource() {
     from catalog_sources enabled_sync_source
     where enabled_sync_source.id = ${syncRuns.sourceId}
       and enabled_sync_source.enabled = 1
-      and enabled_sync_source.coverage_state <> 'not-configured'
   )`;
 }
 
@@ -463,7 +462,6 @@ export class CatalogRepository {
           eq(syncRuns.leaseToken, fence.leaseToken),
           gt(syncRuns.leaseExpiresAt, new Date()),
           eq(catalogSources.enabled, true),
-          ne(catalogSources.coverageState, "not-configured"),
         ),
       )
       .limit(1);
@@ -979,6 +977,14 @@ export class CatalogRepository {
         .limit(1);
       const enabled = input.enabled ?? true;
       const freshnessPolicy = input.freshnessPolicy ?? "retain";
+      const configuredInitialCoverageState =
+        input.initialCoverageState && input.initialCoverageState !== "not-configured"
+          ? input.initialCoverageState
+          : "not-synced";
+      const initialCoverageState = enabled
+        ? configuredInitialCoverageState
+        : "not-configured";
+      const reenabled = previous?.enabled === false && enabled;
       await transaction
         .insert(catalogSources)
         .values({
@@ -986,7 +992,7 @@ export class CatalogRepository {
           termsUrl: input.termsUrl ?? null,
           enabled,
           freshnessPolicy,
-          coverageState: input.initialCoverageState ?? "not-synced",
+          coverageState: initialCoverageState,
           exclusionsJson: input.knownExclusions ? [...input.knownExclusions] : [],
           createdAt: now,
           updatedAt: now,
@@ -1001,6 +1007,16 @@ export class CatalogRepository {
             upstreamIdentifier: input.upstreamIdentifier,
             termsUrl: input.termsUrl ?? null,
             enabled,
+            ...(reenabled
+              ? {
+                  coverageState: configuredInitialCoverageState,
+                  lastSuccessfulSyncAt: null,
+                  recordCount: 0,
+                  unavailableCount: 0,
+                  lastError: null,
+                  exclusionsJson: input.knownExclusions ? [...input.knownExclusions] : [],
+                }
+              : {}),
             updatedAt: now,
           },
         });
@@ -2190,7 +2206,6 @@ export class CatalogRepository {
             eq(syncRuns.leaseToken, input.leaseToken),
             gt(syncRuns.leaseExpiresAt, now),
             eq(catalogSources.enabled, true),
-            ne(catalogSources.coverageState, "not-configured"),
           ),
         )
         .limit(1);
@@ -2339,7 +2354,6 @@ export class CatalogRepository {
           and(
             eq(catalogSources.id, input.sourceId),
             eq(catalogSources.enabled, true),
-            ne(catalogSources.coverageState, "not-configured"),
           ),
         );
       if (sourceResult.rowsAffected !== 1) {
