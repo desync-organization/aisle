@@ -76,6 +76,7 @@ export const sourceDescriptorSeed = [
     name: "ClawHub",
     baseUrl: "https://clawhub.ai/api/v1/skills",
     mode: "full" as const,
+    freshnessPolicy: "latest-completed-observation" as const,
     upstreamIdentifier: "ClawHub public skills HTTP API",
     termsUrl: "https://docs.openclaw.ai/clawhub/http-api",
     enabled: true,

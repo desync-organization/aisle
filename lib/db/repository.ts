@@ -43,10 +43,12 @@ import {
   trustAssessments,
   trustFindings,
   type lifecycleStates,
+  type sourceFreshnessPolicies,
   type sourceModes,
 } from "./schema";
 
 type SourceMode = (typeof sourceModes)[number];
+type SourceFreshnessPolicy = (typeof sourceFreshnessPolicies)[number];
 type LifecycleState = (typeof lifecycleStates)[number];
 type CatalogTransaction = Parameters<Parameters<CatalogDatabase["transaction"]>[0]>[0];
 type TrustState = "unreviewed" | "pass" | "warn" | "fail" | "quarantined";
@@ -136,6 +138,24 @@ function hasActiveSourceListing() {
       and active_listing.source_hash = ${skillRevisions.upstreamHash}
       and active_source.enabled = 1
       and active_source.coverage_state in ('current', 'partial')
+      and (
+        active_source.freshness_policy = 'retain'
+        or (
+          active_source.freshness_policy = 'latest-completed-observation'
+          and active_listing.last_completed_observation_run_id = (
+            select completed_observation.id
+            from sync_runs completed_observation
+            where completed_observation.source_id = active_source.id
+              and completed_observation.observation_sweep_complete = 1
+              and completed_observation.finished_at is not null
+              and completed_observation.status in ('succeeded', 'partial')
+            order by completed_observation.finished_at desc,
+              completed_observation.started_at desc,
+              completed_observation.id desc
+            limit 1
+          )
+        )
+      )
   )`;
 }
 
@@ -177,6 +197,7 @@ export interface SourceDescriptorInput {
   name: string;
   baseUrl: string;
   mode: SourceMode;
+  freshnessPolicy?: SourceFreshnessPolicy;
   upstreamIdentifier: string;
   termsUrl?: string | null;
   enabled?: boolean;
@@ -474,6 +495,7 @@ export class CatalogRepository {
         ...input,
         termsUrl: input.termsUrl ?? null,
         enabled: input.enabled ?? true,
+        freshnessPolicy: input.freshnessPolicy ?? "retain",
         coverageState: input.initialCoverageState ?? "not-synced",
         exclusionsJson: input.knownExclusions ? [...input.knownExclusions] : [],
         createdAt: now,
@@ -485,6 +507,7 @@ export class CatalogRepository {
           name: input.name,
           baseUrl: input.baseUrl,
           mode: input.mode,
+          freshnessPolicy: input.freshnessPolicy ?? "retain",
           upstreamIdentifier: input.upstreamIdentifier,
           termsUrl: input.termsUrl ?? null,
           enabled: input.enabled ?? true,
@@ -758,6 +781,7 @@ export class CatalogRepository {
       sourceId: source.id,
       name: source.name,
       mode: source.mode,
+      freshnessPolicy: source.freshnessPolicy,
       state: source.coverageState,
       recordCount: source.recordCount,
       unavailableCount: source.unavailableCount,
@@ -823,6 +847,7 @@ export class CatalogRepository {
               failure: null,
               finishedAt: null,
               nextRetryAt: null,
+              observationSweepComplete: false,
               leaseToken,
               leaseExpiresAt,
             })
@@ -939,6 +964,7 @@ export class CatalogRepository {
     partialFailures?: string[];
     exclusions?: string[];
     completeCrawl?: boolean;
+    observationSweepComplete?: boolean;
     unavailableAfter?: number;
   }): Promise<void> {
     const now = new Date();
@@ -952,8 +978,12 @@ export class CatalogRepository {
       : incompleteFailure;
     await this.db.transaction(async (transaction) => {
       const [lease] = await transaction
-        .select({ id: syncRuns.id })
+        .select({
+          id: syncRuns.id,
+          freshnessPolicy: catalogSources.freshnessPolicy,
+        })
         .from(syncRuns)
+        .innerJoin(catalogSources, eq(catalogSources.id, syncRuns.sourceId))
         .where(
           and(
             eq(syncRuns.id, input.runId),
@@ -966,7 +996,52 @@ export class CatalogRepository {
         .limit(1);
       if (!lease) throw new CatalogSyncLeaseLostError(input.runId);
 
-      if (input.completeCrawl) {
+      if (
+        lease.freshnessPolicy === "latest-completed-observation" &&
+        input.observationSweepComplete === true
+      ) {
+        await transaction
+          .update(sourceListings)
+          .set({ lastCompletedObservationRunId: input.runId })
+          .where(
+            and(
+              eq(sourceListings.sourceId, input.sourceId),
+              eq(sourceListings.lastSeenRunId, input.runId),
+            ),
+          );
+        const missing = await transaction
+          .select({
+            id: sourceListings.id,
+            skillId: sourceListings.skillId,
+          })
+          .from(sourceListings)
+          .where(
+            and(
+              eq(sourceListings.sourceId, input.sourceId),
+              or(
+                isNull(sourceListings.lastSeenRunId),
+                ne(sourceListings.lastSeenRunId, input.runId),
+              ),
+              notInArray(sourceListings.status, ["removed", "unresolved"]),
+            ),
+          );
+        const changedSkills = new Set<string>();
+        for (const listing of missing) {
+          await transaction
+            .update(sourceListings)
+            .set({ status: "stale" })
+            .where(
+              and(
+                eq(sourceListings.id, listing.id),
+                eq(sourceListings.sourceId, input.sourceId),
+              ),
+            );
+          if (listing.skillId) changedSkills.add(listing.skillId);
+        }
+        for (const skillId of changedSkills) {
+          await this.recomputeSkillLifecycleInTransaction(transaction, skillId, now);
+        }
+      } else if (input.completeCrawl) {
         const missing = await transaction
           .select({
             id: sourceListings.id,
@@ -1013,6 +1088,7 @@ export class CatalogRepository {
           finishedAt: now,
           sourceTotal: input.sourceTotal,
           completeCrawl: input.completeCrawl ?? true,
+          observationSweepComplete: input.observationSweepComplete ?? false,
           failure,
           nextRetryAt: null,
           leaseToken: null,
@@ -1064,6 +1140,7 @@ export class CatalogRepository {
           failure: input.message,
           retryCount: input.retryCount ?? 0,
           nextRetryAt: input.nextRetryAt ?? null,
+          observationSweepComplete: false,
           leaseToken: null,
           leaseExpiresAt: null,
         })

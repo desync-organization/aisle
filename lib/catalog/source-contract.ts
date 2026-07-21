@@ -1,6 +1,9 @@
 import { z } from "zod";
 
-import { sourceModes } from "../db/schema";
+import {
+  sourceFreshnessPolicies,
+  sourceModes,
+} from "../db/schema";
 import { persistedSkillRawSchema } from "./provider-raw";
 
 export const installSpecSchema = z.discriminatedUnion("kind", [
@@ -114,6 +117,7 @@ export interface CatalogSourceDescriptor {
   name: string;
   baseUrl: string;
   mode: (typeof sourceModes)[number];
+  freshnessPolicy?: (typeof sourceFreshnessPolicies)[number];
   upstreamIdentifier: string;
   termsUrl?: string | null;
   enabled?: boolean;

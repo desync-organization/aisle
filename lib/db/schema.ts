@@ -10,6 +10,10 @@ import {
 } from "drizzle-orm/sqlite-core";
 
 export const sourceModes = ["full", "incremental", "federated", "on-demand"] as const;
+export const sourceFreshnessPolicies = [
+  "retain",
+  "latest-completed-observation",
+] as const;
 export const syncStatuses = ["running", "succeeded", "partial", "failed"] as const;
 export const listingStatuses = ["unresolved", "current", "stale", "unavailable", "removed"] as const;
 export const lifecycleStates = ["current", "stale", "unavailable", "removed"] as const;
@@ -31,6 +35,9 @@ export const catalogSources = sqliteTable(
     name: text("name").notNull(),
     baseUrl: text("base_url").notNull(),
     mode: text("mode", { enum: sourceModes }).notNull(),
+    freshnessPolicy: text("freshness_policy", { enum: sourceFreshnessPolicies })
+      .notNull()
+      .default("retain"),
     enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
     upstreamIdentifier: text("upstream_identifier").notNull(),
     termsUrl: text("terms_url"),
@@ -72,6 +79,9 @@ export const syncRuns = sqliteTable(
     leaseToken: text("lease_token"),
     leaseExpiresAt: integer("lease_expires_at", { mode: "timestamp_ms" }),
     completeCrawl: integer("complete_crawl", { mode: "boolean" }).notNull().default(false),
+    observationSweepComplete: integer("observation_sweep_complete", { mode: "boolean" })
+      .notNull()
+      .default(false),
     checkpointJson: text("checkpoint_json", { mode: "json" })
       .$type<Record<string, unknown>>()
       .notNull()
@@ -215,6 +225,7 @@ export const sourceListings = sqliteTable(
     status: text("status", { enum: listingStatuses }).notNull().default("unresolved"),
     rawJson: text("raw_json", { mode: "json" }).$type<Record<string, unknown>>().notNull(),
     lastSeenRunId: text("last_seen_run_id").references(() => syncRuns.id, { onDelete: "set null" }),
+    lastCompletedObservationRunId: text("last_completed_observation_run_id"),
     missedCompleteCrawls: integer("missed_complete_crawls").notNull().default(0),
     firstSeenAt: integer("first_seen_at", { mode: "timestamp_ms" }).notNull(),
     lastSeenAt: integer("last_seen_at", { mode: "timestamp_ms" }).notNull(),
@@ -224,6 +235,10 @@ export const sourceListings = sqliteTable(
     index("source_listings_skill_idx").on(table.skillId),
     index("source_listings_status_idx").on(table.status),
     index("source_listings_hash_idx").on(table.sourceHash),
+    index("source_listings_freshness_idx").on(
+      table.sourceId,
+      table.lastCompletedObservationRunId,
+    ),
   ],
 );
 
