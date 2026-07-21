@@ -1,9 +1,9 @@
 # Shared skill selection state
 
-The Skills explorer, featured packages, and future install review must use one
-client-side selection store. The store carries only opaque Aisle catalog skill
-IDs. It never stores upstream URLs, repository coordinates, install commands,
-or browser assertions about eligibility.
+The Skills explorer, featured packages, and stack review use one client-side
+selection store. The store carries opaque Aisle catalog skill IDs plus
+immutable package selection receipts. It never stores upstream URLs, repository
+coordinates, install commands, or browser assertions about eligibility.
 
 Browser-held IDs remain untrusted. The install-plan API must resolve every ID
 again from durable catalog state, enforce current public/trust/license status,
@@ -14,18 +14,26 @@ and generate command argv server-side.
 - IDs are 1–128 character bounded ASCII tokens with no path separators,
   whitespace, shell metacharacters, or executable URL schemes.
 - A selection contains at most 64 IDs.
-- `toggle`, `addMany`, `remove`, `replace`, and `clear` all operate on the same
-  store. Mutations are all-or-nothing, sorted, and deduplicated.
-- Package “Add All” calls `addMany`; skill rows call `toggle`. Neither owns a
-  second selection state.
+- `toggle`, `addMany`, `remove`, `replace`, `clear`, `addPackage`, and
+  `removePackage` all operate on the same store. Mutations are all-or-nothing,
+  sorted, and deduplicated.
+- Package “Add All” records a package receipt with the exact published package
+  slug, version, digest, member IDs, and revision IDs. Skill rows call
+  `toggle`. Neither owns a second selection state.
+- Removing one member invalidates any package receipt that claimed it. The
+  remaining package members are retained as individual selections so user
+  customizations do not silently drop skills.
 
 ## Persistence and hydration
 
-localStorage uses the strict envelope `{ "version": 1, "ids": [...] }` under
-`aisle.selection.v1`. Unknown fields, invalid IDs, corrupt JSON, and old
-versions recover to an empty selection; corrupt and old payloads are removed.
-Storage access is deferred until `hydrate()`, guarded for SSR and browser
-privacy/security failures.
+localStorage uses the strict envelope
+`{ "version": 2, "ids": [...], "individualIds": [...], "packageAssertions": [...] }`
+under `aisle.selection.v2`. The legacy `aisle.selection.v1` individual-only
+envelope is accepted and migrated in memory. Unknown fields, invalid IDs,
+corrupt JSON, and unsupported versions recover to an empty selection; corrupt,
+legacy, and unsupported payloads are removed after hydration. Storage access is
+deferred until `hydrate()`, guarded for SSR and browser privacy/security
+failures.
 
 `SelectionProvider` injects a store through a React 19 context. Consumers use
 `useSyncExternalStore` with a stable empty server snapshot. The first client

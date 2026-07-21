@@ -1,9 +1,10 @@
 # Install plan and command generation
 
 The install planner is a pure server-side boundary between persisted catalog
-resolution and the future API/UI. It does not query a registry, accept a URL,
-or accept browser-provided command text. Its input is strict metadata for
-already-resolved public GitHub revisions plus explicit install options.
+resolution and the stack preflight/resolve APIs. It does not query a registry,
+accept a URL, or accept browser-provided command text. Its input is strict
+metadata for already-resolved public GitHub revisions plus explicit install
+options.
 
 ## Fail-closed input
 
