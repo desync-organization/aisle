@@ -5,6 +5,7 @@ import {
   asc,
   desc,
   eq,
+  gt,
   inArray,
   isNull,
   isNotNull,
@@ -19,6 +20,7 @@ import {
 import { installSpecSchema } from "../catalog/source-contract";
 import {
   packageEditorialSchema,
+  packageBlueprintDigest,
   parsePackageBlueprint,
   type PackageBlueprint,
 } from "../packages/package-blueprint";
@@ -125,10 +127,6 @@ export type PackagePublicationResult = Readonly<{
   publishedAt: Date;
   reused: boolean;
 }>;
-
-function packageBlueprintDigest(blueprint: PackageBlueprint): string {
-  return `sha256:${createHash("sha256").update(JSON.stringify(blueprint)).digest("hex")}`;
-}
 
 function stableId(namespace: string, value: string): string {
   return `${namespace}_${createHash("sha256").update(value).digest("hex").slice(0, 24)}`;
@@ -1027,34 +1025,52 @@ export class CatalogRepository {
     };
   }
 
-  async listPublishedPackages(limit = 100): Promise<PublishedPackageSummary[]> {
-    const boundedLimit = Math.min(Math.max(limit, 1), 100);
+  async listPublishedPackages(): Promise<PublishedPackageSummary[]> {
+    const pageSize = 100;
     return this.db.transaction(async (transaction) => {
-      const packageRows = await transaction
-        .select({ id: packages.id })
-        .from(packages)
-        .where(eq(packages.published, true))
-        .orderBy(asc(packages.title), asc(packages.id))
-        .limit(boundedLimit);
       const visible: PublishedPackageSummary[] = [];
-      for (const packageRow of packageRows) {
-        const resolved = await this.resolvePublishedPackageVersion(transaction, {
-          packageId: packageRow.id,
-        });
-        if (!resolved) continue;
-        visible.push({
-          id: resolved.id,
-          slug: resolved.slug,
-          title: resolved.title,
-          description: resolved.description,
-          versionId: resolved.versionId,
-          version: resolved.version,
-          publishedAt: resolved.publishedAt,
-          memberCount: resolved.memberCount,
-          editorial: resolved.editorial,
-          blueprintSchemaVersion: resolved.blueprintSchemaVersion,
-          blueprintDigest: resolved.blueprintDigest,
-        });
+      let after: Readonly<{ title: string; id: string }> | null = null;
+
+      while (true) {
+        const conditions = [eq(packages.published, true)];
+        if (after) {
+          const keyset = or(
+            gt(packages.title, after.title),
+            and(eq(packages.title, after.title), gt(packages.id, after.id)),
+          );
+          if (keyset) conditions.push(keyset);
+        }
+        const packageRows = await transaction
+          .select({ id: packages.id, title: packages.title })
+          .from(packages)
+          .where(and(...conditions))
+          .orderBy(asc(packages.title), asc(packages.id))
+          .limit(pageSize);
+        if (packageRows.length === 0) break;
+
+        for (const packageRow of packageRows) {
+          const resolved = await this.resolvePublishedPackageVersion(transaction, {
+            packageId: packageRow.id,
+          });
+          if (!resolved) continue;
+          visible.push({
+            id: resolved.id,
+            slug: resolved.slug,
+            title: resolved.title,
+            description: resolved.description,
+            versionId: resolved.versionId,
+            version: resolved.version,
+            publishedAt: resolved.publishedAt,
+            memberCount: resolved.memberCount,
+            editorial: resolved.editorial,
+            blueprintSchemaVersion: resolved.blueprintSchemaVersion,
+            blueprintDigest: resolved.blueprintDigest,
+          });
+        }
+
+        if (packageRows.length < pageSize) break;
+        const last = packageRows.at(-1)!;
+        after = { title: last.title, id: last.id };
       }
       return visible;
     });

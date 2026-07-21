@@ -6,6 +6,7 @@ export {
   launchLicenseSpdxSchema,
   licenseEvidenceClassSchema,
   packageBlueprintMemberSchema,
+  packageBlueprintDigest,
   packageBlueprintSchema,
   packageEditorialSchema,
   packageCategories,

@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import { z } from "zod";
 
 export const PACKAGE_BLUEPRINT_SCHEMA_VERSION = 1 as const;
@@ -226,6 +228,12 @@ export function githubSkillLocatorKey(locator: GitHubSkillLocator): string {
 
 export function parsePackageBlueprint(input: unknown): PackageBlueprint {
   return packageBlueprintSchema.parse(input);
+}
+
+/** Hashes the strict parsed blueprint so publishers and readers share one digest contract. */
+export function packageBlueprintDigest(input: unknown): string {
+  const blueprint = parsePackageBlueprint(input);
+  return `sha256:${createHash("sha256").update(JSON.stringify(blueprint)).digest("hex")}`;
 }
 
 export type UnresolvedPackageLocatorPlan = Readonly<{

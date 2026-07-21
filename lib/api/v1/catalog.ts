@@ -572,7 +572,7 @@ export async function listPublicPackages(
   const filterHash = packagesFilterHash(query);
   const cursor = decodeCursor(query.cursor, { scope: "packages", filterHash });
   const normalizedQuery = query.q?.toLowerCase();
-  let rows = (await repository.listPublishedPackages(100))
+  let rows = (await repository.listPublishedPackages())
     .map(packageSummary)
     .filter((row) => {
       if (query.category && row.editorial.category !== query.category) return false;
