@@ -86,34 +86,31 @@ describe("launch package blueprints", () => {
     expect(presentForbiddenFields).toEqual([]);
   });
 
-  it("excludes unlicensed candidates and retains verified upstream selectors", () => {
+  it("excludes ineligible candidates and retains verified upstream selectors", () => {
     const upstreamNames = launchPackageBlueprints.flatMap((blueprint) =>
       blueprint.members.map((member) => member.locator.upstreamSkillName),
     );
 
     expect(upstreamNames).not.toContain("vercel-react-view-transitions");
     expect(upstreamNames).not.toContain("vercel-react-native-skills");
-    expect(upstreamNames).toContain("firebase-data-connect");
+    expect(upstreamNames).not.toContain("vercel-react-best-practices");
+    expect(upstreamNames).not.toContain("vercel-composition-patterns");
+    expect(upstreamNames).not.toContain("firebase-data-connect");
     expect(upstreamNames).not.toContain("firebase-data-connect-basics");
+    expect(upstreamNames).toContain("react-patterns");
+    expect(upstreamNames).toContain("tailwind-css-patterns");
+    expect(upstreamNames).toContain("firebase-firestore");
   });
 
-  it("keeps repository paths separate from verified frontmatter selectors", () => {
-    const dataPackage = launchPackageBlueprints.find(
-      (blueprint) => blueprint.slug === "data-and-ai",
-    );
-    const dataConnect = dataPackage?.members.find(
-      (member) => member.locator.skillPath === "skills/firebase-data-connect-basics/SKILL.md",
-    );
+  it("uses Agent Skills directory names as verified upstream selectors", () => {
+    for (const blueprint of launchPackageBlueprints) {
+      for (const member of blueprint.members) {
+        const pathSegments = member.locator.skillPath.split("/");
 
-    expect(dataConnect?.locator).toMatchObject({
-      owner: "firebase",
-      repository: "agent-skills",
-      skillPath: "skills/firebase-data-connect-basics/SKILL.md",
-      upstreamSkillName: "firebase-data-connect",
-    });
-    expect(dataConnect?.observedSource?.headSha).toBe(
-      "538130c39402a40d9c2586ede87def5914641a33",
-    );
+        expect(pathSegments.at(-1)).toBe("SKILL.md");
+        expect(member.locator.upstreamSkillName).toBe(pathSegments.at(-2));
+      }
+    }
   });
 
   it("covers every launch category with useful multi-skill packages", () => {
@@ -136,6 +133,13 @@ describe("launch package blueprints", () => {
       ]),
     );
 
+    expect(packages.get("frontend-foundations")).toEqual([
+      "react-patterns",
+      "tailwind-css-patterns",
+      "shadcn",
+      "frontend-design",
+      "impeccable",
+    ]);
     expect(packages.get("motion-and-3d")).toEqual([
       "gsap-scrolltrigger",
       "threejs-webgl",
@@ -155,7 +159,7 @@ describe("launch package blueprints", () => {
     expect(packages.get("data-and-ai")).toEqual([
       "supabase-postgres-best-practices",
       "neon-postgres",
-      "firebase-data-connect",
+      "firebase-firestore",
       "firebase-ai-logic-basics",
       "huggingface-datasets",
       "huggingface-llm-trainer",
