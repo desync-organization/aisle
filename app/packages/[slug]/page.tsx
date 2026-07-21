@@ -41,12 +41,6 @@ export default async function PackagePage({ params }: PackagePageProps) {
   const resolved = await loadResolvedPackage(blueprint);
   const category = getCatalogCategoryForEditorial(blueprint.editorial.category);
   const resolvedByPosition = new Map(resolved.members.map((member) => [member.position, member]));
-  const resolvedSkillIds = resolved.availability === "resolved"
-    ? blueprint.members
-        .map((member) => resolvedByPosition.get(member.position)?.skillId)
-        .filter((skillId): skillId is string => Boolean(skillId))
-    : [];
-
   return (
     <div className="site-frame">
       <SiteHeader />
@@ -79,8 +73,9 @@ export default async function PackagePage({ params }: PackagePageProps) {
             expectedBlueprintDigest={resolved.expectedBlueprintDigest}
             expectedBlueprintSchemaVersion={blueprint.schemaVersion}
             memberCount={blueprint.members.length}
+            members={resolved.availability === "resolved" ? resolved.members : []}
             mismatchReasons={resolved.mismatchReasons}
-            skillIds={resolvedSkillIds}
+            packageSlug={blueprint.slug}
           />
 
           <section aria-labelledby="package-outcome" className="package-outcome">

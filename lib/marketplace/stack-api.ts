@@ -3,6 +3,7 @@ import {
   type CatalogSelectionGateReason,
   type CatalogTrustState,
 } from "@/lib/marketplace/selection-gates";
+import type { PackageSelectionAssertion } from "@/lib/selection/contracts";
 
 export const stackAgentOptions = [
   { id: "codex", label: "Codex" },
@@ -22,6 +23,7 @@ export type StackShell = "posix" | "powershell7" | "powershell51" | "cmd";
 
 export type StackPreflightRequest = Readonly<{
   selectionIds: ReadonlyArray<string>;
+  packageAssertions: ReadonlyArray<PackageSelectionAssertion>;
 }>;
 
 export type StackPreflightRow = Readonly<{
@@ -51,6 +53,7 @@ export type StackWarningAcknowledgement = Readonly<{
 
 export type StackResolveRequest = Readonly<{
   selectionIds: ReadonlyArray<string>;
+  packageAssertions: ReadonlyArray<PackageSelectionAssertion>;
   acknowledgements: ReadonlyArray<StackWarningAcknowledgement>;
   options: Readonly<{
     agents: ReadonlyArray<StackAgent>;

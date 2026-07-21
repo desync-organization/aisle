@@ -36,7 +36,7 @@ describe("selection store", () => {
       persistence: "available",
     });
     expect(storage.getItem(SELECTION_STORAGE_KEY)).toBe(
-      '{"version":1,"ids":["skill-a","skill-b","skill-c"]}',
+      '{"version":2,"ids":["skill-a","skill-b","skill-c"],"packageAssertions":[]}',
     );
   });
 
@@ -95,7 +95,7 @@ describe("selection store", () => {
   it.each([
     ["corrupt", "{broken"],
     ["old", '{"version":0,"ids":["skill-old"]}'],
-    ["extra command", '{"version":1,"ids":["skill-a"],"command":"whoami"}'],
+    ["extra command", '{"version":2,"ids":["skill-a"],"packageAssertions":[],"command":"whoami"}'],
   ])("recovers %s storage by clearing it", (_label, payload) => {
     const storage = new MemorySelectionStorage();
     storage.setItem(SELECTION_STORAGE_KEY, payload);
@@ -113,14 +113,35 @@ describe("selection store", () => {
       JSON.stringify({
         version: SELECTION_STORAGE_VERSION,
         ids: ["skill-z", "skill-a", "skill-z"],
+        packageAssertions: [],
       }),
     );
 
     const store = createSelectionStore({ storage });
     expect(store.hydrate().ids).toEqual(["skill-a", "skill-z"]);
     expect(storage.getItem(SELECTION_STORAGE_KEY)).toBe(
-      '{"version":1,"ids":["skill-a","skill-z"]}',
+      '{"version":2,"ids":["skill-a","skill-z"],"packageAssertions":[]}',
     );
+  });
+
+  it("persists package receipts and drops one when a bound member is removed", () => {
+    const storage = new MemorySelectionStorage();
+    const store = createSelectionStore({ storage });
+    store.hydrate();
+
+    expect(store.actions.addPackage({
+      packageSlug: "frontend-foundations",
+      packageVersion: 1,
+      blueprintDigest: `sha256:${"a".repeat(64)}`,
+      members: [{
+        selectionId: "skill_aaaaaaaaaaaaaaaaaaaaaaaa",
+        revisionId: "revision_bbbbbbbbbbbbbbbbbbbbbbbb",
+      }],
+    })).toMatchObject({ ok: true, changed: true });
+    expect(store.getSnapshot().packageAssertions).toHaveLength(1);
+
+    store.actions.remove("skill_aaaaaaaaaaaaaaaaaaaaaaaa");
+    expect(store.getSnapshot().packageAssertions).toEqual([]);
   });
 
   it("recovers storage read and corrupt-payload cleanup failures", () => {
