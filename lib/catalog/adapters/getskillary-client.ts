@@ -10,7 +10,7 @@ export const GETSKILLARY_MAX_SNAPSHOT_BYTES = 4 * 1024 * 1024;
 
 const packageSchema = z
   .object({
-    size_bytes: z.number().int().positive(),
+    size_bytes: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
     sha256: z.string().regex(/^[a-f\d]{64}$/i, "Package SHA-256 must contain 64 hexadecimal characters"),
   })
   .passthrough();
@@ -46,7 +46,6 @@ export interface GetSkillarySkill {
   category: string;
   tags: readonly string[];
   canonicalUrl: string;
-  downloadUrlObservation: string;
   providerPackageObservation: {
     sizeBytes: number;
     archiveSha256: string;
@@ -91,6 +90,7 @@ function canonicalUrl(value: string, slug: string): string {
   const normalizedPath = parsed.pathname.replace(/\/+$/, "");
   if (
     parsed.hostname.toLowerCase() !== "getskillary.com" ||
+    parsed.port ||
     parsed.search ||
     parsed.hash ||
     normalizedPath !== `/skills/${slug}`
@@ -100,24 +100,23 @@ function canonicalUrl(value: string, slug: string): string {
   return parsed.toString();
 }
 
-function downloadUrl(value: string): string {
+function assertDownloadUrl(value: string): void {
   const parsed = httpsUrl(value, "download URL");
   if (parsed.search || parsed.hash || !parsed.pathname.toLowerCase().endsWith(".zip")) {
     throw new RegistryContractError("GetSkillary download URL must identify an HTTPS ZIP package");
   }
-  return parsed.toString();
 }
 
 function normalizeSkill(skill: z.infer<typeof providerSkillSchema>): GetSkillarySkill {
+  assertDownloadUrl(skill.download_url);
   return {
-    providerRecordId: skill.skill_id,
+    providerRecordId: skill.skill_id.trim(),
     slug: skill.slug,
     title: skill.title.trim(),
     summary: skill.summary.trim(),
     category: skill.category.trim(),
     tags: [...skill.tags],
     canonicalUrl: canonicalUrl(skill.canonical_url, skill.slug),
-    downloadUrlObservation: downloadUrl(skill.download_url),
     providerPackageObservation: {
       sizeBytes: skill.package.size_bytes,
       archiveSha256: skill.package.sha256.toLowerCase(),

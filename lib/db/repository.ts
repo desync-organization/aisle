@@ -1062,6 +1062,7 @@ export class CatalogRepository {
         isNotNull(skillRevisions.upstreamHash),
         ne(skillRevisions.upstreamHash, ""),
         hasRevisionBoundInstallSpecSql(),
+        isNull(skillDuplicates.duplicateOfSkillId),
         hasActiveSourceListing(),
         inArray(skillRevisions.license, individuallySelectableLicenseIds),
         hasLicenseEvidence(),
@@ -1104,6 +1105,7 @@ export class CatalogRepository {
         installSpec: skillRevisions.installSpecJson,
         license: sql<string>`coalesce(${skillRevisions.license}, ${skills.license}, 'unknown')`,
         revisionMetadata: skillRevisions.metadataJson,
+        duplicateOfSkillId: skillDuplicates.duplicateOfSkillId,
         trustState: sql<CatalogTrustState>`
           case
             when exists (
@@ -1139,11 +1141,12 @@ export class CatalogRepository {
         skillRevisions,
         and(eq(skillRevisions.skillId, skills.id), eq(skillRevisions.isCurrent, true)),
       )
+      .leftJoin(skillDuplicates, eq(skillDuplicates.skillId, skills.id))
       .leftJoin(sourceListings, eq(sourceListings.skillId, skills.id))
       .leftJoin(skillCategories, eq(skillCategories.skillId, skills.id))
       .leftJoin(categories, eq(categories.id, skillCategories.categoryId))
       .where(and(...conditions))
-      .groupBy(skills.id, skillRevisions.id)
+      .groupBy(skills.id, skillRevisions.id, skillDuplicates.duplicateOfSkillId)
       .orderBy(desc(sql`coalesce(max(${sourceListings.installs}), 0)`), asc(skills.upstreamName))
       .limit(limit)
       .offset(offset);
@@ -1160,7 +1163,7 @@ export class CatalogRepository {
         ) {
           gateReasons.push("revision-evidence-missing");
         }
-        if (!hasRevisionBoundInstallSpec(row.installSpec, row)) {
+        if (!hasRevisionBoundInstallSpec(row.installSpec, row) || row.duplicateOfSkillId) {
           gateReasons.push("install-unresolved");
         }
         if (!Boolean(row.activeSource)) gateReasons.push("source-inactive");

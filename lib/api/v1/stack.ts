@@ -589,7 +589,7 @@ function resolveSelection(
   verification: StackGithubVerificationResult | undefined,
 ): ResolvedStackSelection {
   const reasons = new Set<StackGateReason>();
-  const license = row.revisionLicense ?? row.catalogLicense;
+  const license = publicLicenseLabel(row.revisionLicense ?? row.catalogLicense);
   const fingerprint = row.trustState === "warn"
     ? warningFingerprint(row, evidenceRows)
     : null;

@@ -386,6 +386,11 @@ export class GitHubCodeSearchClient {
       this.rethrowAuthentication(error);
     }
 
+    if (response.items.length > perPage) {
+      throw new RegistryContractError(
+        `GitHub Code Search returned ${response.items.length} records for a ${perPage}-record page`,
+      );
+    }
     const results = response.items.map(normalizeSearchResult);
     const reachableTotal = Math.min(response.total_count, GITHUB_CODE_SEARCH_RESULT_CAP);
     const consumed = (page - 1) * perPage + results.length;

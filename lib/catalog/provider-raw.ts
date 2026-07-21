@@ -8,6 +8,10 @@ const safeInteger = z.number().int().min(0).max(Number.MAX_SAFE_INTEGER);
 const safeNumber = z.number().finite().min(0).max(Number.MAX_SAFE_INTEGER);
 const timestamp = z.number().finite().min(-Number.MAX_SAFE_INTEGER).max(Number.MAX_SAFE_INTEGER);
 const sha256 = z.string().regex(/^[a-fA-F0-9]{64}$/);
+const publicHttpsUrl = (maximum: number) => z.url().max(maximum).refine((value) => {
+  const parsed = new URL(value);
+  return parsed.protocol === "https:" && parsed.username === "" && parsed.password === "";
+}, "URL must use HTTPS without credentials");
 
 const skillsShListingSchema = z.object({
   id: text(1_024),
@@ -166,12 +170,50 @@ const persistedSkillRawBaseSchema = z.discriminatedUnion("kind", [
     unresolved: text(1_024).optional(),
   }).strict(),
   z.object({
+    kind: z.literal("getskillary-observation"),
+    schemaVersion: z.literal(1),
+    observationKind: z.literal("coverage-only"),
+    providerRecordId: text(512),
+    slug: text(256),
+    title: text(512),
+    summary: text(4_096),
+    category: text(256),
+    tags: z.array(text(128)).max(32),
+    canonicalUrl: publicHttpsUrl(4_096),
+    snapshot: z.object({
+      generatedAt: z.iso.datetime(),
+      declaredPublicBoundary: text(512),
+      boundaryTruncated: z.boolean(),
+    }).strict(),
+    metadataBounds: z.object({
+      summaryTruncated: z.boolean(),
+      tagsTruncated: z.boolean(),
+    }).strict(),
+    providerArchiveObservation: z.object({
+      kind: z.literal("provider-declared-zip-metadata"),
+      sizeBytes: safeInteger,
+      archiveSha256: sha256,
+      installEvidence: z.literal(false),
+      downloadUrlPersisted: z.literal(false),
+    }).strict(),
+    resolution: z.object({
+      repository: z.literal("unresolved"),
+      license: z.literal("unresolved"),
+      immutableArtifact: z.literal("unresolved"),
+      selectable: z.literal(false),
+    }).strict(),
+  }).strict(),
+  z.object({
     kind: z.literal("github-skill"),
     repository: text(256),
     manifestPath: text(4_096),
     commit: text(256),
     tree: text(256).optional(),
     reason: text(1_024).optional(),
+    discoveredBy: z.object({
+      sourceId: text(128),
+      sourceRecordId: text(640),
+    }).strict().optional(),
   }).strict(),
   z.object({
     kind: z.literal("well-known-skill"),

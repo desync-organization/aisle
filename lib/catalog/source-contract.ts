@@ -121,9 +121,11 @@ export const discoveredSkillRecordSchema = z.object({
         ? "skillmd-skill"
         : record.provider === "github"
           ? "github-skill"
-          : record.provider === "well-known"
-            ? "well-known-skill"
-            : null;
+          : record.provider === "getskillary"
+            ? "getskillary-observation"
+            : record.provider === "well-known"
+              ? "well-known-skill"
+              : null;
   if (!expectedKind || record.raw.kind !== expectedKind) {
     context.addIssue({
       code: "custom",
@@ -144,6 +146,8 @@ export interface CatalogSourceDescriptor {
   upstreamIdentifier: string;
   termsUrl?: string | null;
   enabled?: boolean;
+  /** False when a mutable cursor cannot safely continue a prior observation sweep. */
+  resumePartialRuns?: boolean;
   initialCoverageState?: string;
   knownExclusions?: string[];
 }

@@ -65,7 +65,7 @@ const paginationSchema = z
 
 const listResponseSchema = z
   .object({
-    data: z.array(providerSkillSchema),
+    data: z.array(providerSkillSchema).max(MAX_PAGE_SIZE),
     pagination: paginationSchema,
   })
   .passthrough();
@@ -275,6 +275,11 @@ export class AskSkillClient {
     if (response.pagination.page !== page || response.pagination.limit !== limit) {
       throw new RegistryContractError(
         `AskSkill returned page ${response.pagination.page}/limit ${response.pagination.limit} for page ${page}/limit ${limit}`,
+      );
+    }
+    if (response.data.length > response.pagination.limit) {
+      throw new RegistryContractError(
+        `AskSkill returned ${response.data.length} records for a ${response.pagination.limit}-record page`,
       );
     }
 

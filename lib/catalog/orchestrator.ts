@@ -99,6 +99,7 @@ export class CatalogSyncOrchestrator {
       this.leaseDurationMs,
       {
         resumePartial:
+          connector.descriptor.resumePartialRuns !== false &&
           connector.descriptor.freshnessPolicy !== "latest-completed-observation",
       },
     );
@@ -240,12 +241,16 @@ export class CatalogSyncOrchestrator {
         observationSweepComplete &&
         completeSnapshot &&
         coverageFailures.length === 0;
+      const currentRecordCount =
+        connector.descriptor.freshnessPolicy === "latest-completed-observation" && completeCrawl
+          ? seenCount
+          : recordCount;
       await this.repository.finishSyncRun({
         runId: run.id,
         leaseToken: run.leaseToken,
         sourceId: connector.descriptor.id,
-        sourceTotal: reportedTotal ?? recordCount,
-        recordCount,
+        sourceTotal: reportedTotal ?? currentRecordCount,
+        recordCount: currentRecordCount,
         partialFailures: coverageFailures,
         exclusions: [...exclusions],
         completeCrawl,

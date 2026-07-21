@@ -1,4 +1,8 @@
+import { AgentSkillsInConnector } from "../lib/catalog/adapters/agentskills-in";
+import { AskSkillConnector } from "../lib/catalog/adapters/askskill";
 import { ClawHubAdapter } from "../lib/catalog/adapters/clawhub";
+import { GetSkillaryConnector } from "../lib/catalog/adapters/getskillary";
+import { GitHubCodeSearchConnector } from "../lib/catalog/adapters/github-code-search";
 import { GitHubPublicRepositoryAdapter } from "../lib/catalog/adapters/github-public";
 import { providerApprovedRegistryStubs } from "../lib/catalog/adapters/registry-stubs";
 import { SkillMdAdapter } from "../lib/catalog/adapters/skillmd";
@@ -37,6 +41,14 @@ function configuredGithubRepositories(): string[] {
   ).values()];
 }
 
+function explicitlyEnabled(name: string): boolean {
+  const value = (process.env[name] ?? "false").trim().toLowerCase();
+  if (value !== "true" && value !== "false") {
+    throw new Error(`${name} must be explicitly set to true or false`);
+  }
+  return value === "true";
+}
+
 async function main(): Promise<void> {
   const connection = createCatalogDatabase();
   try {
@@ -52,6 +64,22 @@ async function main(): Promise<void> {
     const connectors: CatalogSourceConnector[] = [
       new ClawHubAdapter(),
       new SkillMdAdapter({ githubToken: process.env.GITHUB_TOKEN }),
+      new AgentSkillsInConnector({
+        enabled: explicitlyEnabled("AISLE_AGENTSKILLS_IN_ENABLED"),
+        githubToken: process.env.GITHUB_TOKEN,
+      }),
+      new AskSkillConnector({
+        enabled: explicitlyEnabled("AISLE_ASKSKILL_ENABLED"),
+        githubToken: process.env.GITHUB_TOKEN,
+      }),
+      new GetSkillaryConnector({
+        enabled: explicitlyEnabled("AISLE_GETSKILLARY_ENABLED"),
+      }),
+      new GitHubCodeSearchConnector({
+        enabled: explicitlyEnabled("AISLE_GITHUB_CODE_SEARCH_ENABLED"),
+        githubToken: process.env.GITHUB_TOKEN,
+        queries: configuredValues("AISLE_GITHUB_CODE_SEARCH_QUERIES"),
+      }),
       ...providerApprovedRegistryStubs,
       ...configuredValues("AISLE_WELL_KNOWN_ORIGINS").map((origin, _index, origins) =>
         new WellKnownSkillsAdapter({ origin, adminApprovedOrigins: origins }),

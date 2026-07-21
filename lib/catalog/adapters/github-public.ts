@@ -40,15 +40,39 @@ const treeSchema = z.object({
   tree: z.array(treeEntrySchema),
 });
 
+const MAX_REQUESTED_MANIFESTS = 256;
+const MAX_TREE_BYTES = 4_194_304;
+const MAX_TREE_ENTRIES = 50_000;
+const MAX_ARTIFACT_FILES = 512;
+const MAX_HYDRATED_MANIFESTS = 256;
+
 export interface GitHubPublicRepositoryAdapterOptions {
   repositoryUrl: string;
   fetch?: typeof fetch;
   token?: string;
+  /** Exact, case-sensitive repository paths ending in SKILL.md. */
+  manifestFilePaths?: readonly string[];
   maxManifestBytes?: number;
   maxTextTotalBytes?: number;
   maxLicenseBytes?: number;
+  maxTreeEntries?: number;
+  maxArtifactFiles?: number;
+  maxHydratedManifests?: number;
   maxAttempts?: number;
   sleep?: (milliseconds: number) => Promise<void>;
+}
+
+function boundedPositiveInteger(
+  value: number | undefined,
+  fallback: number,
+  maximum: number,
+  label: string,
+): number {
+  const resolved = value ?? fallback;
+  if (!Number.isSafeInteger(resolved) || resolved < 1 || resolved > maximum) {
+    throw new RangeError(`${label} must be an integer from 1 through ${maximum}`);
+  }
+  return resolved;
 }
 
 function repositoryCoordinates(repositoryUrl: string): { owner: string; repository: string; url: string } {
@@ -70,6 +94,19 @@ function directoryForManifest(path: string): string {
   return normalizeSkillPath(segments.join("/") || ".");
 }
 
+function exactManifestFilePath(path: string): string {
+  const trimmed = path.trim();
+  if (trimmed !== "SKILL.md" && !trimmed.endsWith("/SKILL.md")) {
+    throw new Error("Requested GitHub manifest paths must end with an exact SKILL.md segment");
+  }
+  const skillPath = directoryForManifest(trimmed);
+  const normalized = skillPath === "." ? "SKILL.md" : `${skillPath}/SKILL.md`;
+  if (normalized !== trimmed) {
+    throw new Error("Requested GitHub manifest paths must already be normalized repository paths");
+  }
+  return normalized;
+}
+
 function gitBlobSha(bytes: Uint8Array): string {
   return createHash("sha1")
     .update(`blob ${bytes.byteLength}\0`)
@@ -88,9 +125,13 @@ export class GitHubPublicRepositoryAdapter implements CatalogSourceConnector {
   private readonly coordinates;
   private readonly fetchImplementation: typeof fetch;
   private readonly token?: string;
+  private readonly manifestFilePaths: ReadonlySet<string> | null;
   private readonly maxManifestBytes: number;
   private readonly maxTextTotalBytes: number;
   private readonly maxLicenseBytes: number;
+  private readonly maxTreeEntries: number;
+  private readonly maxArtifactFiles: number;
+  private readonly maxHydratedManifests: number;
   private readonly maxAttempts: number;
   private readonly sleep: (milliseconds: number) => Promise<void>;
 
@@ -98,9 +139,40 @@ export class GitHubPublicRepositoryAdapter implements CatalogSourceConnector {
     this.coordinates = repositoryCoordinates(options.repositoryUrl);
     this.fetchImplementation = options.fetch ?? fetch;
     this.token = options.token;
+    const requestedManifests = options.manifestFilePaths?.map(exactManifestFilePath);
+    if (requestedManifests && requestedManifests.length === 0) {
+      throw new RangeError("At least one GitHub manifest path must be requested");
+    }
+    if (requestedManifests && requestedManifests.length > MAX_REQUESTED_MANIFESTS) {
+      throw new RangeError(
+        `At most ${MAX_REQUESTED_MANIFESTS} exact GitHub manifest paths may be requested`,
+      );
+    }
+    if (requestedManifests && new Set(requestedManifests).size !== requestedManifests.length) {
+      throw new Error("Requested GitHub manifest paths must be unique");
+    }
+    this.manifestFilePaths = requestedManifests ? new Set(requestedManifests) : null;
     this.maxManifestBytes = options.maxManifestBytes ?? 1_048_576;
     this.maxTextTotalBytes = options.maxTextTotalBytes ?? 2_097_152;
     this.maxLicenseBytes = options.maxLicenseBytes ?? 262_144;
+    this.maxTreeEntries = boundedPositiveInteger(
+      options.maxTreeEntries,
+      MAX_TREE_ENTRIES,
+      MAX_TREE_ENTRIES,
+      "GitHub tree entry limit",
+    );
+    this.maxArtifactFiles = boundedPositiveInteger(
+      options.maxArtifactFiles,
+      MAX_ARTIFACT_FILES,
+      MAX_ARTIFACT_FILES,
+      "GitHub artifact file limit",
+    );
+    this.maxHydratedManifests = boundedPositiveInteger(
+      options.maxHydratedManifests,
+      MAX_HYDRATED_MANIFESTS,
+      MAX_HYDRATED_MANIFESTS,
+      "GitHub hydrated manifest limit",
+    );
     this.maxAttempts = Math.max(options.maxAttempts ?? 3, 1);
     this.sleep =
       options.sleep ?? ((milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)));
@@ -137,22 +209,48 @@ export class GitHubPublicRepositoryAdapter implements CatalogSourceConnector {
     if (tree.truncated) {
       throw new Error("GitHub recursive tree was truncated; refusing to claim a complete repository import");
     }
+    if (tree.tree.length > this.maxTreeEntries) {
+      throw new Error(
+        `GitHub tree contained ${tree.tree.length} entries, above the ${this.maxTreeEntries}-entry hydration limit`,
+      );
+    }
 
     const exclusions: string[] = [];
-    const repositoryLicenseEvidence = await this.loadRepositoryLicenseEvidence(
-      tree.tree,
-      observedHeadSha,
-      repository.html_url,
-      exclusions,
-    );
-    const manifestEntries = tree.tree.filter(
+    const allManifestEntries = tree.tree.filter(
       (entry) =>
         entry.type === "blob" &&
         entry.mode !== "120000" &&
         (entry.path === "SKILL.md" || entry.path.endsWith("/SKILL.md")),
     );
+    const manifestEntries = this.manifestFilePaths
+      ? allManifestEntries.filter((entry) => this.manifestFilePaths!.has(entry.path))
+      : allManifestEntries;
+    if (manifestEntries.length > this.maxHydratedManifests) {
+      throw new Error(
+        `GitHub hydration selected ${manifestEntries.length} manifests, above the ${this.maxHydratedManifests}-manifest limit`,
+      );
+    }
+    const missingRequestedManifests = this.manifestFilePaths
+      ? [...this.manifestFilePaths].filter(
+          (path) => !manifestEntries.some((entry) => entry.path === path),
+        )
+      : [];
+    if (missingRequestedManifests.length) {
+      const sample = missingRequestedManifests.slice(0, 5).join(", ").slice(0, 1_024);
+      exclusions.push(
+        `${missingRequestedManifests.length} requested SKILL.md path(s) were absent at the resolved commit${sample ? ` (${sample})` : ""}.`,
+      );
+    }
+    const repositoryLicenseEvidence = manifestEntries.length
+      ? await this.loadRepositoryLicenseEvidence(
+          tree.tree,
+          observedHeadSha,
+          repository.html_url,
+          exclusions,
+        )
+      : null;
     const records: DiscoveredSkillRecord[] = [];
-    let degraded = false;
+    let degraded = missingRequestedManifests.length > 0;
 
     for (const manifest of manifestEntries) {
       const skillPath = directoryForManifest(manifest.path);
@@ -236,6 +334,14 @@ export class GitHubPublicRepositoryAdapter implements CatalogSourceConnector {
       let totalBytes = 0;
       let artifactComplete = true;
       const fileEntries = skillEntries.filter((entry) => entry.type !== "tree");
+      if (fileEntries.length > this.maxArtifactFiles) {
+        degraded = true;
+        exclusions.push(
+          `${manifest.path}: skill artifact contains ${fileEntries.length} files, above the ${this.maxArtifactFiles}-file limit.`,
+        );
+        records.push(unresolvedRecord("artifact exceeded the bounded file inventory limit"));
+        continue;
+      }
       for (const entry of fileEntries) {
         const relativePath = entry.path.slice(prefix.length);
         if (entry.type !== "blob" || entry.mode === "120000") {
@@ -448,7 +554,7 @@ export class GitHubPublicRepositoryAdapter implements CatalogSourceConnector {
       cancelBestEffort(response.body, "GitHub JSON response discarded");
       throw new Error(`GitHub API returned HTTP ${response.status}`);
     }
-    const bytes = await readBoundedResponse(response, 4_194_304);
+    const bytes = await readBoundedResponse(response, MAX_TREE_BYTES);
     return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
   }
 
