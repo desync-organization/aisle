@@ -387,19 +387,29 @@ export class SkillsShSync {
             contents: file.contents,
             sha256: createHash("sha256").update(file.contents).digest("hex"),
           }));
-          const exactManifest = upstreamTextFiles.find((file) => file.path === "SKILL.md");
-          const nestedManifestPath = normalizedSkillPath === "."
-            ? "SKILL.md"
+          const rootManifests = upstreamTextFiles.filter(
+            (file) => file.path === "SKILL.md",
+          );
+          const nestedManifests = upstreamTextFiles.filter(
+            (file) => file.path.endsWith("/SKILL.md"),
+          );
+          const declaredNestedPath = normalizedSkillPath === "."
+            ? null
             : `${normalizedSkillPath}/SKILL.md`;
-          const nestedManifest = upstreamTextFiles.find(
-            (file) => file.path === nestedManifestPath,
-          );
-          const hasOtherNestedManifest = upstreamTextFiles.some(
-            (file) => file.path.endsWith("/SKILL.md") && file.path !== nestedManifestPath,
-          );
-          const upstreamManifest = exactManifest
-            ? hasOtherNestedManifest ? undefined : exactManifest
-            : nestedManifest;
+          const declaredNestedManifests = declaredNestedPath
+            ? nestedManifests.filter((file) => file.path === declaredNestedPath)
+            : [];
+          const hasAmbiguousRootNestedMixture =
+            rootManifests.length > 0 && nestedManifests.length > 0;
+          const upstreamManifest = hasAmbiguousRootNestedMixture
+            ? undefined
+            : normalizedSkillPath === "."
+              ? rootManifests.length === 1 ? rootManifests[0] : undefined
+              : declaredNestedManifests.length === 1
+                ? declaredNestedManifests[0]
+                : nestedManifests.length === 0 && rootManifests.length === 1
+                  ? rootManifests[0]
+                  : undefined;
           const artifactPrefix = upstreamManifest && upstreamManifest.path !== "SKILL.md"
             ? upstreamManifest.path.slice(0, -"SKILL.md".length)
             : "";
