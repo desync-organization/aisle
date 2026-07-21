@@ -2,16 +2,17 @@
 
 Aisle has bounded client contracts for the sources below. AgentSkills.in, AskSkill,
 and GitHub Code Search have explicitly configured connectors that rebind discovery
-identities to exact public GitHub artifacts. GetSkillary has a separate coverage-only
-connector because its snapshot does not prove an authoritative repository or license.
-A disabled source claims zero current records; the presence of a client is not a
-coverage claim.
+identities to exact public GitHub artifacts. GetSkillary and Skills.re have separate
+coverage-only connectors because their public contracts do not prove every required
+repository, path, immutable artifact, and license field. A disabled source claims zero
+current records; the presence of a client is not a coverage claim.
 
 | Source | Discovery mode | What the client can observe | Coverage boundary |
 | --- | --- | --- | --- |
 | AgentSkills.in | Opt-in partial sweep | Empty-search offset pages nominate exact public GitHub repository and `SKILL.md` paths | Pages are mutable and have no snapshot token. Every sweep is degraded, non-retiring partial coverage even when a terminal offset is observed. |
 | AskSkill | Opt-in federated sweep | Bounded list pages nominate exact public GitHub repository and `SKILL.md` paths | Totals may be estimated and the provider may limit the reachable page window. Every sweep is degraded, non-retiring partial coverage. |
 | GetSkillary | Full within declared boundary | A bounded JSON snapshot with declared count and package hash observations | Completeness covers only the provider's selected-public boundary. Missing upstream repository/license evidence keeps records non-installable. |
+| Skills.re | Opt-in federated cursor search | Bounded public search metadata; only ID, slug, title, and description are guaranteed | Search has no immutable global snapshot or authoritative repository-relative skill path. Every row remains unresolved and every sweep remains partial and non-retiring. |
 | GitHub Code Search | Opt-in federated query sweep | Fixed required-metadata queries plus bounded configured terms nominate exact public GitHub repository and `SKILL.md` paths | Ranked results are capped at 1,000 per query, may be incomplete, and are rebound to the current public default branch. Every sweep remains partial and non-retiring. |
 
 ## Shared acceptance boundary
@@ -33,9 +34,10 @@ truncated, missing, private, or conflicting origins remain unresolved.
 ## Intentionally unresolved boundary
 
 The registry connectors already share one exact GitHub artifact/license hydrator;
-registry payloads nominate identities but do not become provenance. GetSkillary
-observations must remain unresolved unless a future authoritative upstream origin
-and license can be proved independently.
+registry payloads nominate identities but do not become provenance. GetSkillary and
+Skills.re observations must remain unresolved unless a future authoritative upstream
+origin, exact skill path, and license can be proved independently. Skills.re search's
+optional repository coordinates and AI match path do not meet that authority boundary.
 
 No connector may create, rewrite, vendor, or infer a `SKILL.md` on Aisle's behalf.
 
@@ -64,6 +66,39 @@ mutable pagination sweep, GetSkillary uses latest-completed-observation freshnes
 absent provider identity stops contributing to the displayed current count only after a
 newer count-consistent snapshot has completed; unresolved listing history may remain for
 audit. A failed, oversized, or malformed response does not replace the last current count.
+
+## Skills.re configuration and limits
+
+Skills.re performs no request unless `AISLE_SKILLS_RE_ENABLED=true`. Its published
+OpenAPI declares no authentication requirement for public search, so this coverage-only
+connector does not require a token. A disabled connector remains `not-configured` and
+claims zero current records.
+
+The client sends only a required JSON search body with an explicit bounded limit,
+explicit `updated` sort, and the provider's opaque continuation cursor. It sends no
+query, category, tag, author, or repository filter. Responses are capped at two MiB and
+strictly validated against the published OpenAPI shape. A sweep accepts at most 100
+records per page, 20 pages, and 1,000 provider observations by default. These local caps
+can stop before the provider's terminal `isDone` marker and never imply a source total.
+
+Search guarantees only provider ID, slug, title, and description. Repository URL,
+author handle, repository name, license, version, snapshot, verification, audit, AI
+match, ranking, and score fields are optional provider observations. The API defines no
+authoritative repository-relative skill path, so the connector does not combine optional
+coordinates with a slug, does not call the shared GitHub hydrator, and does not treat any
+provider signal as Aisle provenance, license evidence, immutable revision, signature, or
+trust assessment.
+
+Each accepted row persists a stable provider ID plus bounded title, description,
+category, and tag observations. Repository, skill path, license, artifact, immutable
+reference, content hash, install URL, and install specification remain unresolved or
+null. Aisle requests no Skills.re detail, resolve-install, archive, or `SKILL.md` body.
+These rows therefore cannot become canonical skills, package members, selections, or
+install commands.
+
+Skills.re cursor pages have no immutable global snapshot. The connector never resumes a
+prior partial run, always reports degraded partial coverage, retains earlier observations,
+and never uses absence from a later mutable sweep to retire a record.
 
 ## AgentSkills.in configuration and limits
 

@@ -2,6 +2,7 @@ import { z } from "zod";
 
 const RETRYABLE_STATUSES = new Set([408, 429, 500, 502, 503, 504]);
 const DEFAULT_MAX_JSON_BYTES = 2 * 1024 * 1024;
+const MAX_JSON_QUERY_BYTES = 64 * 1024;
 
 type FetchImplementation = typeof fetch;
 type Sleep = (milliseconds: number) => Promise<void>;
@@ -244,9 +245,49 @@ export class BoundedHttpTransport {
 
   async getJson<T>(path: string, schema: z.ZodType<T>, maxBytes = this.maxJsonBytes): Promise<T> {
     const bytes = await this.request(path, "application/json", maxBytes);
+    return this.decodeJson(bytes.body, schema);
+  }
+
+  /**
+   * Sends a bounded JSON body to an idempotent read/query endpoint. The shared
+   * retry policy makes this intentionally unsuitable for mutation endpoints.
+   */
+  async postJsonQuery<T>(
+    path: string,
+    body: unknown,
+    schema: z.ZodType<T>,
+    maxBytes = this.maxJsonBytes,
+  ): Promise<T> {
+    let serialized: string | undefined;
+    try {
+      serialized = JSON.stringify(body);
+    } catch (error) {
+      throw new RegistryContractError("Registry query body was not JSON serializable", error);
+    }
+    if (serialized === undefined) {
+      throw new RegistryContractError("Registry query body was not JSON serializable");
+    }
+
+    const requestBytes = new TextEncoder().encode(serialized).byteLength;
+    if (requestBytes > MAX_JSON_QUERY_BYTES) {
+      throw new RegistryContractError(
+        `Registry query body was ${requestBytes} bytes, above the ${MAX_JSON_QUERY_BYTES}-byte limit`,
+      );
+    }
+
+    const bytes = await this.request(
+      path,
+      "application/json",
+      maxBytes,
+      serialized,
+    );
+    return this.decodeJson(bytes.body, schema);
+  }
+
+  private decodeJson<T>(bytes: Uint8Array, schema: z.ZodType<T>): T {
     let decoded: string;
     try {
-      decoded = new TextDecoder("utf-8", { fatal: true }).decode(bytes.body);
+      decoded = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
     } catch (error) {
       throw new RegistryContractError("Registry returned invalid UTF-8 JSON", error);
     }
@@ -303,6 +344,7 @@ export class BoundedHttpTransport {
     path: string,
     accept: string,
     maxBytes: number,
+    jsonQueryBody?: string,
   ): Promise<{ body: Uint8Array; contentType: string | null }> {
     if (!Number.isSafeInteger(maxBytes) || maxBytes <= 0 || maxBytes > 16 * 1024 * 1024) {
       throw new TypeError("Response byte limit must be between 1 and 16777216");
@@ -327,7 +369,14 @@ export class BoundedHttpTransport {
       try {
         response = await Promise.race([
           this.fetchImplementation(url, {
-            headers: { accept },
+            method: jsonQueryBody === undefined ? "GET" : "POST",
+            headers: {
+              accept,
+              ...(jsonQueryBody === undefined
+                ? {}
+                : { "content-type": "application/json" }),
+            },
+            ...(jsonQueryBody === undefined ? {} : { body: jsonQueryBody }),
             redirect: "manual",
             signal: controller.signal,
           }),

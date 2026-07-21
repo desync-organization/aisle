@@ -57,6 +57,26 @@ export const getSkillarySourceDescriptor = {
   ],
 } satisfies CatalogSourceDescriptor;
 
+export const skillsReSourceDescriptor = {
+  id: "skills-re",
+  name: "Skills.re",
+  baseUrl: "https://api.skills.re/skills/search",
+  mode: "federated",
+  freshnessPolicy: "retain",
+  upstreamIdentifier: "Skills.re public skills search API",
+  termsUrl: "https://skills.re/terms",
+  enabled: false,
+  resumePartialRuns: false,
+  initialCoverageState: "not-configured",
+  knownExclusions: [
+    "Synchronization is an explicit opt-in; a disabled source performs no request and claims no current records.",
+    "Cursor pages are mutable and have no immutable global snapshot, so every sweep remains partial, non-retiring coverage.",
+    "Search guarantees no authoritative GitHub repository and skill path; every observation remains unresolved and non-installable.",
+    "Provider repository, version, license, verification, audit, ranking, score, or signature claims are observations, not Aisle provenance or trust evidence.",
+    "Aisle requests no skill body, archive, or SKILL.md from Skills.re and persists only bounded coverage metadata.",
+  ],
+} satisfies CatalogSourceDescriptor;
+
 export const githubCodeSearchSourceDescriptor = {
   id: "github-code-search",
   name: "GitHub Code Search",
@@ -81,5 +101,6 @@ export const widerPublicSourceDescriptors: CatalogSourceDescriptor[] = [
   agentSkillsInSourceDescriptor,
   askSkillSourceDescriptor,
   getSkillarySourceDescriptor,
+  skillsReSourceDescriptor,
   githubCodeSearchSourceDescriptor,
 ];
