@@ -188,9 +188,10 @@ export class CatalogIngestionService {
       upstreamAudits: validation.upstreamAudits,
     });
     const categorySlugs = classifySkillCategories({
-      upstreamName: normalized.upstreamName ?? validation.metadata.name,
-      upstreamDescription:
-        normalized.upstreamDescription ?? validation.metadata.description,
+      providerName: normalized.upstreamName,
+      providerDescription: normalized.upstreamDescription,
+      frontmatterName: validation.metadata.name,
+      frontmatterDescription: validation.metadata.description,
       skillPath: normalized.skillPath,
       categoryHints: decoded.categoryHints,
     });

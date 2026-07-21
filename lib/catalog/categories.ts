@@ -1,3 +1,9 @@
+import {
+  DISCOVERED_SKILL_DESCRIPTION_MAX_LENGTH,
+  DISCOVERED_SKILL_NAME_MAX_LENGTH,
+  DISCOVERED_SKILL_PATH_MAX_LENGTH,
+} from "./source-contract";
+
 export const CANONICAL_CATEGORY_SLUGS = [
   "frontend",
   "backend",
@@ -14,14 +20,61 @@ export const CANONICAL_CATEGORY_SLUGS = [
 export type CanonicalCategorySlug = (typeof CANONICAL_CATEGORY_SLUGS)[number];
 export const SOURCE_CATEGORY_ATTRIBUTION = "aisle:source-metadata-v1";
 
+export const CANONICAL_CATEGORY_METADATA: Readonly<
+  Record<CanonicalCategorySlug, { name: string; description: string }>
+> = {
+  frontend: {
+    name: "Frontend",
+    description: "UI engineering, browser experiences, and frontend frameworks.",
+  },
+  backend: {
+    name: "Backend",
+    description: "APIs, services, databases, and server-side engineering.",
+  },
+  mobile: {
+    name: "Mobile",
+    description: "Native and cross-platform mobile application development.",
+  },
+  "ai-agents": {
+    name: "AI & Agents",
+    description: "Agent workflows, model integration, and AI application engineering.",
+  },
+  data: {
+    name: "Data",
+    description: "Data engineering, analytics, databases, and visualization.",
+  },
+  devops: {
+    name: "DevOps",
+    description: "Delivery, infrastructure, observability, and reliability.",
+  },
+  deployment: {
+    name: "Deployment",
+    description: "Hosting platforms, releases, and production operations.",
+  },
+  security: {
+    name: "Cybersecurity",
+    description: "Security review, defense, forensics, and authorized testing.",
+  },
+  testing: {
+    name: "Testing",
+    description: "Automated testing, quality assurance, and verification.",
+  },
+  productivity: {
+    name: "Productivity",
+    description: "Documentation, collaboration, and development workflow.",
+  },
+};
+
 export interface SourceCategoryHints {
   categories: readonly string[];
   tags: readonly string[];
 }
 
 export interface SkillCategoryEvidence {
-  upstreamName: string | null;
-  upstreamDescription: string | null;
+  providerName: string | null;
+  providerDescription: string | null;
+  frontmatterName: string;
+  frontmatterDescription: string;
   skillPath: string;
   categoryHints?: SourceCategoryHints;
 }
@@ -115,7 +168,8 @@ export const CATEGORY_HINT_ALIASES: Readonly<
 };
 
 export function mapCategoryHint(value: string): CanonicalCategorySlug[] {
-  const normalized = normalizeSignal(value.slice(0, 128));
+  const bounded = value.slice(0, 128);
+  const normalized = normalizeSignal(bounded);
   if (!normalized) return [];
   const exact = CATEGORY_HINT_ALIASES[normalized];
   if (exact) {
@@ -123,7 +177,7 @@ export function mapCategoryHint(value: string): CanonicalCategorySlug[] {
   }
 
   const categories = new Set<CanonicalCategorySlug>();
-  for (const segment of value.split(/[,/|]+/).slice(0, 8)) {
+  for (const segment of bounded.split(/[,/|]+/).slice(0, 8)) {
     const mapped = CATEGORY_HINT_ALIASES[normalizeSignal(segment.slice(0, 128))];
     for (const category of mapped ?? []) categories.add(category);
   }
@@ -132,13 +186,17 @@ export function mapCategoryHint(value: string): CanonicalCategorySlug[] {
 
 const TEXT_SIGNALS: Readonly<Record<CanonicalCategorySlug, readonly string[]>> = {
   frontend: [
-    "frontend", "front end", "react", "nextjs", "next js", "vue", "svelte",
+    "frontend", "front end", "nextjs", "next js", "vue", "svelte",
     "angular", "tailwind", "css", "design system", "web ui", "user interface",
-    "gsap", "webgl", "three js", "motion design", "3d web",
+    "gsap", "webgl", "three js", "motion design", "3d web", "react component",
+    "react components", "react application", "react app", "react hook", "react hooks",
+    "react framework", "react frontend", "react ui",
   ],
   backend: [
-    "backend", "back end", "server side", "api", "apis", "rest api", "graphql",
-    "webhook", "authentication service", "microservice",
+    "backend", "back end", "server side", "rest api", "graphql", "webhook",
+    "authentication service", "microservice", "api design", "api development",
+    "api server", "api service", "web api", "graphql api", "api endpoint",
+    "api endpoints",
   ],
   mobile: [
     "mobile", "ios", "android", "react native", "expo", "flutter", "swiftui",
@@ -147,7 +205,8 @@ const TEXT_SIGNALS: Readonly<Record<CanonicalCategorySlug, readonly string[]>> =
   "ai-agents": [
     "ai agent", "ai agents", "agentic", "agent engineering", "multi agent", "llm",
     "large language model", "prompt engineering", "model context protocol", "mcp server",
-    "retrieval augmented generation", "rag",
+    "retrieval augmented generation", "rag pipeline", "rag system", "rag application",
+    "rag workflow",
   ],
   data: [
     "data engineering", "data pipeline", "analytics", "database", "sql", "postgres",
@@ -183,25 +242,35 @@ function containsSignal(haystack: string, signal: string): boolean {
 }
 
 /**
- * Classifies only bounded public metadata. The function intentionally cannot
- * accept artifact contents, so SKILL.md instruction bodies never influence it.
+ * Classifies only bounded provider fields, normalized paths, and validated
+ * frontmatter fields. It cannot accept raw artifact contents, so SKILL.md
+ * instruction bodies never influence category assignment.
  */
 export function classifySkillCategories(
   evidence: SkillCategoryEvidence,
 ): CanonicalCategorySlug[] {
   const categories = new Set<CanonicalCategorySlug>();
   const hints = evidence.categoryHints;
-  for (const hint of [...(hints?.categories ?? []), ...(hints?.tags ?? [])]) {
+  const boundedHints = [
+    ...(hints?.categories.slice(0, 16) ?? []),
+    ...(hints?.tags.slice(0, 32) ?? []),
+  ];
+  for (const hint of boundedHints) {
     for (const category of mapCategoryHint(hint)) categories.add(category);
   }
 
-  const searchable = normalizeSignal([
-    evidence.upstreamName?.slice(0, 256) ?? "",
-    evidence.upstreamDescription?.slice(0, 4_096) ?? "",
-    evidence.skillPath.slice(0, 4_096),
-  ].join(" "));
+  const searchableFields = [
+    evidence.providerName?.slice(0, DISCOVERED_SKILL_NAME_MAX_LENGTH) ?? "",
+    evidence.providerDescription?.slice(0, DISCOVERED_SKILL_DESCRIPTION_MAX_LENGTH) ?? "",
+    evidence.frontmatterName.slice(0, 64),
+    evidence.frontmatterDescription.slice(0, 1_024),
+    evidence.skillPath.slice(0, DISCOVERED_SKILL_PATH_MAX_LENGTH),
+  ].map(normalizeSignal).filter(Boolean);
   for (const category of CANONICAL_CATEGORY_SLUGS) {
-    if (TEXT_SIGNALS[category].some((signal) => containsSignal(searchable, signal))) {
+    if (
+      TEXT_SIGNALS[category].some((signal) =>
+        searchableFields.some((field) => containsSignal(field, signal)))
+    ) {
       categories.add(category);
     }
   }

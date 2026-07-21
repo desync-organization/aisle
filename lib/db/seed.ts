@@ -1,17 +1,13 @@
+import {
+  CANONICAL_CATEGORY_METADATA,
+  CANONICAL_CATEGORY_SLUGS,
+} from "../catalog/categories";
 import type { CatalogRepository } from "./repository";
 
-export const taxonomySeed = [
-  ["frontend", "Frontend", "UI engineering, browser experiences, and frontend frameworks."],
-  ["backend", "Backend", "APIs, services, databases, and server-side engineering."],
-  ["mobile", "Mobile", "Native and cross-platform mobile application development."],
-  ["ai-agents", "AI & Agents", "Agent workflows, model integration, and AI application engineering."],
-  ["data", "Data", "Data engineering, analytics, databases, and visualization."],
-  ["devops", "DevOps", "Delivery, infrastructure, observability, and reliability."],
-  ["deployment", "Deployment", "Hosting platforms, releases, and production operations."],
-  ["security", "Cybersecurity", "Security review, defense, forensics, and authorized testing."],
-  ["testing", "Testing", "Automated testing, quality assurance, and verification."],
-  ["productivity", "Productivity", "Documentation, collaboration, and development workflow."],
-] as const;
+export const taxonomySeed = CANONICAL_CATEGORY_SLUGS.map((slug, sortOrder) => {
+  const metadata = CANONICAL_CATEGORY_METADATA[slug];
+  return [slug, metadata.name, metadata.description, sortOrder] as const;
+});
 
 export const sourceDescriptorSeed = [
   {
@@ -88,8 +84,8 @@ export const sourceDescriptorSeed = [
 ] as const;
 
 export async function seedCatalog(repository: CatalogRepository): Promise<void> {
-  for (const [slug, name, description] of taxonomySeed) {
-    await repository.upsertCategory({ slug, name, description });
+  for (const [slug, name, description, sortOrder] of taxonomySeed) {
+    await repository.upsertCategory({ slug, name, description, sortOrder });
   }
 
   for (const descriptor of sourceDescriptorSeed) {

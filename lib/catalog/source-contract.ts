@@ -23,15 +23,22 @@ export const installSpecSchema = z.discriminatedUnion("kind", [
 
 const sourceCategoryHintSchema = z.string().trim().min(1).max(128);
 const sourceTagHintSchema = z.string().trim().min(1).max(64);
+export const DISCOVERED_SKILL_NAME_MAX_LENGTH = 256;
+export const DISCOVERED_SKILL_DESCRIPTION_MAX_LENGTH = 4_096;
+export const DISCOVERED_SKILL_PATH_MAX_LENGTH = 4_096;
 
 export const discoveredSkillRecordSchema = z.object({
   sourceRecordId: z.string().min(1),
   provider: z.string().min(1),
   sourceType: z.string().min(1),
   sourceUrl: z.url(),
-  skillPath: z.string().min(1),
-  upstreamName: z.string().min(1).nullable(),
-  upstreamDescription: z.string().min(1).nullable(),
+  skillPath: z.string().min(1).max(DISCOVERED_SKILL_PATH_MAX_LENGTH),
+  upstreamName: z.string().min(1).max(DISCOVERED_SKILL_NAME_MAX_LENGTH).nullable(),
+  upstreamDescription: z
+    .string()
+    .min(1)
+    .max(DISCOVERED_SKILL_DESCRIPTION_MAX_LENGTH)
+    .nullable(),
   categoryHints: z
     .object({
       categories: z.array(sourceCategoryHintSchema).max(16),

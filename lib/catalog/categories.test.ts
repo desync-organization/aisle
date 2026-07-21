@@ -19,8 +19,10 @@ describe("catalog category classification", () => {
   it("combines only explicit hints and bounded upstream metadata signals", () => {
     expect(
       classifySkillCategories({
-        upstreamName: "Playwright quality workflows",
-        upstreamDescription: "Testing for a React design system.",
+        providerName: "Playwright quality workflows",
+        providerDescription: "A public marketplace summary.",
+        frontmatterName: "browser-qa",
+        frontmatterDescription: "Testing for React components in a design system.",
         skillPath: "skills/browser-qa",
         categoryHints: {
           categories: ["Cybersecurity"],
@@ -33,9 +35,23 @@ describe("catalog category classification", () => {
   it("leaves records without a taxonomy signal uncategorized", () => {
     expect(
       classifySkillCategories({
-        upstreamName: "Fixture helper",
-        upstreamDescription: "Handles a narrowly described public workflow.",
+        providerName: "Fixture helper",
+        providerDescription: "Handles a narrowly described public workflow.",
+        frontmatterName: "fixture-helper",
+        frontmatterDescription: "Handles one inert workflow.",
         skillPath: "skills/fixture-helper",
+      }),
+    ).toEqual([]);
+  });
+
+  it("does not promote ambiguous single words from free text", () => {
+    expect(
+      classifySkillCategories({
+        providerName: "React to incidents",
+        providerDescription: "Summarizes an API document for a meeting.",
+        frontmatterName: "incident-summary",
+        frontmatterDescription: "Produces a concise meeting summary.",
+        skillPath: "skills/incident-summary",
       }),
     ).toEqual([]);
   });
