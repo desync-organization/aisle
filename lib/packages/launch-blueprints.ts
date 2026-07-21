@@ -5,6 +5,7 @@ import {
 } from "./package-blueprint";
 
 const observedAt = "2026-07-21";
+const refreshedObservedAt = "2026-07-22";
 
 type SourceEvidence = Omit<PackageBlueprintMember, "position" | "defaultSelected" | "rationale">;
 
@@ -71,8 +72,8 @@ const sources = {
       evidencePath: "LICENSE.md",
     },
     observedSource: {
-      headSha: "20442886c5cfb440441c35030462fbdf64838655",
-      observedAt,
+      headSha: "fa4872c8ed948c111884e52ae23a649e83591b71",
+      observedAt: refreshedObservedAt,
     },
   },
   anthropicFrontendDesign: {
@@ -93,8 +94,8 @@ const sources = {
       evidencePath: "skills/frontend-design/LICENSE.txt",
     },
     observedSource: {
-      headSha: "fa0fa64bdc967915dc8399e803be67759e1e62b8",
-      observedAt,
+      headSha: "9d2f1ae187231d8199c64b5b762e1bdf2244733d",
+      observedAt: refreshedObservedAt,
     },
   },
   impeccable: {
@@ -270,7 +271,7 @@ const sources = {
     },
     observedSource: {
       headSha: "70215303d44a81a0db3219428f4825b604fc6061",
-      observedAt,
+      observedAt: refreshedObservedAt,
     },
   },
   workersBestPractices: {
@@ -292,7 +293,7 @@ const sources = {
     },
     observedSource: {
       headSha: "70215303d44a81a0db3219428f4825b604fc6061",
-      observedAt,
+      observedAt: refreshedObservedAt,
     },
   },
   azureDeploy: {
@@ -313,8 +314,8 @@ const sources = {
       evidencePath: "LICENSE",
     },
     observedSource: {
-      headSha: "d3e702378432d4d53ca80b2bba0fbb4af83ace24",
-      observedAt,
+      headSha: "1b592c63641049ff33e4952c4021c63b4507f147",
+      observedAt: refreshedObservedAt,
     },
   },
   easHosting: {
@@ -335,8 +336,8 @@ const sources = {
       evidencePath: "LICENSE",
     },
     observedSource: {
-      headSha: "8bd359f8a44d2446de12f1fe6e6316daf043056e",
-      observedAt,
+      headSha: "25e2b5dc24a621ad520596a94c0660d7d4f8bac3",
+      observedAt: refreshedObservedAt,
     },
   },
   easAppStores: {
@@ -357,8 +358,8 @@ const sources = {
       evidencePath: "LICENSE",
     },
     observedSource: {
-      headSha: "8bd359f8a44d2446de12f1fe6e6316daf043056e",
-      observedAt,
+      headSha: "25e2b5dc24a621ad520596a94c0660d7d4f8bac3",
+      observedAt: refreshedObservedAt,
     },
   },
   securityAudit: {
@@ -380,7 +381,7 @@ const sources = {
     },
     observedSource: {
       headSha: "8bac42001ddd90a4dcd8d5a5045199283a8eba75",
-      observedAt,
+      observedAt: refreshedObservedAt,
     },
   },
   firebaseSecurityRulesAuditor: {
@@ -402,7 +403,7 @@ const sources = {
     },
     observedSource: {
       headSha: "538130c39402a40d9c2586ede87def5914641a33",
-      observedAt,
+      observedAt: refreshedObservedAt,
     },
   },
   azureCompliance: {
@@ -423,8 +424,8 @@ const sources = {
       evidencePath: "LICENSE",
     },
     observedSource: {
-      headSha: "d3e702378432d4d53ca80b2bba0fbb4af83ace24",
-      observedAt,
+      headSha: "1b592c63641049ff33e4952c4021c63b4507f147",
+      observedAt: refreshedObservedAt,
     },
   },
   turnstileSpin: {
@@ -446,7 +447,7 @@ const sources = {
     },
     observedSource: {
       headSha: "70215303d44a81a0db3219428f4825b604fc6061",
-      observedAt,
+      observedAt: refreshedObservedAt,
     },
   },
   cloudflareOne: {
@@ -468,7 +469,7 @@ const sources = {
     },
     observedSource: {
       headSha: "70215303d44a81a0db3219428f4825b604fc6061",
-      observedAt,
+      observedAt: refreshedObservedAt,
     },
   },
   expoProjectStructure: {
@@ -489,8 +490,8 @@ const sources = {
       evidencePath: "LICENSE",
     },
     observedSource: {
-      headSha: "8bd359f8a44d2446de12f1fe6e6316daf043056e",
-      observedAt,
+      headSha: "25e2b5dc24a621ad520596a94c0660d7d4f8bac3",
+      observedAt: refreshedObservedAt,
     },
   },
   expoRouter: {
@@ -511,8 +512,8 @@ const sources = {
       evidencePath: "LICENSE",
     },
     observedSource: {
-      headSha: "8bd359f8a44d2446de12f1fe6e6316daf043056e",
-      observedAt,
+      headSha: "25e2b5dc24a621ad520596a94c0660d7d4f8bac3",
+      observedAt: refreshedObservedAt,
     },
   },
   expoDataFetching: {
@@ -533,8 +534,8 @@ const sources = {
       evidencePath: "LICENSE",
     },
     observedSource: {
-      headSha: "8bd359f8a44d2446de12f1fe6e6316daf043056e",
-      observedAt,
+      headSha: "25e2b5dc24a621ad520596a94c0660d7d4f8bac3",
+      observedAt: refreshedObservedAt,
     },
   },
   expoNativeUi: {
@@ -555,8 +556,8 @@ const sources = {
       evidencePath: "LICENSE",
     },
     observedSource: {
-      headSha: "8bd359f8a44d2446de12f1fe6e6316daf043056e",
-      observedAt,
+      headSha: "25e2b5dc24a621ad520596a94c0660d7d4f8bac3",
+      observedAt: refreshedObservedAt,
     },
   },
   expoTailwindSetup: {
@@ -577,8 +578,8 @@ const sources = {
       evidencePath: "LICENSE",
     },
     observedSource: {
-      headSha: "8bd359f8a44d2446de12f1fe6e6316daf043056e",
-      observedAt,
+      headSha: "25e2b5dc24a621ad520596a94c0660d7d4f8bac3",
+      observedAt: refreshedObservedAt,
     },
   },
   expoUpgrade: {
@@ -599,8 +600,8 @@ const sources = {
       evidencePath: "LICENSE",
     },
     observedSource: {
-      headSha: "8bd359f8a44d2446de12f1fe6e6316daf043056e",
-      observedAt,
+      headSha: "25e2b5dc24a621ad520596a94c0660d7d4f8bac3",
+      observedAt: refreshedObservedAt,
     },
   },
   supabasePostgresBestPractices: {
@@ -622,7 +623,7 @@ const sources = {
     },
     observedSource: {
       headSha: "1ad9aaeb49caafd9e95c0a91116f71890eebbc53",
-      observedAt,
+      observedAt: refreshedObservedAt,
     },
   },
   neonPostgres: {
@@ -666,7 +667,7 @@ const sources = {
     },
     observedSource: {
       headSha: "538130c39402a40d9c2586ede87def5914641a33",
-      observedAt,
+      observedAt: refreshedObservedAt,
     },
   },
   firebaseAiLogicBasics: {
@@ -688,7 +689,7 @@ const sources = {
     },
     observedSource: {
       headSha: "538130c39402a40d9c2586ede87def5914641a33",
-      observedAt,
+      observedAt: refreshedObservedAt,
     },
   },
   huggingfaceDatasets: {
@@ -710,7 +711,7 @@ const sources = {
     },
     observedSource: {
       headSha: "86cdeee824b73e504198b6005bb113552cdfa7ba",
-      observedAt,
+      observedAt: refreshedObservedAt,
     },
   },
   huggingfaceLlmTrainer: {
@@ -732,7 +733,7 @@ const sources = {
     },
     observedSource: {
       headSha: "86cdeee824b73e504198b6005bb113552cdfa7ba",
-      observedAt,
+      observedAt: refreshedObservedAt,
     },
   },
   anthropicSkillCreator: {
@@ -753,8 +754,8 @@ const sources = {
       evidencePath: "skills/skill-creator/LICENSE.txt",
     },
     observedSource: {
-      headSha: "fa0fa64bdc967915dc8399e803be67759e1e62b8",
-      observedAt,
+      headSha: "9d2f1ae187231d8199c64b5b762e1bdf2244733d",
+      observedAt: refreshedObservedAt,
     },
   },
   anthropicMcpBuilder: {
@@ -798,7 +799,7 @@ const sources = {
     },
     observedSource: {
       headSha: "70215303d44a81a0db3219428f4825b604fc6061",
-      observedAt,
+      observedAt: refreshedObservedAt,
     },
   },
   durableObjects: {
@@ -820,7 +821,7 @@ const sources = {
     },
     observedSource: {
       headSha: "70215303d44a81a0db3219428f4825b604fc6061",
-      observedAt,
+      observedAt: refreshedObservedAt,
     },
   },
   sandboxSdk: {
@@ -842,7 +843,7 @@ const sources = {
     },
     observedSource: {
       headSha: "70215303d44a81a0db3219428f4825b604fc6061",
-      observedAt,
+      observedAt: refreshedObservedAt,
     },
   },
   agentBrowser: {
@@ -864,7 +865,7 @@ const sources = {
     },
     observedSource: {
       headSha: "81c336c1c20b80ac648e0416a7b6e0c0ae7878bb",
-      observedAt,
+      observedAt: refreshedObservedAt,
     },
   },
   playwrightCli: {
@@ -886,7 +887,7 @@ const sources = {
     },
     observedSource: {
       headSha: "eee5a185c98e6b04d88f580d45a854e9692ab50b",
-      observedAt,
+      observedAt: refreshedObservedAt,
     },
   },
   anthropicWebappTesting: {
@@ -930,7 +931,7 @@ const sources = {
     },
     observedSource: {
       headSha: "d884ae04edebef577e82ff7c4e143debd0bbec99",
-      observedAt,
+      observedAt: refreshedObservedAt,
     },
   },
   systematicDebugging: {
@@ -952,7 +953,7 @@ const sources = {
     },
     observedSource: {
       headSha: "d884ae04edebef577e82ff7c4e143debd0bbec99",
-      observedAt,
+      observedAt: refreshedObservedAt,
     },
   },
   verificationBeforeCompletion: {
@@ -974,7 +975,7 @@ const sources = {
     },
     observedSource: {
       headSha: "d884ae04edebef577e82ff7c4e143debd0bbec99",
-      observedAt,
+      observedAt: refreshedObservedAt,
     },
   },
   requestingCodeReview: {
@@ -996,7 +997,7 @@ const sources = {
     },
     observedSource: {
       headSha: "d884ae04edebef577e82ff7c4e143debd0bbec99",
-      observedAt,
+      observedAt: refreshedObservedAt,
     },
   },
   webPerf: {
@@ -1018,7 +1019,7 @@ const sources = {
     },
     observedSource: {
       headSha: "70215303d44a81a0db3219428f4825b604fc6061",
-      observedAt,
+      observedAt: refreshedObservedAt,
     },
   },
 } as const satisfies Record<string, SourceEvidence>;
