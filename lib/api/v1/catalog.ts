@@ -347,6 +347,8 @@ function skillsFilterHash(query: SkillsQuery): string {
   return apiFilterHash({
     q: query.q ?? null,
     category: query.category ?? null,
+    source: query.source ?? null,
+    compatibility: query.compatibility?.toLowerCase() ?? null,
     lifecycle: query.lifecycle,
     trust: query.trust ?? null,
     official: query.official ?? null,
@@ -418,6 +420,21 @@ export async function listPublicSkills(database: CatalogDatabase, query: SkillsQ
       where api_skill_category.skill_id = ${skills.id}
         and api_category.slug = ${query.category}
     )`);
+  }
+  if (query.source) {
+    conditions.push(sql`exists (
+      select 1
+      from source_listings api_source_filter
+      where api_source_filter.skill_id = ${skills.id}
+        and api_source_filter.source_id = ${query.source}
+        and api_source_filter.status <> 'removed'
+    )`);
+  }
+  if (query.compatibility) {
+    conditions.push(sql`instr(
+      lower(coalesce(${skills.compatibility}, '')),
+      lower(${query.compatibility})
+    ) > 0`);
   }
   if (query.trust) conditions.push(sql`${trustStateExpression} = ${query.trust}`);
   if (query.official !== undefined) {

@@ -40,10 +40,19 @@ const categorySlugSchema = z
   .min(2)
   .max(80)
   .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/);
+const sourceIdSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(160)
+  .regex(/^[A-Za-z0-9][A-Za-z0-9._:/-]*$/)
+  .transform((value) => value.toLowerCase());
 
 export const skillsQuerySchema = z.strictObject({
   q: searchSchema,
   category: categorySlugSchema.optional(),
+  source: sourceIdSchema.optional(),
+  compatibility: z.string().trim().min(1).max(120).optional(),
   lifecycle: skillLifecycleSchema.default("current"),
   trust: publicTrustStateSchema.optional(),
   official: queryBooleanSchema.optional(),
