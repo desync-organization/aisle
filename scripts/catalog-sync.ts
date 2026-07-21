@@ -13,6 +13,7 @@ import { CatalogIngestionService } from "../lib/catalog/ingestion";
 import { isVerifiedOfficialPublisher } from "../lib/catalog/official-publishers";
 import { normalizeSourceUrl } from "../lib/catalog/normalization";
 import { CatalogSyncOrchestrator } from "../lib/catalog/orchestrator";
+import { defaultPublicGitHubRepositoryUrls } from "../lib/catalog/public-repository-seeds";
 import { createAgentSkillValidator } from "../lib/catalog/security";
 import type { CatalogSourceConnector } from "../lib/catalog/source-contract";
 import { createCatalogDatabase } from "../lib/db/client";
@@ -31,6 +32,7 @@ function configuredValues(name: string): string[] {
 function configuredGithubRepositories(): string[] {
   const repositories = [
     ...launchPackageRepositoryUrls,
+    ...defaultPublicGitHubRepositoryUrls,
     ...configuredValues("AISLE_GITHUB_REPOSITORIES"),
   ];
   return [...new Map(
