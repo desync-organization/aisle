@@ -310,8 +310,8 @@ const sources = {
     },
     observedLicense: {
       spdx: "MIT",
-      evidenceClass: "repository-license",
-      evidencePath: "LICENSE",
+      evidenceClass: "skill-frontmatter",
+      evidencePath: "skills/azure-deploy/SKILL.md",
     },
     observedSource: {
       headSha: "1b592c63641049ff33e4952c4021c63b4507f147",
@@ -332,8 +332,8 @@ const sources = {
     },
     observedLicense: {
       spdx: "MIT",
-      evidenceClass: "repository-license",
-      evidencePath: "LICENSE",
+      evidenceClass: "skill-frontmatter",
+      evidencePath: "plugins/expo/skills/eas-hosting/SKILL.md",
     },
     observedSource: {
       headSha: "25e2b5dc24a621ad520596a94c0660d7d4f8bac3",
@@ -354,8 +354,8 @@ const sources = {
     },
     observedLicense: {
       spdx: "MIT",
-      evidenceClass: "repository-license",
-      evidencePath: "LICENSE",
+      evidenceClass: "skill-frontmatter",
+      evidencePath: "plugins/expo/skills/eas-app-stores/SKILL.md",
     },
     observedSource: {
       headSha: "25e2b5dc24a621ad520596a94c0660d7d4f8bac3",
@@ -420,8 +420,8 @@ const sources = {
     },
     observedLicense: {
       spdx: "MIT",
-      evidenceClass: "repository-license",
-      evidencePath: "LICENSE",
+      evidenceClass: "skill-frontmatter",
+      evidencePath: "skills/azure-compliance/SKILL.md",
     },
     observedSource: {
       headSha: "1b592c63641049ff33e4952c4021c63b4507f147",
@@ -486,8 +486,8 @@ const sources = {
     },
     observedLicense: {
       spdx: "MIT",
-      evidenceClass: "repository-license",
-      evidencePath: "LICENSE",
+      evidenceClass: "skill-frontmatter",
+      evidencePath: "plugins/expo/skills/expo-project-structure/SKILL.md",
     },
     observedSource: {
       headSha: "25e2b5dc24a621ad520596a94c0660d7d4f8bac3",
@@ -508,8 +508,8 @@ const sources = {
     },
     observedLicense: {
       spdx: "MIT",
-      evidenceClass: "repository-license",
-      evidencePath: "LICENSE",
+      evidenceClass: "skill-frontmatter",
+      evidencePath: "plugins/expo/skills/expo-router/SKILL.md",
     },
     observedSource: {
       headSha: "25e2b5dc24a621ad520596a94c0660d7d4f8bac3",
@@ -530,8 +530,8 @@ const sources = {
     },
     observedLicense: {
       spdx: "MIT",
-      evidenceClass: "repository-license",
-      evidencePath: "LICENSE",
+      evidenceClass: "skill-frontmatter",
+      evidencePath: "plugins/expo/skills/expo-data-fetching/SKILL.md",
     },
     observedSource: {
       headSha: "25e2b5dc24a621ad520596a94c0660d7d4f8bac3",
@@ -552,8 +552,8 @@ const sources = {
     },
     observedLicense: {
       spdx: "MIT",
-      evidenceClass: "repository-license",
-      evidencePath: "LICENSE",
+      evidenceClass: "skill-frontmatter",
+      evidencePath: "plugins/expo/skills/expo-native-ui/SKILL.md",
     },
     observedSource: {
       headSha: "25e2b5dc24a621ad520596a94c0660d7d4f8bac3",
@@ -574,8 +574,8 @@ const sources = {
     },
     observedLicense: {
       spdx: "MIT",
-      evidenceClass: "repository-license",
-      evidencePath: "LICENSE",
+      evidenceClass: "skill-frontmatter",
+      evidencePath: "plugins/expo/skills/expo-tailwind-setup/SKILL.md",
     },
     observedSource: {
       headSha: "25e2b5dc24a621ad520596a94c0660d7d4f8bac3",
@@ -596,8 +596,8 @@ const sources = {
     },
     observedLicense: {
       spdx: "MIT",
-      evidenceClass: "repository-license",
-      evidencePath: "LICENSE",
+      evidenceClass: "skill-frontmatter",
+      evidencePath: "plugins/expo/skills/expo-upgrade/SKILL.md",
     },
     observedSource: {
       headSha: "25e2b5dc24a621ad520596a94c0660d7d4f8bac3",
@@ -618,8 +618,8 @@ const sources = {
     },
     observedLicense: {
       spdx: "MIT",
-      evidenceClass: "repository-license",
-      evidencePath: "LICENSE",
+      evidenceClass: "skill-frontmatter",
+      evidencePath: "skills/supabase-postgres-best-practices/SKILL.md",
     },
     observedSource: {
       headSha: "1ad9aaeb49caafd9e95c0a91116f71890eebbc53",
