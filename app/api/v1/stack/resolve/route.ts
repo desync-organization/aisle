@@ -14,7 +14,9 @@ export async function POST(request: Request): Promise<Response> {
     parseSearchParams(new URL(request.url), emptyQuerySchema);
     const body = await parseJsonBody(request, stackResolveRequestSchema);
     return withCatalogDatabase(async (_repository, database) => ({
-      plan: await resolveStackInstallPlan(database, body),
+      plan: await resolveStackInstallPlan(database, body, {
+        github: { signal: request.signal },
+      }),
     }));
   });
 }

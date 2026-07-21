@@ -72,6 +72,7 @@ export type StackGithubRevalidationOptions = Readonly<{
   scopeCache?: boolean;
   scopeCacheTtlMs?: number;
   maximumScopeCacheEntries?: number;
+  signal?: AbortSignal;
 }>;
 
 type VerifiedCandidate = StackGithubVerificationCandidate;
@@ -175,15 +176,30 @@ function githubHeaders(token: string | null): Headers {
   return headers;
 }
 
+function combinedRequestSignal(
+  timeoutMs: number,
+  callerSignal: AbortSignal | undefined,
+): AbortSignal {
+  const timeoutSignal = requestTimeout(timeoutMs);
+  return callerSignal
+    ? AbortSignal.any([callerSignal, timeoutSignal])
+    : timeoutSignal;
+}
+
 async function fetchBoundedJson(
   fetchImplementation: typeof globalThis.fetch,
   url: string,
-  options: Readonly<{ maximumBytes: number; timeoutMs: number; token: string | null }>,
+  options: Readonly<{
+    maximumBytes: number;
+    timeoutMs: number;
+    token: string | null;
+    signal?: AbortSignal;
+  }>,
 ): Promise<unknown> {
   const response = await fetchImplementation(url, {
     headers: githubHeaders(options.token),
     redirect: "error",
-    signal: requestTimeout(options.timeoutMs),
+    signal: combinedRequestSignal(options.timeoutMs, options.signal),
   });
   if (!response.ok) {
     cancelBestEffort(response.body, `GitHub verification returned HTTP ${response.status}`);
@@ -226,7 +242,7 @@ async function verifyGroup(
       | "scopeCacheTtlMs"
       | "maximumScopeCacheEntries"
     >
-  > & Readonly<{ token: string | null; deadlineMs: number }>,
+  > & Readonly<{ token: string | null; deadlineMs: number; signal?: AbortSignal }>,
 ): Promise<Map<string, StackGithubVerificationResult>> {
   const results = new Map<string, StackGithubVerificationResult>();
   const first = candidates[0]!;
@@ -249,6 +265,7 @@ async function verifyGroup(
           maximumBytes: MAXIMUM_REPOSITORY_BYTES,
           timeoutMs: remainingTimeout(),
           token: options.token,
+          signal: options.signal,
         },
       ),
     );
@@ -276,6 +293,7 @@ async function verifyGroup(
           maximumBytes: MAXIMUM_COMMIT_BYTES,
           timeoutMs: remainingTimeout(),
           token: options.token,
+          signal: options.signal,
         },
       ),
     );
@@ -319,6 +337,7 @@ async function verifyGroup(
           maximumBytes: options.maximumTreeBytes,
           timeoutMs: remainingTimeout(),
           token: options.token,
+          signal: options.signal,
         },
       ),
     );
@@ -377,8 +396,9 @@ async function verifyGroup(
 /**
  * Revalidates persisted GitHub candidates against current public-repository
  * metadata, the expected default branch head, and one complete bounded tree.
- * Only manifest-scope verdicts tied to an immutable commit are briefly cached;
- * visibility, default-branch, and live-head checks always reach GitHub.
+ * Only manifest-scope verdicts tied to an immutable commit are briefly cached.
+ * This avoids the largest repeated recursive-tree call, but deliberately leaves
+ * the repository-metadata and live-head quota calls uncached on every request.
  */
 export async function revalidateGithubStackCandidates(
   candidates: readonly StackGithubVerificationCandidate[],
@@ -442,6 +462,7 @@ export async function revalidateGithubStackCandidates(
       DEFAULT_MAXIMUM_SCOPE_CACHE_ENTRIES,
       1_024,
     ),
+    signal: input.signal,
   } as const;
 
   const groupedCandidates = [...groups.values()];
@@ -449,6 +470,7 @@ export async function revalidateGithubStackCandidates(
   let nextGroup = 0;
   const worker = async (): Promise<void> => {
     while (nextGroup < groupedCandidates.length) {
+      if (options.signal?.aborted) return;
       const index = nextGroup;
       nextGroup += 1;
       const members = groupedCandidates[index]!;
