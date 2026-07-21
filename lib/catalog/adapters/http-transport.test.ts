@@ -6,6 +6,7 @@ import { z } from "zod";
 import {
   BoundedHttpTransport,
   RegistryBodyTooLargeError,
+  RegistryRedirectError,
   RegistryTimeoutError,
   parseRetryAfter,
 } from "./http-transport";
@@ -132,6 +133,60 @@ describe("BoundedHttpTransport", () => {
       RegistryBodyTooLargeError,
     );
     expect(cancel).toHaveBeenCalledOnce();
+  });
+
+  it("refuses an external redirect without fetching or processing its destination", async () => {
+    const cancel = vi.fn(async () => undefined);
+    const validate = vi.fn((value: { ok: boolean }) => value);
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(new ReadableStream<Uint8Array>({ cancel }), {
+        status: 302,
+        headers: {
+          "content-length": String(16 * 1024 * 1024),
+          location: "http://127.0.0.1/latest/meta-data/",
+        },
+      }),
+    );
+    const transport = new BoundedHttpTransport({
+      baseUrl: "https://registry.example.test/",
+      fetch: fetchMock,
+      maxAttempts: 4,
+    });
+
+    await expect(
+      transport.getJson("items", z.object({ ok: z.boolean() }).transform(validate)),
+    ).rejects.toMatchObject({
+      name: "RegistryRedirectError",
+      status: 302,
+      location: "http://127.0.0.1/latest/meta-data/",
+    });
+
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(fetchMock.mock.calls[0]?.[1]?.redirect).toBe("manual");
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(validate).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["a same-origin redirect loop", 301, "https://registry.example.test/items"],
+    ["a redirect without Location", 307, null],
+  ])("fails closed for %s", async (_label, status, location) => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(null, {
+        status,
+        headers: location === null ? undefined : { location },
+      }),
+    );
+    const transport = new BoundedHttpTransport({
+      baseUrl: "https://registry.example.test/",
+      fetch: fetchMock,
+      maxAttempts: 4,
+    });
+
+    await expect(transport.getJson("items", z.unknown())).rejects.toBeInstanceOf(
+      RegistryRedirectError,
+    );
+    expect(fetchMock).toHaveBeenCalledOnce();
   });
 
   it("rejects insecure base URLs and paths that escape the base", async () => {

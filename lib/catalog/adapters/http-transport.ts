@@ -36,6 +36,16 @@ export class RegistryHttpError extends Error {
   }
 }
 
+export class RegistryRedirectError extends RegistryHttpError {
+  constructor(
+    status: number,
+    readonly location: string | null,
+  ) {
+    super(`Registry redirect response was refused (HTTP ${status})`, status, null);
+    this.name = "RegistryRedirectError";
+  }
+}
+
 export class RegistryTimeoutError extends Error {
   constructor(readonly timeoutMs: number) {
     super(`Registry request exceeded the ${timeoutMs}ms attempt timeout`);
@@ -318,10 +328,20 @@ export class BoundedHttpTransport {
         response = await Promise.race([
           this.fetchImplementation(url, {
             headers: { accept },
+            redirect: "manual",
             signal: controller.signal,
           }),
           timeout,
         ]);
+
+        if (response.status >= 300 && response.status < 400) {
+          const error = new RegistryRedirectError(
+            response.status,
+            response.headers.get("location"),
+          );
+          await cancelResponse(response);
+          throw error;
+        }
 
         if (!response.ok) {
           const now = this.now();
