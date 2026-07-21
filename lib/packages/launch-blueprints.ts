@@ -9,47 +9,47 @@ const observedAt = "2026-07-21";
 type SourceEvidence = Omit<PackageBlueprintMember, "position" | "defaultSelected" | "rationale">;
 
 const sources = {
-  vercelReactBestPractices: {
-    publisherClass: "official",
+  developerKitReactPatterns: {
+    publisherClass: "community",
     locator: {
       kind: "public-github-skill-locator",
       host: "github.com",
       visibility: "public",
-      owner: "vercel-labs",
-      repository: "agent-skills",
-      repositoryUrl: "https://github.com/vercel-labs/agent-skills",
-      skillPath: "skills/react-best-practices/SKILL.md",
-      upstreamSkillName: "vercel-react-best-practices",
+      owner: "giuseppe-trisciuoglio",
+      repository: "developer-kit",
+      repositoryUrl: "https://github.com/giuseppe-trisciuoglio/developer-kit",
+      skillPath: "plugins/developer-kit-typescript/skills/react-patterns/SKILL.md",
+      upstreamSkillName: "react-patterns",
     },
     observedLicense: {
       spdx: "MIT",
-      evidenceClass: "skill-frontmatter",
-      evidencePath: "skills/react-best-practices/SKILL.md",
+      evidenceClass: "repository-license",
+      evidencePath: "LICENSE",
     },
     observedSource: {
-      headSha: "f8a72b9603728bb92a217a879b7e62e43ad76c81",
+      headSha: "306f428f278d83722afdea44a7398dc46dab967f",
       observedAt,
     },
   },
-  vercelCompositionPatterns: {
-    publisherClass: "official",
+  developerKitTailwindCssPatterns: {
+    publisherClass: "community",
     locator: {
       kind: "public-github-skill-locator",
       host: "github.com",
       visibility: "public",
-      owner: "vercel-labs",
-      repository: "agent-skills",
-      repositoryUrl: "https://github.com/vercel-labs/agent-skills",
-      skillPath: "skills/composition-patterns/SKILL.md",
-      upstreamSkillName: "vercel-composition-patterns",
+      owner: "giuseppe-trisciuoglio",
+      repository: "developer-kit",
+      repositoryUrl: "https://github.com/giuseppe-trisciuoglio/developer-kit",
+      skillPath: "plugins/developer-kit-typescript/skills/tailwind-css-patterns/SKILL.md",
+      upstreamSkillName: "tailwind-css-patterns",
     },
     observedLicense: {
       spdx: "MIT",
-      evidenceClass: "skill-frontmatter",
-      evidencePath: "skills/composition-patterns/SKILL.md",
+      evidenceClass: "repository-license",
+      evidencePath: "LICENSE",
     },
     observedSource: {
-      headSha: "f8a72b9603728bb92a217a879b7e62e43ad76c81",
+      headSha: "306f428f278d83722afdea44a7398dc46dab967f",
       observedAt,
     },
   },
@@ -647,7 +647,7 @@ const sources = {
       observedAt,
     },
   },
-  firebaseDataConnectBasics: {
+  firebaseFirestore: {
     publisherClass: "official",
     locator: {
       kind: "public-github-skill-locator",
@@ -656,8 +656,8 @@ const sources = {
       owner: "firebase",
       repository: "agent-skills",
       repositoryUrl: "https://github.com/firebase/agent-skills",
-      skillPath: "skills/firebase-data-connect-basics/SKILL.md",
-      upstreamSkillName: "firebase-data-connect",
+      skillPath: "skills/firebase-firestore/SKILL.md",
+      upstreamSkillName: "firebase-firestore",
     },
     observedLicense: {
       spdx: "Apache-2.0",
@@ -1051,8 +1051,8 @@ const blueprintInputs = [
       visual: { iconToken: "brackets", colorToken: "iris" },
     },
     members: [
-      member(1, "vercelReactBestPractices", "Sets a performance-aware baseline for writing and reviewing production React and Next.js code."),
-      member(2, "vercelCompositionPatterns", "Adds scalable React composition techniques for resilient component APIs and design systems."),
+      member(1, "developerKitReactPatterns", "Adds current React 19 patterns for concurrent rendering, optimistic interfaces, Server Actions, and performance."),
+      member(2, "developerKitTailwindCssPatterns", "Provides responsive Tailwind CSS patterns for accessible components, layouts, and maintainable design systems."),
       member(3, "shadcn", "Brings first-party shadcn guidance for selecting, integrating, and adapting accessible UI components."),
       member(4, "anthropicFrontendDesign", "Strengthens visual direction and implementation quality beyond generic application scaffolds."),
       member(5, "impeccable", "Provides an author-maintained interface critique and refinement workflow for the final quality pass."),
@@ -1170,7 +1170,7 @@ const blueprintInputs = [
     members: [
       member(1, "supabasePostgresBestPractices", "Adds Supabase-authored Postgres performance, schema, and operational best practices."),
       member(2, "neonPostgres", "Provides first-party Neon workflows for serverless Postgres development and platform operations."),
-      member(3, "firebaseDataConnectBasics", "Uses the current Firebase Data Connect skill for typed application data integration."),
+      member(3, "firebaseFirestore", "Adds first-party Firestore guidance for modeling, querying, and securing Firebase application data."),
       member(4, "firebaseAiLogicBasics", "Adds official Firebase AI Logic guidance for safely connecting model capabilities to applications."),
       member(5, "huggingfaceDatasets", "Covers dataset creation, transformation, and publication in the Hugging Face ecosystem."),
       member(6, "huggingfaceLlmTrainer", "Extends the workflow into reproducible language-model training with first-party tooling guidance."),
