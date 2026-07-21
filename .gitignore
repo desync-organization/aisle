@@ -8,8 +8,13 @@
 # production
 /build
 
+# local catalog database
+/data/*.db*
+
 # testing
 /coverage
+/.playwright-cli
+/output
 
 # local environment files
 .env

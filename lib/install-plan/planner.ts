@@ -1,0 +1,428 @@
+import type { ZodError } from "zod";
+
+import {
+  GLOBAL_UNSUPPORTED_AGENTS,
+  InstallPlanError,
+  MAX_SKILLS_PER_PLAN,
+  MAX_SOURCES_PER_PLAN,
+  SKILLS_CLI_MINIMUM_NODE_VERSION,
+  SKILLS_CLI_PACKAGE,
+  installPlanRequestSchema,
+  type GithubDiscoveryScope,
+  type InstallMode,
+  type InstallPlanOptions,
+  type InstallShell,
+  type InstallScope,
+  type ResolvedGithubSkill,
+  type SupportedAgent,
+} from "./contracts";
+
+export type InstallStepSelection = Readonly<{
+  canonicalSkillId: string;
+  revisionId: string;
+  name: string;
+  normalizedName: string;
+  observedCommitSha: string;
+  contentDigest: string;
+  installerSelector: string;
+  selectorVerifiedUnique: true;
+  verifiedDiscoveryScope: GithubDiscoveryScope;
+}>;
+
+export type InstallExecutionStep = Readonly<{
+  id: string;
+  source: string;
+  sourceUrl: string;
+  discoveryScope: GithubDiscoveryScope;
+  file: "npx";
+  args: readonly string[];
+  selections: readonly InstallStepSelection[];
+}>;
+
+export type InstallPlanCore = Readonly<{
+  options: Readonly<{
+    agents: readonly SupportedAgent[];
+    scope: InstallScope;
+    mode: InstallMode;
+    shell: InstallShell;
+  }>;
+  runtime: Readonly<{
+    executable: "npx";
+    package: typeof SKILLS_CLI_PACKAGE;
+    minimumNodeVersion: typeof SKILLS_CLI_MINIMUM_NODE_VERSION;
+  }>;
+  steps: readonly InstallExecutionStep[];
+  selectionCount: number;
+  sourceCount: number;
+}>;
+
+const globallyUnsupportedAgents = new Set<string>(GLOBAL_UNSUPPORTED_AGENTS);
+
+function invalidInput(error: ZodError): InstallPlanError {
+  return new InstallPlanError(
+    "INVALID_INPUT",
+    "The install plan request does not match the public install contract.",
+    error.issues.map((issue) => ({
+      path: issue.path.map(String).join("."),
+      message: issue.message,
+    })),
+  );
+}
+
+function normalizeSkillName(name: string): string {
+  return name
+    .normalize("NFKC")
+    .trim()
+    .toLowerCase()
+    .replaceAll("_", "-")
+    .replace(/\s+/g, "-")
+    .replace(/-+/g, "-");
+}
+
+function canonicalRepository(skill: ResolvedGithubSkill): string {
+  return `${skill.source.owner.toLowerCase()}/${skill.source.repository.toLowerCase()}`;
+}
+
+function encodedPath(path: string): string {
+  return path.split("/").map(encodeURIComponent).join("/");
+}
+
+function trustedScopeUrl(skill: ResolvedGithubSkill): string {
+  const repository = canonicalRepository(skill);
+  const { branch, path } = skill.source.discoveryScope;
+  if (path === ".") {
+    return `https://github.com/${repository}/tree/${encodeURIComponent(branch)}`;
+  }
+  return `https://github.com/${repository}/tree/${encodeURIComponent(branch)}/${encodedPath(path)}`;
+}
+
+function scopeLocatorKey(skill: ResolvedGithubSkill): string {
+  const { branch, path } = skill.source.discoveryScope;
+  return JSON.stringify([canonicalRepository(skill), branch, path]);
+}
+
+function exactScopeKey(skill: ResolvedGithubSkill): string {
+  const { branch, path, branchHeadSha } = skill.source.discoveryScope;
+  return JSON.stringify([
+    canonicalRepository(skill),
+    branch,
+    path,
+    branchHeadSha,
+  ]);
+}
+
+function assertScopeIsSupported(options: InstallPlanOptions): void {
+  if (options.scope !== "global") return;
+
+  const unsupported = options.agents.filter((agent) => globallyUnsupportedAgents.has(agent));
+  if (unsupported.length > 0) {
+    throw new InstallPlanError(
+      "UNSUPPORTED_GLOBAL_SCOPE",
+      `Global installation is not supported for: ${unsupported.sort().join(", ")}.`,
+    );
+  }
+}
+
+function assertEligible(
+  skill: ResolvedGithubSkill,
+  agents: readonly SupportedAgent[],
+  index: number,
+): void {
+  const field = (name: string) => [{ path: `selections.${index}.${name}`, message: "rejected" }];
+
+  if (skill.publication !== "public") {
+    throw new InstallPlanError(
+      "NOT_PUBLIC",
+      "Every install selection must be confirmed public.",
+      field("publication"),
+    );
+  }
+  if (skill.availability !== "current") {
+    throw new InstallPlanError(
+      "NOT_CURRENT",
+      "Withdrawn or superseded revisions cannot be installed.",
+      field("availability"),
+    );
+  }
+  if (skill.trust.blocked) {
+    throw new InstallPlanError(
+      "BLOCKED",
+      "A blocked revision cannot be installed.",
+      field("trust.blocked"),
+    );
+  }
+  if (skill.trust.quarantined) {
+    throw new InstallPlanError(
+      "QUARANTINED",
+      "A quarantined revision cannot be installed.",
+      field("trust.quarantined"),
+    );
+  }
+  if (skill.trust.validation !== "passed") {
+    throw new InstallPlanError(
+      "VALIDATION_REQUIRED",
+      "Every revision must pass catalog validation before installation.",
+      field("trust.validation"),
+    );
+  }
+  if (skill.license.status !== "verified" || skill.license.expression === null) {
+    throw new InstallPlanError(
+      "UNLICENSED",
+      "Every install selection must have verified license evidence.",
+      field("license"),
+    );
+  }
+  if (!skill.installer.selectorVerifiedUnique) {
+    throw new InstallPlanError(
+      "SELECTOR_NOT_UNIQUE",
+      "The CLI skill selector must be unique within its verified branch/path discovery scope.",
+      field("installer.selectorVerifiedUnique"),
+    );
+  }
+  if (skill.installer.selector !== skill.name) {
+    throw new InstallPlanError(
+      "SELECTOR_EVIDENCE_MISMATCH",
+      "Installer selector evidence must match the selected public skill name.",
+      field("installer"),
+    );
+  }
+
+  const sourceScope = skill.source.discoveryScope;
+  const verifiedScope = skill.installer.verifiedDiscoveryScope;
+  if (
+    sourceScope.branchHeadSha !== skill.observed.commitSha ||
+    verifiedScope.branch !== sourceScope.branch ||
+    verifiedScope.path !== sourceScope.path ||
+    verifiedScope.branchHeadSha !== sourceScope.branchHeadSha
+  ) {
+    throw new InstallPlanError(
+      "DISCOVERY_SCOPE_EVIDENCE_MISMATCH",
+      "Branch head, artifact observation, and selector uniqueness evidence must bind to the same branch/path discovery scope.",
+      [
+        { path: `selections.${index}.source.discoveryScope`, message: "scope mismatch" },
+        { path: `selections.${index}.observed.commitSha`, message: "scope mismatch" },
+        {
+          path: `selections.${index}.installer.verifiedDiscoveryScope`,
+          message: "scope mismatch",
+        },
+      ],
+    );
+  }
+
+  const compatibleAgents = new Set(skill.compatibleAgents);
+  const incompatibleAgents = agents.filter((agent) => !compatibleAgents.has(agent));
+  if (incompatibleAgents.length > 0) {
+    throw new InstallPlanError(
+      "INCOMPATIBLE_AGENT",
+      `The revision is not compatible with: ${incompatibleAgents.join(", ")}.`,
+      field("compatibleAgents"),
+    );
+  }
+}
+
+function assertNoSelectionConflicts(selections: readonly ResolvedGithubSkill[]): void {
+  const revisions = new Set<string>();
+  const canonicalRevisions = new Map<string, string>();
+  const normalizedNames = new Map<string, string>();
+  const scopeHeads = new Map<string, string>();
+
+  selections.forEach((skill, index) => {
+    if (skill.normalizedName !== normalizeSkillName(skill.name)) {
+      throw new InstallPlanError(
+        "INVALID_INPUT",
+        "A resolved normalized name does not match its public skill name.",
+        [{ path: `selections.${index}.normalizedName`, message: "normalization mismatch" }],
+      );
+    }
+
+    if (revisions.has(skill.revisionId)) {
+      throw new InstallPlanError(
+        "DUPLICATE_SELECTION",
+        "The same resolved revision was selected more than once.",
+        [{ path: `selections.${index}.revisionId`, message: "duplicate revision" }],
+      );
+    }
+    revisions.add(skill.revisionId);
+
+    const previousRevision = canonicalRevisions.get(skill.canonicalSkillId);
+    if (previousRevision !== undefined) {
+      throw new InstallPlanError(
+        "CONFLICTING_REVISION",
+        "A canonical skill cannot resolve to multiple revisions in one plan.",
+        [{ path: `selections.${index}.canonicalSkillId`, message: "conflicting revision" }],
+      );
+    }
+    canonicalRevisions.set(skill.canonicalSkillId, skill.revisionId);
+
+    const locator = scopeLocatorKey(skill);
+    const previousHead = scopeHeads.get(locator);
+    if (
+      previousHead !== undefined &&
+      previousHead !== skill.source.discoveryScope.branchHeadSha
+    ) {
+      throw new InstallPlanError(
+        "DISCOVERY_SCOPE_EVIDENCE_MISMATCH",
+        "One branch/path discovery scope cannot carry conflicting observed branch heads.",
+        [{
+          path: `selections.${index}.source.discoveryScope.branchHeadSha`,
+          message: "conflicting branch head evidence",
+        }],
+      );
+    }
+    scopeHeads.set(locator, skill.source.discoveryScope.branchHeadSha);
+
+    const source = canonicalRepository(skill);
+    const previousSource = normalizedNames.get(skill.normalizedName);
+    if (previousSource !== undefined) {
+      throw new InstallPlanError(
+        "NORMALIZED_NAME_CONFLICT",
+        previousSource === source
+          ? "A normalized skill name was selected more than once from the same source."
+          : "The same normalized skill name cannot be installed from multiple sources.",
+        [{ path: `selections.${index}.normalizedName`, message: "normalized name conflict" }],
+      );
+    }
+    normalizedNames.set(skill.normalizedName, source);
+  });
+}
+
+function createArgs(
+  sourceUrl: string,
+  selections: readonly ResolvedGithubSkill[],
+  options: Readonly<{ agents: readonly SupportedAgent[]; scope: InstallScope; mode: InstallMode }>,
+): readonly string[] {
+  const args: string[] = [
+    "--yes",
+    SKILLS_CLI_PACKAGE,
+    "add",
+    sourceUrl,
+    "--full-depth",
+  ];
+
+  for (const selection of selections) {
+    args.push("--skill", selection.name);
+  }
+  for (const agent of options.agents) {
+    args.push("--agent", agent);
+  }
+  if (options.scope === "global") {
+    args.push("--global");
+  }
+  // The pinned CLI uses symlink mode by default and does not expose a
+  // --symlink flag. Keeping the choice explicit in options avoids prompting.
+  if (options.mode === "copy") {
+    args.push("--copy");
+  }
+  args.push("--yes");
+
+  return args;
+}
+
+export function resolveInstallPlanCore(input: unknown): InstallPlanCore {
+  const parsed = installPlanRequestSchema.safeParse(input);
+  if (!parsed.success) throw invalidInput(parsed.error);
+
+  const { selections, options } = parsed.data;
+  if (selections.length === 0) {
+    throw new InstallPlanError("EMPTY_SELECTION", "Select at least one public skill.");
+  }
+  if (selections.length > MAX_SKILLS_PER_PLAN) {
+    throw new InstallPlanError(
+      "SELECTION_LIMIT_EXCEEDED",
+      `A plan can contain at most ${MAX_SKILLS_PER_PLAN} skills.`,
+    );
+  }
+
+  assertScopeIsSupported(options);
+  assertNoSelectionConflicts(selections);
+
+  const agents = [...options.agents].sort();
+  selections.forEach((skill, index) => assertEligible(skill, agents, index));
+
+  const grouped = new Map<
+    string,
+    Readonly<{
+      repository: string;
+      sourceUrl: string;
+      discoveryScope: GithubDiscoveryScope;
+      selections: ResolvedGithubSkill[];
+    }>
+  >();
+  for (const selection of selections) {
+    const key = exactScopeKey(selection);
+    const existing = grouped.get(key);
+    if (existing) {
+      existing.selections.push(selection);
+      continue;
+    }
+
+    grouped.set(key, {
+      repository: canonicalRepository(selection),
+      sourceUrl: trustedScopeUrl(selection),
+      discoveryScope: selection.source.discoveryScope,
+      selections: [selection],
+    });
+  }
+
+  if (grouped.size > MAX_SOURCES_PER_PLAN) {
+    throw new InstallPlanError(
+      "SOURCE_LIMIT_EXCEEDED",
+      `A plan can contain at most ${MAX_SOURCES_PER_PLAN} GitHub discovery scopes.`,
+    );
+  }
+
+  const normalizedOptions = {
+    agents,
+    scope: options.scope,
+    mode: options.mode,
+    shell: options.shell,
+  } as const;
+
+  const steps = [...grouped.entries()]
+    .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+    .map(([, group], index): InstallExecutionStep => {
+      const orderedSelections = [...group.selections].sort((left, right) =>
+        left.normalizedName === right.normalizedName
+          ? left.revisionId < right.revisionId
+            ? -1
+            : left.revisionId > right.revisionId
+              ? 1
+              : 0
+          : left.normalizedName < right.normalizedName
+            ? -1
+            : 1,
+      );
+
+      return {
+        id: `step-${String(index + 1).padStart(2, "0")}`,
+        source: group.repository,
+        sourceUrl: group.sourceUrl,
+        discoveryScope: group.discoveryScope,
+        file: "npx",
+        args: createArgs(group.sourceUrl, orderedSelections, normalizedOptions),
+        selections: orderedSelections.map((selection) => ({
+          canonicalSkillId: selection.canonicalSkillId,
+          revisionId: selection.revisionId,
+          name: selection.name,
+          normalizedName: selection.normalizedName,
+          observedCommitSha: selection.observed.commitSha,
+          contentDigest: selection.observed.contentDigest,
+          installerSelector: selection.installer.selector,
+          selectorVerifiedUnique: true,
+          verifiedDiscoveryScope: selection.installer.verifiedDiscoveryScope,
+        })),
+      };
+    });
+
+  return {
+    options: normalizedOptions,
+    runtime: {
+      executable: "npx",
+      package: SKILLS_CLI_PACKAGE,
+      minimumNodeVersion: SKILLS_CLI_MINIMUM_NODE_VERSION,
+    },
+    steps,
+    selectionCount: selections.length,
+    sourceCount: steps.length,
+  };
+}

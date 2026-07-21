@@ -11,6 +11,8 @@ export default defineConfig({
     environment: "jsdom",
     setupFiles: ["./vitest.setup.ts"],
     include: ["**/*.test.{ts,tsx}"],
+    // Database and jsdom suites are more reliable on Windows when libsql stays in one worker.
+    maxWorkers: 1,
     coverage: {
       reporter: ["text", "html"],
     },

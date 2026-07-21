@@ -1,10 +1,11 @@
 "use client";
 
 import * as Dialog from "@radix-ui/react-dialog";
-import { ArrowUpRight, Layers3, Menu, Search, X } from "lucide-react";
+import { ArrowUpRight, Menu, Search, X } from "lucide-react";
 import Link from "next/link";
 
 import { SearchDialog } from "@/components/search-dialog";
+import { SelectionCount } from "@/components/marketplace/selection-count";
 import { Button } from "@/components/ui/button";
 
 const navigation = [
@@ -55,11 +56,7 @@ export function SiteHeader() {
               <kbd>/</kbd>
             </Button>
           </SearchDialog>
-          <Link aria-label="Your Stack, 0 selected" className="stack-link" href="/skills">
-            <Layers3 aria-hidden="true" size={16} />
-            <span>Your Stack</span>
-            <strong>0</strong>
-          </Link>
+          <SelectionCount />
           <Dialog.Root>
             <Dialog.Trigger asChild>
               <Button aria-label="Open navigation" className="mobile-menu-trigger" variant="secondary">

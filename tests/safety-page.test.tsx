@@ -3,6 +3,7 @@ import { render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import SafetyPage from "@/app/safety/page";
+import { SelectionProvider } from "@/lib/selection/react";
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: vi.fn() }),
@@ -10,7 +11,7 @@ vi.mock("next/navigation", () => ({
 
 describe("safety and trust guidance", () => {
   it("defines every trust label without calling a reviewed skill safe", () => {
-    render(<SafetyPage />);
+    render(<SelectionProvider><SafetyPage /></SelectionProvider>);
 
     for (const label of [
       "Official",
@@ -43,7 +44,7 @@ describe("safety and trust guidance", () => {
   it(
     "has no automated accessibility violations in its initial state",
     async () => {
-      const { container } = render(<SafetyPage />);
+      const { container } = render(<SelectionProvider><SafetyPage /></SelectionProvider>);
       const results = await axe.run(container, {
         rules: { "color-contrast": { enabled: false } },
       });

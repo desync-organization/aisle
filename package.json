@@ -9,9 +9,14 @@
     "start": "next start",
     "lint": "eslint . --max-warnings=0",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run",
+    "test": "vitest run lib/db && vitest run lib/catalog/adapters && vitest run lib/catalog/connectors/skills-sh-client.test.ts && vitest run lib/catalog/connectors/skills-sh-sync.test.ts && vitest run lib/catalog/artifact-fingerprint.test.ts lib/catalog/categories.test.ts lib/catalog/http-safety.test.ts lib/catalog/orchestrator.test.ts lib/catalog/security.test.ts && vitest run tests",
     "test:watch": "vitest",
-    "check": "npm run lint && npm run typecheck && npm test"
+    "check": "npm run lint && npm run typecheck && npm test",
+    "db:migrate": "tsx scripts/db-migrate.ts",
+    "db:seed": "tsx scripts/db-seed.ts",
+    "db:setup": "npm run db:migrate && npm run db:seed",
+    "catalog:sync": "tsx scripts/catalog-sync.ts",
+    "packages:publish": "tsx scripts/packages-publish.ts"
   },
   "engines": {
     "node": ">=20.9.0"
@@ -20,13 +25,17 @@
   "dependencies": {
     "@fontsource-variable/jetbrains-mono": "^5.2.6",
     "@fontsource-variable/manrope": "^5.2.6",
+    "@libsql/client": "^0.17.4",
     "@radix-ui/react-dialog": "^1.1.15",
+    "@vercel/oidc": "^3.8.0",
     "clsx": "^2.1.1",
+    "drizzle-orm": "^0.45.2",
     "lucide-react": "^0.548.0",
-    "next": "16.2.10",
+    "next": "^16.2.11",
     "react": "19.2.7",
     "react-dom": "19.2.7",
     "tailwind-merge": "^3.3.1",
+    "yaml": "^2.9.0",
     "zod": "^4.1.12"
   },
   "devDependencies": {
@@ -37,10 +46,12 @@
     "@types/react": "^19.2.2",
     "@types/react-dom": "^19.2.2",
     "axe-core": "^4.12.1",
+    "drizzle-kit": "^0.31.10",
     "eslint": "^9.39.1",
-    "eslint-config-next": "16.2.10",
+    "eslint-config-next": "^16.2.11",
     "jsdom": "^27.1.0",
     "tailwindcss": "^4.1.16",
+    "tsx": "^4.23.1",
     "typescript": "^5.9.3",
     "vitest": "^4.0.17"
   }

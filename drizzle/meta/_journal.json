@@ -1,0 +1,62 @@
+{
+  "version": "7",
+  "dialect": "sqlite",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "6",
+      "when": 1784578979216,
+      "tag": "0000_catalog-foundation",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1784579680974,
+      "tag": "0001_skills-sh-hydration-cache",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1784580794574,
+      "tag": "0002_source-normalization",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1784583420443,
+      "tag": "0003_soft_bucky",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1784589182987,
+      "tag": "0004_catalog-corrective-hardening",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1784678400000,
+      "tag": "0005_source-observation-freshness",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1784692800000,
+      "tag": "0006_observation_category_evidence",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1784696400000,
+      "tag": "0007_package-blueprint-publication",
+      "breakpoints": true
+    }
+  ]
+}

@@ -4,8 +4,10 @@ import type { ReactNode } from "react";
 import "@fontsource-variable/jetbrains-mono";
 import "@fontsource-variable/manrope";
 import "./globals.css";
+import "./marketplace.css";
 
-import { siteDescription, siteOrigin } from "@/lib/seo";
+import { SelectionProvider } from "@/lib/selection/react";
+import { siteDescription, siteOrigin, siteSocialImage } from "@/lib/seo";
 
 export const metadata: Metadata = {
   metadataBase: siteOrigin,
@@ -26,11 +28,13 @@ export const metadata: Metadata = {
     title: "Aisle — Build your agent stack",
     description: siteDescription,
     url: "/",
+    images: [siteSocialImage],
   },
   twitter: {
-    card: "summary",
+    card: "summary_large_image",
     title: "Aisle — Build your agent stack",
     description: siteDescription,
+    images: [siteSocialImage.url],
   },
   robots: {
     index: true,
@@ -46,7 +50,9 @@ export const viewport: Viewport = {
 export default function RootLayout({ children }: Readonly<{ children: ReactNode }>) {
   return (
     <html lang="en">
-      <body>{children}</body>
+      <body>
+        <SelectionProvider>{children}</SelectionProvider>
+      </body>
     </html>
   );
 }

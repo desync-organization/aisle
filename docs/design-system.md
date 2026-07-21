@@ -26,6 +26,6 @@ Typography uses locally packaged Manrope Variable for editorial and interface co
 - Empty, loading, not-found, and recoverable error states are first-class routes/components.
 - Icons come from Lucide; decorative hand-authored SVGs are not part of the system.
 
-## Product-shell boundary
+## Product boundary
 
-The foundation includes navigation and honest route states but no fabricated catalog entries. Later product work should replace placeholders through server-rendered data contracts while retaining the shared header, footer, tokens, states, and accessibility behavior.
+The marketplace routes use server-rendered catalog, package, coverage, and install-plan contracts. Empty states remain honest: Aisle does not fabricate catalog entries or ship placeholder skills when public upstream data has not resolved.

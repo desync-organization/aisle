@@ -5,9 +5,30 @@ import {
   EMPTY_SELECTION_SERVER_SNAPSHOT,
   MAX_SELECTED_SKILLS,
   SELECTION_STORAGE_KEY,
-  SELECTION_STORAGE_VERSION,
 } from "@/lib/selection";
 import { MemorySelectionStorage } from "./selection-test-helpers";
+
+const skillA = "skill_aaaaaaaaaaaaaaaaaaaaaaaa";
+const skillB = "skill_bbbbbbbbbbbbbbbbbbbbbbbb";
+const skillC = "skill_cccccccccccccccccccccccc";
+const skillD = "skill_dddddddddddddddddddddddd";
+
+function packageReceipt(
+  packageSlug: string,
+  members: readonly string[],
+  packageVersion = 1,
+  digestCharacter = "a",
+) {
+  return {
+    packageSlug,
+    packageVersion,
+    blueprintDigest: `sha256:${digestCharacter.repeat(64)}`,
+    members: members.map((selectionId) => ({
+      selectionId,
+      revisionId: `revision_${selectionId.slice("skill_".length)}`,
+    })),
+  };
+}
 
 describe("selection store", () => {
   it("starts with an SSR-stable snapshot and hydrates without browser storage", () => {
@@ -36,7 +57,7 @@ describe("selection store", () => {
       persistence: "available",
     });
     expect(storage.getItem(SELECTION_STORAGE_KEY)).toBe(
-      '{"version":1,"ids":["skill-a","skill-b","skill-c"]}',
+      '{"version":2,"ids":["skill-a","skill-b","skill-c"],"individualIds":["skill-a","skill-b","skill-c"],"packageAssertions":[]}',
     );
   });
 
@@ -95,7 +116,7 @@ describe("selection store", () => {
   it.each([
     ["corrupt", "{broken"],
     ["old", '{"version":0,"ids":["skill-old"]}'],
-    ["extra command", '{"version":1,"ids":["skill-a"],"command":"whoami"}'],
+    ["extra command", '{"version":2,"ids":["skill-a"],"individualIds":["skill-a"],"packageAssertions":[],"command":"whoami"}'],
   ])("recovers %s storage by clearing it", (_label, payload) => {
     const storage = new MemorySelectionStorage();
     storage.setItem(SELECTION_STORAGE_KEY, payload);
@@ -106,12 +127,12 @@ describe("selection store", () => {
     expect(storage.removedKeys).toEqual([SELECTION_STORAGE_KEY]);
   });
 
-  it("canonicalizes a valid legacy-order v1 payload on hydration", () => {
+  it("canonicalizes a valid legacy-order v1 payload as individual selections", () => {
     const storage = new MemorySelectionStorage();
     storage.setItem(
       SELECTION_STORAGE_KEY,
       JSON.stringify({
-        version: SELECTION_STORAGE_VERSION,
+        version: 1,
         ids: ["skill-z", "skill-a", "skill-z"],
       }),
     );
@@ -119,8 +140,83 @@ describe("selection store", () => {
     const store = createSelectionStore({ storage });
     expect(store.hydrate().ids).toEqual(["skill-a", "skill-z"]);
     expect(storage.getItem(SELECTION_STORAGE_KEY)).toBe(
-      '{"version":1,"ids":["skill-a","skill-z"]}',
+      '{"version":2,"ids":["skill-a","skill-z"],"individualIds":["skill-a","skill-z"],"packageAssertions":[]}',
     );
+  });
+
+  it("persists package receipts and drops one when a bound member is removed", () => {
+    const storage = new MemorySelectionStorage();
+    const store = createSelectionStore({ storage });
+    store.hydrate();
+
+    expect(store.actions.addPackage(
+      packageReceipt("frontend-foundations", [skillA]),
+    )).toMatchObject({ ok: true, changed: true });
+    expect(store.getSnapshot().packageAssertions).toHaveLength(1);
+    expect(store.getSnapshot().individualIds).toEqual([]);
+
+    store.actions.remove(skillA);
+    expect(store.getSnapshot().packageAssertions).toEqual([]);
+    expect(store.getSnapshot().ids).toEqual([]);
+  });
+
+  it("subtracts obsolete package-only members when replacing the same slug", () => {
+    const store = createSelectionStore({ storage: new MemorySelectionStorage() });
+    store.hydrate();
+    store.actions.addMany([skillC]);
+    store.actions.addPackage(
+      packageReceipt("frontend-foundations", [skillA, skillB]),
+    );
+
+    store.actions.addPackage(
+      packageReceipt("frontend-foundations", [skillB, skillD], 2, "b"),
+    );
+
+    expect(store.getSnapshot()).toMatchObject({
+      ids: [skillB, skillC, skillD],
+      individualIds: [skillC],
+    });
+    expect(store.getSnapshot().packageAssertions[0]?.members.map(
+      (member) => member.selectionId,
+    )).toEqual([skillB, skillD]);
+  });
+
+  it("removes one package atomically while preserving manual and overlapping selections", () => {
+    const store = createSelectionStore({ storage: new MemorySelectionStorage() });
+    store.hydrate();
+    store.actions.addMany([skillA]);
+    store.actions.addPackage(
+      packageReceipt("frontend-foundations", [skillA, skillB, skillC]),
+    );
+    store.actions.addPackage(
+      packageReceipt("motion-and-3d", [skillC, skillD], 1, "c"),
+    );
+
+    store.actions.removePackage("frontend-foundations");
+
+    expect(store.getSnapshot()).toMatchObject({
+      ids: [skillA, skillC, skillD],
+      individualIds: [skillA],
+    });
+    expect(store.getSnapshot().packageAssertions.map(
+      (assertion) => assertion.packageSlug,
+    )).toEqual(["motion-and-3d"]);
+  });
+
+  it("turns remaining members into individual selections when customization breaks a package", () => {
+    const store = createSelectionStore({ storage: new MemorySelectionStorage() });
+    store.hydrate();
+    store.actions.addPackage(
+      packageReceipt("frontend-foundations", [skillA, skillB, skillC]),
+    );
+
+    store.actions.remove(skillB);
+
+    expect(store.getSnapshot()).toMatchObject({
+      ids: [skillA, skillC],
+      individualIds: [skillA, skillC],
+      packageAssertions: [],
+    });
   });
 
   it("recovers storage read and corrupt-payload cleanup failures", () => {
@@ -201,8 +297,10 @@ describe("selection store", () => {
     const store = createSelectionStore({ storage: null });
     expect(Object.keys(store.actions).sort()).toEqual([
       "addMany",
+      "addPackage",
       "clear",
       "remove",
+      "removePackage",
       "replace",
       "toggle",
     ]);

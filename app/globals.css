@@ -2111,15 +2111,26 @@ input:focus-visible {
   font-size: 0.69rem;
 }
 
-.coverage-reporting > .coverage-ledger {
+.coverage-ledger-list {
   display: grid;
-  min-height: 410px;
+  align-content: start;
+  gap: 12px;
+}
+
+.coverage-ledger-list > .coverage-ledger {
+  display: grid;
   align-content: start;
   padding: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
   overflow: hidden;
   background:
     radial-gradient(circle at 90% 0%, rgba(139, 105, 255, 0.1), transparent 17rem),
     rgba(3, 3, 6, 0.26);
+}
+
+.coverage-ledger[data-degraded="true"] {
+  border-color: rgba(242, 203, 131, 0.2);
 }
 
 .coverage-ledger > div {
@@ -2161,6 +2172,30 @@ input:focus-visible {
   color: #817a8b;
   font-size: 0.66rem;
   line-height: 1.58;
+}
+
+.coverage-reporting .coverage-ledger__exclusions {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 16px 22px 20px;
+  border-top: 1px solid var(--line);
+  list-style: none;
+}
+
+.coverage-reporting .coverage-ledger__exclusions li {
+  display: list-item;
+  min-height: 0;
+  padding-left: 12px;
+  border: 0;
+  color: #91899d;
+  font-size: 0.62rem;
+  line-height: 1.52;
+}
+
+.coverage-reporting .coverage-ledger__exclusions li::marker {
+  content: "—  ";
+  color: var(--iris-bright);
 }
 
 .exclusion-grid {
@@ -2995,7 +3030,7 @@ input:focus-visible {
   }
 
   .coverage-reporting > article,
-  .coverage-reporting > .coverage-ledger {
+  .coverage-ledger-list > .coverage-ledger {
     min-height: auto;
   }
 
