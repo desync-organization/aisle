@@ -270,7 +270,7 @@ function parsePreflightRow(value: unknown, index: number): StackPreflightRow {
     !isSafePublicSourceUrl(value.sourceUrl) ||
     typeof value.license !== "string" ||
     value.license.length === 0 ||
-    value.license.length > 100 ||
+    value.license.length > 256 ||
     !isCompatibilityAdvisory(value.compatibilityAdvisory) ||
     !isCatalogTrustState(value.trust) ||
     revisionId === undefined ||

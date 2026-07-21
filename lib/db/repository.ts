@@ -29,6 +29,10 @@ import {
   SOURCE_CATEGORY_ATTRIBUTION,
   type CanonicalCategorySlug,
 } from "../catalog/categories";
+import {
+  individuallySelectableLicenseIds,
+  isIndividuallySelectableLicense,
+} from "../catalog/license-policy";
 import { installSpecSchema } from "../catalog/source-contract";
 import type {
   CatalogSelectionGateReason,
@@ -162,17 +166,6 @@ export type PackagePublicationResult = Readonly<{
   reused: boolean;
 }>;
 
-const packageEligibleLicenses = [
-  "MIT",
-  "Apache-2.0",
-  "BSD-2-Clause",
-  "BSD-3-Clause",
-  "ISC",
-  "0BSD",
-  "CC0-1.0",
-  "Unlicense",
-] as const;
-const packageEligibleLicenseSet = new Set<string>(packageEligibleLicenses);
 const CATEGORY_OBSERVATION_HISTORY_LIMIT = 4;
 
 function stableId(namespace: string, value: string): string {
@@ -235,9 +228,33 @@ function hasActiveSourceListing() {
       and active_source.enabled = 1
       and active_source.coverage_state in ('current', 'partial')
       and (
-        active_source.freshness_policy = 'retain'
+        (
+          active_source.freshness_policy = 'retain'
+          and exists (
+            select 1
+            from skill_category_observations active_observation
+            join sync_runs active_observation_run
+              on active_observation_run.id = active_observation.observed_run_id
+              and active_observation_run.source_id = active_listing.source_id
+            where active_observation.source_listing_id = active_listing.id
+              and active_observation.skill_id = ${skills.id}
+              and active_observation.revision_id = ${skillRevisions.id}
+              and active_observation.source_hash = active_listing.source_hash
+              and active_observation_run.status in ('succeeded', 'partial')
+              and active_observation_run.finished_at is not null
+          )
+        )
         or (
           active_source.freshness_policy = 'latest-completed-observation'
+          and exists (
+            select 1
+            from skill_category_observations active_certified_observation
+            where active_certified_observation.source_listing_id = active_listing.id
+              and active_certified_observation.observed_run_id = active_listing.last_completed_observation_run_id
+              and active_certified_observation.skill_id = ${skills.id}
+              and active_certified_observation.revision_id = ${skillRevisions.id}
+              and active_certified_observation.source_hash = active_listing.source_hash
+          )
           and active_listing.last_completed_observation_run_id = (
             select completed_observation.id
             from sync_runs completed_observation
@@ -268,14 +285,6 @@ function hasRevisionBoundInstallSpecSql() {
       and json_type(${skillRevisions.installSpecJson}, '$.skillPath') = 'text'
       and length(trim(json_extract(${skillRevisions.installSpecJson}, '$.skillPath'))) > 0
       and json_extract(${skillRevisions.installSpecJson}, '$.skillPath') = ${skills.skillPath}
-    when json_extract(${skillRevisions.installSpecJson}, '$.kind') = 'registry' then
-      json_type(${skillRevisions.installSpecJson}, '$.registry') = 'text'
-      and length(trim(json_extract(${skillRevisions.installSpecJson}, '$.registry'))) > 0
-      and json_type(${skillRevisions.installSpecJson}, '$.identifier') = 'text'
-      and length(trim(json_extract(${skillRevisions.installSpecJson}, '$.identifier'))) > 0
-      and json_type(${skillRevisions.installSpecJson}, '$.version') = 'text'
-      and length(trim(json_extract(${skillRevisions.installSpecJson}, '$.version'))) > 0
-      and json_extract(${skillRevisions.installSpecJson}, '$.version') = ${skillRevisions.immutableRef}
     else 0
   end`;
 }
@@ -309,7 +318,7 @@ function hasRevisionBoundInstallSpec(
       parsed.data.immutableRef === identity.immutableRef
     );
   }
-  return parsed.data.version === identity.immutableRef;
+  return false;
 }
 
 function hasValidLicenseEvidence(value: unknown): boolean {
@@ -1054,7 +1063,7 @@ export class CatalogRepository {
         ne(skillRevisions.upstreamHash, ""),
         hasRevisionBoundInstallSpecSql(),
         hasActiveSourceListing(),
-        inArray(skillRevisions.license, packageEligibleLicenses),
+        inArray(skillRevisions.license, individuallySelectableLicenseIds),
         hasLicenseEvidence(),
         hasNoBlockingTrust(),
         hasSelectableTrust(),
@@ -1155,7 +1164,9 @@ export class CatalogRepository {
           gateReasons.push("install-unresolved");
         }
         if (!Boolean(row.activeSource)) gateReasons.push("source-inactive");
-        if (!packageEligibleLicenseSet.has(row.license)) gateReasons.push("license-not-eligible");
+        if (!isIndividuallySelectableLicense(row.license)) {
+          gateReasons.push("license-not-eligible");
+        }
         if (!hasValidLicenseEvidence(row.revisionMetadata)) {
           gateReasons.push("license-evidence-missing");
         }

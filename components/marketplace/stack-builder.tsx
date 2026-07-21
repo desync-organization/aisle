@@ -485,7 +485,7 @@ export function StackBuilder() {
             <div>
               <p className="eyebrow">03 / Resolving</p>
               <h2>Checking the complete stack.</h2>
-              <p>Public state, revision evidence, license, trust, compatibility, selector scope, and command length are being evaluated.</p>
+              <p>Public state, revision evidence, license, trust, selector scope, and command length are being evaluated while the upstream compatibility advisory is surfaced separately.</p>
             </div>
           </>
         ) : null}

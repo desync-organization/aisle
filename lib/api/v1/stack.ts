@@ -3,6 +3,10 @@ import { createHash } from "node:crypto";
 import { and, asc, eq, inArray, sql } from "drizzle-orm";
 
 import { normalizeSkillPath, normalizeSourceUrl } from "@/lib/catalog/normalization";
+import {
+  isIndividuallySelectableLicense,
+  publicLicenseLabel,
+} from "@/lib/catalog/license-policy";
 import { installSpecSchema } from "@/lib/catalog/source-contract";
 import type { CatalogDatabase } from "@/lib/db/client";
 import {
@@ -298,14 +302,6 @@ function hasVerifiedLicenseEvidence(row: PersistedStackSelection): boolean {
   );
 }
 
-function eligibleLicense(license: string): boolean {
-  return (
-    license.toLowerCase() !== "unknown" &&
-    license.length <= 100 &&
-    /^[A-Za-z0-9.+() -]+$/.test(license)
-  );
-}
-
 function branchHeadEvidence(
   row: PersistedStackSelection,
 ): Readonly<{ branch: string; headSha: string }> | null {
@@ -419,7 +415,7 @@ function plannerSkill(
   row: PersistedStackSelection,
   verification: StackGithubVerificationResult | undefined,
 ): ResolvedGithubSkill | null {
-  const license = row.revisionLicense ?? row.catalogLicense;
+  const license = publicLicenseLabel(row.revisionLicense ?? row.catalogLicense);
   const observedBranchHead = branchHeadEvidence(row);
   if (
     !row.revisionId ||
@@ -619,7 +615,7 @@ function resolveSelection(
   if (verification?.state === "changed") reasons.add("source-revision-changed");
   if (verification?.state === "ambiguous") reasons.add("selector-scope-ambiguous");
   if (!row.hasCurrentObservation) reasons.add("source-inactive");
-  if (!eligibleLicense(license)) reasons.add("license-not-eligible");
+  if (!isIndividuallySelectableLicense(license)) reasons.add("license-not-eligible");
   if (!hasVerifiedLicenseEvidence(row)) reasons.add("license-evidence-missing");
   if (trust === "unreviewed") reasons.add("trust-pending");
   if (trust === "blocked") reasons.add("trust-blocked");

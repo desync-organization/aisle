@@ -1,4 +1,4 @@
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, sql } from "drizzle-orm";
 
 import { normalizeSkillPath, normalizeSourceUrl } from "../catalog/normalization";
 import { installSpecSchema } from "../catalog/source-contract";
@@ -116,6 +116,52 @@ function hasCompleteInventory(
     inventory.fileCount > 0 &&
     inventory.aggregateSha256 === contentHash
   );
+}
+
+function hasCertifiedSourceObservation(skillId: string, revisionId: string) {
+  return sql<boolean>`(
+    (
+      ${catalogSources.freshnessPolicy} = 'retain'
+      and exists (
+        select 1
+        from skill_category_observations package_observation
+        join sync_runs package_observation_run
+          on package_observation_run.id = package_observation.observed_run_id
+          and package_observation_run.source_id = ${sourceListings.sourceId}
+        where package_observation.source_listing_id = ${sourceListings.id}
+          and package_observation.skill_id = ${skillId}
+          and package_observation.revision_id = ${revisionId}
+          and package_observation.source_hash = ${sourceListings.sourceHash}
+          and package_observation_run.status in ('succeeded', 'partial')
+          and package_observation_run.finished_at is not null
+      )
+    )
+    or (
+      ${catalogSources.freshnessPolicy} = 'latest-completed-observation'
+      and ${sourceListings.lastCompletedObservationRunId} is not null
+      and exists (
+        select 1
+        from skill_category_observations package_certified_observation
+        where package_certified_observation.source_listing_id = ${sourceListings.id}
+          and package_certified_observation.observed_run_id = ${sourceListings.lastCompletedObservationRunId}
+          and package_certified_observation.skill_id = ${skillId}
+          and package_certified_observation.revision_id = ${revisionId}
+          and package_certified_observation.source_hash = ${sourceListings.sourceHash}
+      )
+      and ${sourceListings.lastCompletedObservationRunId} = (
+        select package_completed_run.id
+        from sync_runs package_completed_run
+        where package_completed_run.source_id = ${sourceListings.sourceId}
+          and package_completed_run.observation_sweep_complete = 1
+          and package_completed_run.finished_at is not null
+          and package_completed_run.status in ('succeeded', 'partial')
+        order by package_completed_run.finished_at desc,
+          package_completed_run.started_at desc,
+          package_completed_run.id desc
+        limit 1
+      )
+    )
+  )`;
 }
 
 function licenseEvidenceMatches(
@@ -265,6 +311,7 @@ export async function resolveEligiblePackageMember(
         eq(sourceListings.sourceHash, input.observedHead),
         eq(catalogSources.enabled, true),
         eq(catalogSources.coverageState, packageAdmissibleCoverageStates[0]),
+        hasCertifiedSourceObservation(candidate.skillId, candidate.revisionId),
       ),
     )
     .limit(1);
