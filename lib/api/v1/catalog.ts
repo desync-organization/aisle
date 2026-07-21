@@ -11,7 +11,10 @@ import {
 import { normalizeSkillPath, normalizeSourceUrl } from "@/lib/catalog/normalization";
 import { installSpecSchema } from "@/lib/catalog/source-contract";
 import type { CatalogDatabase } from "@/lib/db/client";
-import { CatalogRepository } from "@/lib/db/repository";
+import {
+  CatalogRepository,
+  type PublishedPackageSummary,
+} from "@/lib/db/repository";
 import {
   categories,
   repositories,
@@ -541,13 +544,7 @@ function packagesFilterHash(query: PackagesQuery): string {
   });
 }
 
-function compareText(left: string, right: string): number {
-  return left < right ? -1 : left > right ? 1 : 0;
-}
-
-function packageSummary(
-  row: Awaited<ReturnType<CatalogRepository["listPublishedPackages"]>>[number],
-) {
+function packageSummary(row: PublishedPackageSummary) {
   const editorial = packageEditorialSchema.parse(row.editorial);
   return {
     id: row.id,
@@ -571,55 +568,32 @@ export async function listPublicPackages(
 ) {
   const filterHash = packagesFilterHash(query);
   const cursor = decodeCursor(query.cursor, { scope: "packages", filterHash });
-  const normalizedQuery = query.q?.toLowerCase();
-  let rows = (await repository.listPublishedPackages())
-    .map(packageSummary)
-    .filter((row) => {
-      if (query.category && row.editorial.category !== query.category) return false;
-      if (query.featured !== undefined && row.editorial.featured !== query.featured) return false;
-      if (!normalizedQuery) return true;
-      return [
-        row.title,
-        row.description,
-        row.editorial.outcome,
-        ...row.editorial.tags,
-      ].some((value) => value.toLowerCase().includes(normalizedQuery));
-    });
-
-  rows.sort((left, right) => {
-    if (query.sort === "recent") {
-      const published = compareText(right.publishedAt, left.publishedAt);
-      return published || compareText(left.id, right.id);
-    }
-    return (
-      compareText(left.title.toLowerCase(), right.title.toLowerCase()) ||
-      compareText(left.id, right.id)
-    );
-  });
-
+  let after: Readonly<{ key: string; id: string }> | null = null;
   if (cursor) {
     const [lastKey] = cursor.key;
     if (typeof lastKey !== "string") throw new InvalidCursorError();
-    rows = rows.filter((row) => {
-      const key = query.sort === "recent" ? row.publishedAt : row.title.toLowerCase();
-      if (query.sort === "recent") {
-        return key < lastKey || (key === lastKey && row.id > cursor.id);
-      }
-      return key > lastKey || (key === lastKey && row.id > cursor.id);
-    });
+    if (query.sort === "recent" && Number.isNaN(new Date(lastKey).getTime())) {
+      throw new InvalidCursorError();
+    }
+    after = { key: lastKey, id: cursor.id };
   }
 
-  const hasMore = rows.length > query.limit;
-  const pageRows = rows.slice(0, query.limit);
-  const last = pageRows.at(-1);
+  const page = await repository.listPublishedPackagesPage({
+    limit: query.limit,
+    sort: query.sort,
+    query: query.q ?? null,
+    category: query.category ?? null,
+    ...(query.featured !== undefined ? { featured: query.featured } : {}),
+    after,
+  });
   return {
-    items: pageRows,
-    nextCursor: hasMore && last
+    items: page.items.map(packageSummary),
+    nextCursor: page.next
       ? encodeCursor({
           scope: "packages",
           filterHash,
-          key: [query.sort === "recent" ? last.publishedAt : last.title.toLowerCase()],
-          id: last.id,
+          key: [page.next.key],
+          id: page.next.id,
         })
       : null,
   };

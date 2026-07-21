@@ -15,6 +15,7 @@ import {
   notInArray,
   or,
   sql,
+  type SQL,
 } from "drizzle-orm";
 
 import { installSpecSchema } from "../catalog/source-contract";
@@ -115,6 +116,20 @@ export type PublishedPackageSummary = Readonly<{
   editorial: Record<string, unknown>;
   blueprintSchemaVersion: number;
   blueprintDigest: string;
+}>;
+
+export type PublishedPackagePageQuery = Readonly<{
+  limit: number;
+  sort: "name" | "recent";
+  query?: string | null;
+  category?: string | null;
+  featured?: boolean;
+  after?: Readonly<{ key: string; id: string }> | null;
+}>;
+
+export type PublishedPackagePage = Readonly<{
+  items: readonly PublishedPackageSummary[];
+  next: Readonly<{ key: string; id: string }> | null;
 }>;
 
 export type PackagePublicationResult = Readonly<{
@@ -1023,6 +1038,171 @@ export class CatalogRepository {
       memberCount: members.length,
       members,
     };
+  }
+
+  /**
+   * Resolves one bounded public page without first materializing the complete
+   * package catalog. The opaque checkpoint may refer to a scanned invalid row;
+   * this lets callers continue after a bounded amount of eligibility work
+   * without skipping any later valid package.
+   */
+  async listPublishedPackagesPage(
+    input: PublishedPackagePageQuery,
+  ): Promise<PublishedPackagePage> {
+    const limit = Math.min(Math.max(Math.trunc(input.limit), 1), 100);
+    const candidateBudget = Math.min(Math.max(limit * 4, 100), 400);
+    const normalizedQuery = input.query?.trim() || null;
+    const normalizedCategory = input.category?.trim() || null;
+
+    return this.db.transaction(async (transaction) => {
+      const visible: Array<Readonly<{
+        summary: PublishedPackageSummary;
+        checkpoint: Readonly<{ key: string; id: string }>;
+      }>> = [];
+      let after = input.after ?? null;
+      let scanned = 0;
+      let exhausted = false;
+      let lastScanned: Readonly<{ key: string; id: string }> | null = null;
+
+      while (visible.length <= limit && scanned < candidateBudget) {
+        const batchLimit = Math.min(100, candidateBudget - scanned);
+        const conditions: SQL[] = [
+          eq(packages.published, true),
+          isNotNull(packageVersions.publishedAt),
+          eq(packageVersions.blueprintSchemaVersion, 1),
+          like(packageVersions.blueprintDigest, "sha256:%"),
+          sql`json_valid(${packageVersions.editorialJson}) = 1`,
+          sql`not exists (
+            select 1
+            from package_versions newer_package_version
+            where newer_package_version.package_id = ${packages.id}
+              and newer_package_version.published_at is not null
+              and newer_package_version.version > ${packageVersions.version}
+          )`,
+        ];
+        if (normalizedCategory) {
+          conditions.push(
+            sql`lower(json_extract(${packageVersions.editorialJson}, '$.category')) = lower(${normalizedCategory})`,
+          );
+        }
+        if (input.featured !== undefined) {
+          conditions.push(
+            sql`json_extract(${packageVersions.editorialJson}, '$.featured') = ${input.featured ? 1 : 0}`,
+          );
+        }
+        if (normalizedQuery) {
+          conditions.push(sql`(
+            instr(lower(${packages.title}), lower(${normalizedQuery})) > 0
+            or instr(lower(${packages.description}), lower(${normalizedQuery})) > 0
+            or instr(
+              lower(coalesce(json_extract(${packageVersions.editorialJson}, '$.outcome'), '')),
+              lower(${normalizedQuery})
+            ) > 0
+            or exists (
+              select 1
+              from json_each(${packageVersions.editorialJson}, '$.tags') package_tag
+              where instr(lower(cast(package_tag.value as text)), lower(${normalizedQuery})) > 0
+            )
+          )`);
+        }
+        if (after) {
+          if (input.sort === "recent") {
+            const publishedAt = new Date(after.key);
+            if (Number.isNaN(publishedAt.getTime())) {
+              throw new Error("Invalid recent package scan cursor");
+            }
+            conditions.push(sql`(
+              ${packageVersions.publishedAt} < ${publishedAt}
+              or (
+                ${packageVersions.publishedAt} = ${publishedAt}
+                and ${packages.id} > ${after.id}
+              )
+            )`);
+          } else {
+            conditions.push(sql`(
+              lower(${packages.title}) > ${after.key}
+              or (lower(${packages.title}) = ${after.key} and ${packages.id} > ${after.id})
+            )`);
+          }
+        }
+
+        const orderBy = input.sort === "recent"
+          ? [desc(packageVersions.publishedAt), asc(packages.id)]
+          : [asc(sql`lower(${packages.title})`), asc(packages.id)];
+        const candidateRows = await transaction
+          .select({
+            id: packages.id,
+            title: packages.title,
+            titleKey: sql<string>`lower(${packages.title})`,
+            publishedAt: packageVersions.publishedAt,
+          })
+          .from(packages)
+          .innerJoin(packageVersions, eq(packageVersions.packageId, packages.id))
+          .where(and(...conditions))
+          .orderBy(...orderBy)
+          .limit(batchLimit + 1);
+        const hasMoreCandidates = candidateRows.length > batchLimit;
+        const batch = hasMoreCandidates ? candidateRows.slice(0, batchLimit) : candidateRows;
+        if (batch.length === 0) {
+          exhausted = true;
+          break;
+        }
+
+        for (const candidate of batch) {
+          if (!candidate.publishedAt) continue;
+          scanned += 1;
+          const checkpoint = {
+            key: input.sort === "recent"
+              ? candidate.publishedAt.toISOString()
+              : candidate.titleKey,
+            id: candidate.id,
+          } as const;
+          lastScanned = checkpoint;
+          const resolved = await this.resolvePublishedPackageVersion(transaction, {
+            packageId: candidate.id,
+          });
+          if (resolved) {
+            visible.push({
+              summary: {
+                id: resolved.id,
+                slug: resolved.slug,
+                title: resolved.title,
+                description: resolved.description,
+                versionId: resolved.versionId,
+                version: resolved.version,
+                publishedAt: resolved.publishedAt,
+                memberCount: resolved.memberCount,
+                editorial: resolved.editorial,
+                blueprintSchemaVersion: resolved.blueprintSchemaVersion,
+                blueprintDigest: resolved.blueprintDigest,
+              },
+              checkpoint,
+            });
+          }
+          if (visible.length > limit) break;
+        }
+
+        if (visible.length > limit) break;
+        if (!hasMoreCandidates) {
+          exhausted = true;
+          break;
+        }
+        after = lastScanned;
+      }
+
+      const pageEntries = visible.slice(0, limit);
+      const items = pageEntries.map((entry) => entry.summary);
+      if (visible.length > limit) {
+        return {
+          items,
+          next: pageEntries.at(-1)!.checkpoint,
+        };
+      }
+      return {
+        items,
+        next: !exhausted && lastScanned ? lastScanned : null,
+      };
+    });
   }
 
   async listPublishedPackages(): Promise<PublishedPackageSummary[]> {
