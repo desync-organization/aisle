@@ -21,6 +21,7 @@ const repositorySchema = z.object({
   default_branch: z.string().min(1),
   owner: z.object({ login: z.string().min(1) }),
   name: z.string().min(1),
+  topics: z.array(z.string().min(1).max(50)).max(20).default([]),
 });
 
 const commitSchema = z.object({ sha: z.string().min(7) });
@@ -162,6 +163,7 @@ export class GitHubPublicRepositoryAdapter implements CatalogSourceConnector {
         skillPath,
         upstreamName: null,
         upstreamDescription: null,
+        categoryHints: { categories: [], tags: repository.topics },
         compatibility: null,
         license: null,
         installUrl: `https://github.com/${repository.full_name}/tree/${commit.sha}${skillPath === "." ? "" : `/${skillPath}`}`,
@@ -315,6 +317,7 @@ export class GitHubPublicRepositoryAdapter implements CatalogSourceConnector {
         skillPath,
         upstreamName: null,
         upstreamDescription: null,
+        categoryHints: { categories: [], tags: repository.topics },
         compatibility: null,
         license: null,
         installUrl: `https://github.com/${repository.full_name}/tree/${commit.sha}${skillPath === "." ? "" : `/${skillPath}`}`,

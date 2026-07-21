@@ -21,6 +21,9 @@ export const installSpecSchema = z.discriminatedUnion("kind", [
   }),
 ]);
 
+const sourceCategoryHintSchema = z.string().trim().min(1).max(128);
+const sourceTagHintSchema = z.string().trim().min(1).max(64);
+
 export const discoveredSkillRecordSchema = z.object({
   sourceRecordId: z.string().min(1),
   provider: z.string().min(1),
@@ -29,6 +32,12 @@ export const discoveredSkillRecordSchema = z.object({
   skillPath: z.string().min(1),
   upstreamName: z.string().min(1).nullable(),
   upstreamDescription: z.string().min(1).nullable(),
+  categoryHints: z
+    .object({
+      categories: z.array(sourceCategoryHintSchema).max(16),
+      tags: z.array(sourceTagHintSchema).max(32),
+    })
+    .optional(),
   compatibility: z.string().min(1).nullable().optional(),
   license: z.string().min(1).nullable().optional(),
   installUrl: z.url().nullable(),

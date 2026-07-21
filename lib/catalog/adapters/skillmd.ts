@@ -143,6 +143,16 @@ function boundedUnresolvedReason(reason: string): string {
   return boundedProviderText(reason, 1_024);
 }
 
+function skillMdCategoryHints(
+  item: SkillMdListItem,
+  detail: SkillMdSkillMetadata | null,
+): NonNullable<DiscoveredSkillRecord["categoryHints"]> {
+  const categories = [detail?.category, item.category].filter(
+    (value): value is string => Boolean(value?.trim()),
+  );
+  return { categories: [...new Set(categories)], tags: [] };
+}
+
 function parseGitHubCoordinates(source: string | null): GitHubCoordinates | null {
   if (!source) return null;
   let url: URL;
@@ -411,6 +421,7 @@ export class SkillMdAdapter implements CatalogSourceConnector {
       skillPath,
       upstreamName: detail.title,
       upstreamDescription: detail.description || item.description || null,
+      categoryHints: skillMdCategoryHints(item, detail),
       compatibility: null,
       license: detail.license,
       installUrl: `https://github.com/${coordinates.owner}/${coordinates.repository}/tree/${detail.commit_sha}${skillPath === "." ? "" : `/${skillPath}`}`,
@@ -466,6 +477,7 @@ export class SkillMdAdapter implements CatalogSourceConnector {
       skillPath: item.slug,
       upstreamName: detail?.title ?? item.title,
       upstreamDescription: detail?.description || item.description || null,
+      categoryHints: skillMdCategoryHints(item, detail),
       compatibility: null,
       license: detail?.license ?? null,
       installUrl: null,
