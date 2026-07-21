@@ -1077,9 +1077,18 @@ export class CatalogRepository {
     }
 
     if (options.query?.trim()) {
-      const pattern = `%${options.query.trim()}%`;
+      const query = options.query.trim();
       conditions.push(
-        or(like(skills.upstreamName, pattern), like(skills.upstreamDescription, pattern))!,
+        sql<boolean>`(
+          instr(lower(${skills.upstreamName}), lower(${query})) > 0
+          or instr(lower(coalesce(${skills.upstreamDescription}, '')), lower(${query})) > 0
+          or instr(lower(${skills.sourceUrl}), lower(${query})) > 0
+          or instr(lower(${skills.provider}), lower(${query})) > 0
+          or instr(lower(coalesce(${repositories.owner}, '')), lower(${query})) > 0
+          or instr(lower(coalesce(${repositories.name}, '')), lower(${query})) > 0
+          or instr(lower(coalesce(${categories.slug}, '')), lower(${query})) > 0
+          or instr(lower(coalesce(${categories.name}, '')), lower(${query})) > 0
+        )`,
       );
     }
 
@@ -1142,6 +1151,7 @@ export class CatalogRepository {
         and(eq(skillRevisions.skillId, skills.id), eq(skillRevisions.isCurrent, true)),
       )
       .leftJoin(skillDuplicates, eq(skillDuplicates.skillId, skills.id))
+      .leftJoin(repositories, eq(repositories.id, skills.repositoryId))
       .leftJoin(sourceListings, eq(sourceListings.skillId, skills.id))
       .leftJoin(skillCategories, eq(skillCategories.skillId, skills.id))
       .leftJoin(categories, eq(categories.id, skillCategories.categoryId))
