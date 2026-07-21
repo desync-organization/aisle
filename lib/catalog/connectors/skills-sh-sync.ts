@@ -2,7 +2,10 @@ import { createHash } from "node:crypto";
 
 import type { CatalogRepository } from "../../db/repository";
 import { CatalogSyncLeaseLostError } from "../../db/repository";
-import { computeArtifactContentHash } from "../artifact-fingerprint";
+import {
+  computeArtifactContentHash,
+  normalizeArtifactFilePath,
+} from "../artifact-fingerprint";
 import { startSyncLeaseHeartbeat } from "../lease-heartbeat";
 import type { CatalogIngestionService } from "../ingestion";
 import {
@@ -333,14 +336,29 @@ export class SkillsShSync {
           const skillPath = listing.id.startsWith(`${listing.source}/`)
             ? listing.id.slice(listing.source.length + 1)
             : listing.slug;
-          const textFiles = (detail.data.files ?? []).map((file) => ({
-            path: file.path,
+          const upstreamTextFiles = (detail.data.files ?? []).map((file) => ({
+            path: normalizeArtifactFilePath(file.path),
             contents: file.contents,
             sha256: createHash("sha256").update(file.contents).digest("hex"),
           }));
-          const manifest = textFiles.find(
-            (file) => file.path === "SKILL.md" || file.path.endsWith("/SKILL.md"),
+          const exactManifest = upstreamTextFiles.find((file) => file.path === "SKILL.md");
+          const nestedManifests = upstreamTextFiles.filter((file) =>
+            file.path.endsWith("/SKILL.md"),
           );
+          const upstreamManifest = exactManifest ??
+            (nestedManifests.length === 1 ? nestedManifests[0] : undefined);
+          const artifactPrefix = upstreamManifest && upstreamManifest.path !== "SKILL.md"
+            ? upstreamManifest.path.slice(0, -"SKILL.md".length)
+            : "";
+          const textFiles = upstreamManifest
+            ? upstreamTextFiles
+                .filter((file) => file.path.startsWith(artifactPrefix))
+                .map((file) => ({
+                  ...file,
+                  path: file.path.slice(artifactPrefix.length),
+                }))
+            : [];
+          const manifest = textFiles.find((file) => file.path === "SKILL.md");
           const artifactFiles = textFiles.map((file) => ({
             path: file.path,
             type: "file",

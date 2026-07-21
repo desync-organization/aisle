@@ -212,7 +212,7 @@ export class WellKnownSkillsAdapter implements CatalogSourceConnector {
       : legacy && legacy.success
         ? legacy.data.skills.map((entry) => {
           const manifest = entry.files.find(
-            (file) => file === "SKILL.md" || file.endsWith("/SKILL.md"),
+            (file) => file === "SKILL.md",
           );
           return {
             name: entry.name,

@@ -311,6 +311,7 @@ export class ClawHubAdapter implements CatalogSourceConnector {
     termsUrl: "https://docs.openclaw.ai/clawhub/http-api",
     knownExclusions: [
       "ClawHub withholds private, hidden, and moderation-blocked skills from the public API.",
+      "ClawHub cursor pagination does not prove a stable snapshot; absence never retires prior records.",
     ],
   };
   private readonly fetchImplementation: typeof fetch;
@@ -374,7 +375,7 @@ export class ClawHubAdapter implements CatalogSourceConnector {
         nextCursor,
         hasMore: nextCursor !== null,
         reportedTotal: null,
-        completeSnapshot: nextCursor === null && !degraded,
+        completeSnapshot: false,
         degraded,
         exclusions,
       };

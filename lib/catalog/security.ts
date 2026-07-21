@@ -138,7 +138,7 @@ function resolveLicense(
   const explicit = normalizeSpdx(metadata.license);
   if (explicit) {
     const manifest = record.artifact?.textFiles?.find(
-      (file) => file.path === "SKILL.md" || file.path.endsWith("/SKILL.md"),
+      (file) => file.path === "SKILL.md",
     );
     return {
       spdx: explicit,
@@ -586,7 +586,7 @@ export function validateAgentSkillRecord(record: DiscoveredSkillRecord): Discove
     };
   }
   const manifestText = scannedTextFiles.find(
-    (file) => file.path === "SKILL.md" || file.path.endsWith("/SKILL.md"),
+    (file) => file.path === "SKILL.md",
   );
   if (!manifestText || manifestText.contents !== artifact.contents) {
     return { valid: false, metadata: null, reason: "Scanned SKILL.md did not match the manifest" };

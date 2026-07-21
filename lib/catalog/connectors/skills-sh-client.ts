@@ -171,7 +171,17 @@ export class SkillsShClient {
   private readonly maxResponseBytes: number;
 
   constructor(options: SkillsShClientOptions = {}) {
-    this.baseUrl = (options.baseUrl ?? "https://skills.sh/api/v1").replace(/\/$/, "");
+    const baseUrl = new URL(options.baseUrl ?? "https://skills.sh/api/v1");
+    if (
+      baseUrl.origin !== "https://skills.sh" ||
+      baseUrl.username ||
+      baseUrl.password
+    ) {
+      throw new TypeError(
+        "Authenticated skills.sh requests are restricted to the exact https://skills.sh origin",
+      );
+    }
+    this.baseUrl = baseUrl.toString().replace(/\/$/, "");
     this.fetchImplementation = options.fetch ?? fetch;
     this.tokenProvider = options.tokenProvider ?? defaultTokenProvider;
     this.sleep = options.sleep ?? defaultSleep;
