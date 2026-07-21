@@ -10,7 +10,11 @@ import {
   type ResolvedGithubSkill,
   type SupportedAgent,
 } from "@/lib/install-plan";
-import { installPlanFixture, installSkillFixture } from "./install-plan-fixtures";
+import {
+  auditedPublicScopeFixtures,
+  installPlanFixture,
+  installSkillFixture,
+} from "./install-plan-fixtures";
 
 function expectPlanError(input: unknown, code: InstallPlanErrorCode): void {
   try {
@@ -23,7 +27,7 @@ function expectPlanError(input: unknown, code: InstallPlanErrorCode): void {
 }
 
 describe("install plan resolution", () => {
-  it("groups one repository into one argv-first step and sorts skills and agents", () => {
+  it("groups one exact discovery scope into one argv-first step and sorts skills and agents", () => {
     const plan = createInstallPlan(
       installPlanFixture(
         [
@@ -38,13 +42,18 @@ describe("install plan resolution", () => {
     expect(plan.steps[0]).toMatchObject({
       id: "step-01",
       source: "fixture-owner/frontend",
-      sourceUrl: "https://github.com/fixture-owner/frontend",
+      sourceUrl: "https://github.com/fixture-owner/frontend/tree/main/skills",
+      discoveryScope: {
+        branch: "main",
+        path: "skills",
+        branchHeadSha: "a".repeat(40),
+      },
       file: "npx",
       args: [
         "--yes",
         "skills@1.5.19",
         "add",
-        "fixture-owner/frontend",
+        "https://github.com/fixture-owner/frontend/tree/main/skills",
         "--full-depth",
         "--skill",
         "alpha",
@@ -61,6 +70,33 @@ describe("install plan resolution", () => {
     expect(plan.steps[0]?.selections.map((selection) => selection.name)).toEqual([
       "alpha",
       "beta",
+    ]);
+  });
+
+  it("keeps different branch/path scopes in one repository in separate processes", () => {
+    const plan = createInstallPlan(
+      installPlanFixture([
+        installSkillFixture({ name: "claude-skill", discoveryPath: ".claude/skills" }),
+        installSkillFixture({ name: "agent-skill", discoveryPath: ".agents/skills" }),
+      ]),
+    );
+
+    expect(plan.steps.map((step) => step.sourceUrl)).toEqual([
+      "https://github.com/fixture-owner/fixture-repository/tree/main/.agents/skills",
+      "https://github.com/fixture-owner/fixture-repository/tree/main/.claude/skills",
+    ]);
+    expect(plan.steps.every((step) => step.selections.length === 1)).toBe(true);
+  });
+
+  it("renders the audited Freshtech, Azure, and Impeccable branch/path scopes", () => {
+    const plan = createInstallPlan(
+      installPlanFixture(Object.values(auditedPublicScopeFixtures)),
+    );
+
+    expect(plan.steps.map((step) => step.sourceUrl)).toEqual([
+      "https://github.com/freshtechbro/claudedesignskills/tree/main/.claude/skills",
+      "https://github.com/microsoft/azure-skills/tree/main/skills",
+      "https://github.com/pbakaus/impeccable/tree/main/.agents/skills/impeccable",
     ]);
   });
 
@@ -159,9 +195,30 @@ describe("install plan resolution", () => {
 
   it.each([
     installSkillFixture({ selector: "other-selector" }),
-    installSkillFixture({ selectorVerifiedAtCommitSha: "c".repeat(40) }),
-  ])("rejects selector evidence not tied to the selected name and revision", (selection) => {
+  ])("rejects selector evidence not tied to the selected name", (selection) => {
     expectPlanError(installPlanFixture([selection]), "SELECTOR_EVIDENCE_MISMATCH");
+  });
+
+  it.each([
+    installSkillFixture({ commitSha: "c".repeat(40) }),
+    installSkillFixture({ selectorVerifiedBranch: "release" }),
+    installSkillFixture({ selectorVerifiedDiscoveryPath: ".claude/skills" }),
+    installSkillFixture({ selectorVerifiedBranchHeadSha: "c".repeat(40) }),
+  ])("rejects discovery evidence not bound to the observed exact scope", (selection) => {
+    expectPlanError(
+      installPlanFixture([selection]),
+      "DISCOVERY_SCOPE_EVIDENCE_MISMATCH",
+    );
+  });
+
+  it("rejects conflicting branch-head observations for one scope", () => {
+    expectPlanError(
+      installPlanFixture([
+        installSkillFixture({ name: "one", branchHeadSha: "a".repeat(40) }),
+        installSkillFixture({ name: "two", branchHeadSha: "c".repeat(40) }),
+      ]),
+      "DISCOVERY_SCOPE_EVIDENCE_MISMATCH",
+    );
   });
 
   it("rejects duplicate revisions and canonical revision conflicts", () => {

@@ -97,10 +97,13 @@ describe("install command rendering", () => {
     const rendered = Object.values(plan.commands).join("\n");
 
     expect(rendered).not.toContain("--all");
+    expect(rendered).toContain("--full-depth");
     expect(rendered).not.toContain("curl");
     expect(rendered).not.toContain("--symlink");
     expect(rendered).not.toContain("a".repeat(40));
     expect(rendered).not.toContain("b".repeat(64));
+    expect(rendered).toContain("/tree/main/skills");
+    expect(rendered).not.toMatch(/\/tree\/[0-9a-f]{40}(?:\/|["'])/);
     expect(plan.semantics).toEqual({
       atomic: false,
       processLevelFailFast: true,

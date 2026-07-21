@@ -89,6 +89,14 @@ describe("install plan contracts", () => {
     ["skill punctuation", installSkillFixture({ name: "skill;whoami" })],
     ["Unicode confusables", installSkillFixture({ name: "skıll" })],
     ["control characters", installSkillFixture({ name: "skill\nwhoami" })],
+    ["branch traversal", installSkillFixture({ branch: "../main" })],
+    ["multi-segment branch ambiguity", installSkillFixture({ branch: "feature/release" })],
+    ["commit-shaped branch", installSkillFixture({ branch: "c".repeat(40) })],
+    ["uppercase commit-shaped branch", installSkillFixture({ branch: "C".repeat(40) })],
+    ["path traversal", installSkillFixture({ discoveryPath: "skills/../private" })],
+    ["absolute path", installSkillFixture({ discoveryPath: "/skills" })],
+    ["backslash path", installSkillFixture({ discoveryPath: ".claude\\skills" })],
+    ["encoded traversal", installSkillFixture({ discoveryPath: "skills/%2e%2e" })],
   ])("rejects unsafe %s", (_label, selection) => {
     expect(installPlanRequestSchema.safeParse(installPlanFixture([selection])).success).toBe(false);
   });

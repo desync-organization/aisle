@@ -10,6 +10,9 @@ type SkillFixtureOptions = Readonly<{
   normalizedName?: string;
   owner?: string;
   repository?: string;
+  branch?: string;
+  discoveryPath?: string;
+  branchHeadSha?: string;
   canonicalSkillId?: string;
   revisionId?: string;
   publication?: ResolvedGithubSkill["publication"];
@@ -24,7 +27,9 @@ type SkillFixtureOptions = Readonly<{
   contentDigest?: string;
   selector?: string;
   selectorVerifiedUnique?: boolean;
-  selectorVerifiedAtCommitSha?: string;
+  selectorVerifiedBranch?: string;
+  selectorVerifiedDiscoveryPath?: string;
+  selectorVerifiedBranchHeadSha?: string;
 }>;
 
 /** Synthetic metadata only; no skill body or public catalog row is represented. */
@@ -34,7 +39,10 @@ export function installSkillFixture(
   const name = options.name ?? "fixture-skill";
   const owner = options.owner ?? "fixture-owner";
   const repository = options.repository ?? "fixture-repository";
-  const commitSha = options.commitSha ?? "a".repeat(40);
+  const branch = options.branch ?? "main";
+  const discoveryPath = options.discoveryPath ?? "skills";
+  const branchHeadSha = options.branchHeadSha ?? options.commitSha ?? "a".repeat(40);
+  const commitSha = options.commitSha ?? branchHeadSha;
 
   return {
     canonicalSkillId:
@@ -47,6 +55,11 @@ export function installSkillFixture(
       kind: "github",
       owner,
       repository,
+      discoveryScope: {
+        branch,
+        path: discoveryPath,
+        branchHeadSha,
+      },
     },
     publication: options.publication ?? "public",
     availability: options.availability ?? "current",
@@ -68,10 +81,42 @@ export function installSkillFixture(
     installer: {
       selector: options.selector ?? name,
       selectorVerifiedUnique: options.selectorVerifiedUnique ?? true,
-      verifiedAtCommitSha: options.selectorVerifiedAtCommitSha ?? commitSha,
+      verifiedDiscoveryScope: {
+        branch: options.selectorVerifiedBranch ?? branch,
+        path: options.selectorVerifiedDiscoveryPath ?? discoveryPath,
+        branchHeadSha: options.selectorVerifiedBranchHeadSha ?? branchHeadSha,
+      },
     },
   };
 }
+
+/**
+ * Public repository scope snapshots observed during the skills@1.5.19 audit.
+ * Eligibility fields remain synthetic test metadata; no skill bodies are copied.
+ */
+export const auditedPublicScopeFixtures = {
+  freshtech: installSkillFixture({
+    name: "gsap-scrolltrigger",
+    owner: "freshtechbro",
+    repository: "claudedesignskills",
+    discoveryPath: ".claude/skills",
+    branchHeadSha: "1da73febff0c3e1dfefc07f8a5ef8f7d1dfdb6cd",
+  }),
+  azure: installSkillFixture({
+    name: "azure-ai",
+    owner: "microsoft",
+    repository: "azure-skills",
+    discoveryPath: "skills",
+    branchHeadSha: "d3e702378432d4d53ca80b2bba0fbb4af83ace24",
+  }),
+  impeccable: installSkillFixture({
+    name: "impeccable",
+    owner: "pbakaus",
+    repository: "impeccable",
+    discoveryPath: ".agents/skills/impeccable",
+    branchHeadSha: "4d849eb75f216109ea7053ed21530a11fafcc786",
+  }),
+} as const;
 
 export function installPlanFixture(
   selections: readonly ResolvedGithubSkill[] = [installSkillFixture()],
