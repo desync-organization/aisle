@@ -442,17 +442,23 @@ export class ClawHubAdapter implements CatalogSourceConnector {
         `/api/v1/skills/${encodeURIComponent(slug)}/scan?version=${encodeURIComponent(version)}&${ownerQuery}`,
       ),
     );
-    const effectiveModeration =
-      (moderationSchema.nullable().safeParse(
-        moderation && typeof moderation === "object" && "moderation" in moderation
-          ? (moderation as { moderation: unknown }).moderation
-          : moderation,
-      ).data ?? scan?.moderation ?? detail.moderation ?? null);
-    if (
-      effectiveModeration?.isMalwareBlocked ||
-      effectiveModeration?.isHiddenByMod ||
-      effectiveModeration?.isRemoved
-    ) {
+    const endpointModeration = moderationSchema.nullable().safeParse(
+      moderation && typeof moderation === "object" && "moderation" in moderation
+        ? (moderation as { moderation: unknown }).moderation
+        : moderation,
+    ).data ?? null;
+    const moderationSignals = [
+      endpointModeration,
+      scan?.moderation ?? null,
+      detail.moderation ?? null,
+    ];
+    const blockingModeration = moderationSignals.find((signal) =>
+      signal?.isMalwareBlocked || signal?.isHiddenByMod || signal?.isRemoved
+    ) ?? null;
+    const effectiveModeration = blockingModeration ??
+      moderationSignals.find((signal): signal is Moderation => signal !== null) ??
+      null;
+    if (blockingModeration) {
       exclusions.push(`${identity}: no longer publicly eligible under ClawHub moderation.`);
       return this.unresolvedRecord(
         item,
