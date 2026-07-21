@@ -72,7 +72,7 @@ export const skillsReSourceDescriptor = {
     "Synchronization is an explicit opt-in; a disabled source performs no request and claims no current records.",
     "Cursor pages are mutable and have no immutable global snapshot, so every sweep remains partial, non-retiring coverage.",
     "Search guarantees no authoritative GitHub repository and skill path; every observation remains unresolved and non-installable.",
-    "Optional repository, version, license, verification, audit, signature, ranking, and score fields are provider observations, not Aisle provenance or trust evidence.",
+    "Provider repository, version, license, verification, audit, ranking, score, or signature claims are observations, not Aisle provenance or trust evidence.",
     "Aisle requests no skill body, archive, or SKILL.md from Skills.re and persists only bounded coverage metadata.",
   ],
 } satisfies CatalogSourceDescriptor;
