@@ -31,7 +31,7 @@ const formatParts = [
   {
     icon: FileCode2,
     title: "SKILL.md is required",
-    body: "YAML frontmatter names and describes the skill. Markdown below it carries the instructions an agent reads after activation.",
+    body: "YAML frontmatter requires a 1–64 character lowercase name and a non-empty description of at most 1,024 characters. Markdown below carries the activation-time instructions.",
   },
   {
     icon: FolderOpen,
@@ -41,7 +41,7 @@ const formatParts = [
   {
     icon: Braces,
     title: "Clients decide support",
-    body: "License, compatibility, metadata, and allowed-tools may appear in frontmatter. Experimental fields can behave differently by client.",
+    body: "License, metadata, a compatibility note of at most 500 characters, and experimental allowed-tools may appear in frontmatter. Client behavior can differ.",
   },
 ] as const;
 
@@ -250,12 +250,12 @@ export default function DocsPage() {
               <div className="install-status">
                 <TerminalSquare aria-hidden="true" size={21} />
                 <div>
-                  <strong>Aisle’s composed install command is not live in this static release.</strong>
-                  <p>No command on this page should be treated as an available Aisle installer.</p>
+                  <strong>Commands are issued only after current server-side revalidation.</strong>
+                  <p>The stack builder resolves the selected catalog IDs again, blocks stale or ineligible revisions, and requires an exact acknowledgement for each warning-tier revision before returning one command.</p>
                 </div>
               </div>
               <div className="install-reference">
-                <span>UPSTREAM CLI SHAPE · REFERENCE ONLY</span>
+                <span>PINNED UPSTREAM CLI SHAPE</span>
                 <code>npx skills add &lt;public-source&gt; --skill &lt;name&gt; --agent &lt;client&gt;</code>
               </div>
               <ul className="caveat-list">
@@ -280,9 +280,14 @@ export default function DocsPage() {
                   <span>The Vercel CLI documents anonymous telemetry and the <code>DISABLE_TELEMETRY=1</code> opt-out. Its policy is separate from Aisle’s.</span>
                 </li>
               </ul>
-              <ButtonLink href="/safety" variant="secondary">
-                Review the install checklist <ArrowRight aria-hidden="true" size={16} />
-              </ButtonLink>
+              <div className="editorial-hero__actions">
+                <ButtonLink href="/stack">
+                  Open stack builder <ArrowRight aria-hidden="true" size={16} />
+                </ButtonLink>
+                <ButtonLink href="/safety" variant="secondary">
+                  Review the install checklist
+                </ButtonLink>
+              </div>
             </section>
 
             <section className="docs-section" id="sources">

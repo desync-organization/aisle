@@ -19,6 +19,10 @@ import {
 } from "drizzle-orm";
 
 import { installSpecSchema } from "../catalog/source-contract";
+import type {
+  CatalogSelectionGateReason,
+  CatalogTrustState,
+} from "../marketplace/selection-gates";
 import {
   packageEditorialSchema,
   packageBlueprintDigest,
@@ -143,6 +147,18 @@ export type PackagePublicationResult = Readonly<{
   reused: boolean;
 }>;
 
+const packageEligibleLicenses = [
+  "MIT",
+  "Apache-2.0",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "ISC",
+  "0BSD",
+  "CC0-1.0",
+  "Unlicense",
+] as const;
+const packageEligibleLicenseSet = new Set<string>(packageEligibleLicenses);
+
 function stableId(namespace: string, value: string): string {
   return `${namespace}_${createHash("sha256").update(value).digest("hex").slice(0, 24)}`;
 }
@@ -183,6 +199,16 @@ function hasSelectableTrust() {
   )`;
 }
 
+function hasNoBlockingTrust() {
+  return sql<boolean>`not exists (
+    select 1 from trust_assessments blocking_trust
+    where blocking_trust.revision_id = ${skillRevisions.id}
+      and blocking_trust.immutable_ref = ${skillRevisions.immutableRef}
+      and blocking_trust.content_hash = ${skillRevisions.contentHash}
+      and blocking_trust.state in ('fail', 'quarantined')
+  )`;
+}
+
 function hasActiveSourceListing() {
   return sql<boolean>`exists (
     select 1 from source_listings active_listing
@@ -195,16 +221,19 @@ function hasActiveSourceListing() {
   )`;
 }
 
-function hasStructurallyValidInstallSpec() {
+function hasRevisionBoundInstallSpecSql() {
   return sql<boolean>`case
     when json_valid(${skillRevisions.installSpecJson}) = 0 then 0
     when json_extract(${skillRevisions.installSpecJson}, '$.kind') = 'source' then
       json_type(${skillRevisions.installSpecJson}, '$.sourceUrl') = 'text'
       and length(trim(json_extract(${skillRevisions.installSpecJson}, '$.sourceUrl'))) > 0
+      and json_extract(${skillRevisions.installSpecJson}, '$.sourceUrl') = ${skills.sourceUrl}
       and json_type(${skillRevisions.installSpecJson}, '$.immutableRef') = 'text'
       and length(trim(json_extract(${skillRevisions.installSpecJson}, '$.immutableRef'))) > 0
+      and json_extract(${skillRevisions.installSpecJson}, '$.immutableRef') = ${skillRevisions.immutableRef}
       and json_type(${skillRevisions.installSpecJson}, '$.skillPath') = 'text'
       and length(trim(json_extract(${skillRevisions.installSpecJson}, '$.skillPath'))) > 0
+      and json_extract(${skillRevisions.installSpecJson}, '$.skillPath') = ${skills.skillPath}
     when json_extract(${skillRevisions.installSpecJson}, '$.kind') = 'registry' then
       json_type(${skillRevisions.installSpecJson}, '$.registry') = 'text'
       and length(trim(json_extract(${skillRevisions.installSpecJson}, '$.registry'))) > 0
@@ -212,18 +241,62 @@ function hasStructurallyValidInstallSpec() {
       and length(trim(json_extract(${skillRevisions.installSpecJson}, '$.identifier'))) > 0
       and json_type(${skillRevisions.installSpecJson}, '$.version') = 'text'
       and length(trim(json_extract(${skillRevisions.installSpecJson}, '$.version'))) > 0
+      and json_extract(${skillRevisions.installSpecJson}, '$.version') = ${skillRevisions.immutableRef}
     else 0
   end`;
 }
 
-function hasValidInstallSpec(value: unknown): boolean {
-  return installSpecSchema.safeParse(value).success;
+function hasLicenseEvidence() {
+  return sql<boolean>`
+    json_valid(coalesce(${skillRevisions.metadataJson}, '{}')) = 1
+    and json_type(${skillRevisions.metadataJson}, '$.licenseEvidence.path') = 'text'
+    and length(trim(json_extract(${skillRevisions.metadataJson}, '$.licenseEvidence.path'))) > 0
+    and json_type(${skillRevisions.metadataJson}, '$.licenseEvidence.sha256') = 'text'
+    and length(json_extract(${skillRevisions.metadataJson}, '$.licenseEvidence.sha256')) = 64
+    and lower(json_extract(${skillRevisions.metadataJson}, '$.licenseEvidence.sha256'))
+      not glob '*[^0-9a-f]*'
+  `;
+}
+
+function hasRevisionBoundInstallSpec(
+  value: unknown,
+  identity: Readonly<{
+    sourceUrl: string;
+    skillPath: string;
+    immutableRef: string | null;
+  }>,
+): boolean {
+  const parsed = installSpecSchema.safeParse(value);
+  if (!parsed.success || !identity.immutableRef) return false;
+  if (parsed.data.kind === "source") {
+    return (
+      parsed.data.sourceUrl === identity.sourceUrl &&
+      parsed.data.skillPath === identity.skillPath &&
+      parsed.data.immutableRef === identity.immutableRef
+    );
+  }
+  return parsed.data.version === identity.immutableRef;
+}
+
+function hasValidLicenseEvidence(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const evidence = (value as Record<string, unknown>).licenseEvidence;
+  if (!evidence || typeof evidence !== "object" || Array.isArray(evidence)) return false;
+  const { path, sha256 } = evidence as Record<string, unknown>;
+  return (
+    typeof path === "string" &&
+    path.trim().length > 0 &&
+    typeof sha256 === "string" &&
+    /^[a-f0-9]{64}$/i.test(sha256)
+  );
 }
 
 export interface CatalogSearchOptions {
+  id?: string;
   query?: string;
   category?: string;
   lifecycle?: LifecycleState[];
+  includeUnselectable?: boolean;
   limit?: number;
   offset?: number;
 }
@@ -461,35 +534,36 @@ export class CatalogRepository {
   }
 
   async search(options: CatalogSearchOptions = {}) {
-    const limit = Math.min(Math.max(options.limit ?? 24, 1), 100);
-    const offset = Math.max(options.offset ?? 0, 0);
-    const lifecycle = options.lifecycle ?? ["current"];
+    const requestedLimit = Number.isFinite(options.limit) ? Math.trunc(options.limit ?? 24) : 24;
+    const requestedOffset = Number.isFinite(options.offset) ? Math.trunc(options.offset ?? 0) : 0;
+    const limit = Math.min(Math.max(requestedLimit, 1), 100);
+    const offset = Math.min(Math.max(requestedOffset, 0), 100_000);
+    const lifecycle = options.lifecycle ?? (options.includeUnselectable ? ["current", "stale"] : ["current"]);
     const conditions = [
       eq(skills.public, true),
       eq(skills.internal, false),
       inArray(skills.lifecycle, lifecycle),
-      ne(skillRevisions.immutableRef, ""),
-      ne(skillRevisions.contentHash, ""),
-      isNotNull(skillRevisions.upstreamHash),
-      ne(skillRevisions.upstreamHash, ""),
-      hasStructurallyValidInstallSpec(),
-      hasActiveSourceListing(),
-      notExists(
-        this.db
-          .select({ value: sql`1` })
-          .from(trustAssessments)
-          .where(
-            and(
-              eq(trustAssessments.revisionId, skillRevisions.id),
-              eq(trustAssessments.immutableRef, skillRevisions.immutableRef),
-              eq(trustAssessments.contentHash, skillRevisions.contentHash),
-              inArray(trustAssessments.state, ["fail", "quarantined"]),
-            ),
-          ),
-      ),
-      hasSelectableTrust(),
-      noLatestObservedFail(),
     ];
+
+    if (!options.includeUnselectable) {
+      conditions.push(
+        ne(skillRevisions.immutableRef, ""),
+        ne(skillRevisions.contentHash, ""),
+        isNotNull(skillRevisions.upstreamHash),
+        ne(skillRevisions.upstreamHash, ""),
+        hasRevisionBoundInstallSpecSql(),
+        hasActiveSourceListing(),
+        inArray(skillRevisions.license, packageEligibleLicenses),
+        hasLicenseEvidence(),
+        hasNoBlockingTrust(),
+        hasSelectableTrust(),
+        noLatestObservedFail(),
+      );
+    }
+
+    if (options.id) {
+      conditions.push(eq(skills.id, options.id));
+    }
 
     if (options.query?.trim()) {
       const pattern = `%${options.query.trim()}%`;
@@ -507,18 +581,28 @@ export class CatalogRepository {
         id: skills.id,
         name: skills.upstreamName,
         description: skills.upstreamDescription,
+        provider: skills.provider,
         sourceUrl: skills.sourceUrl,
         skillPath: skills.skillPath,
+        compatibility: skills.compatibility,
         lifecycle: skills.lifecycle,
         officialProvenance: skills.officialProvenance,
         revisionId: skillRevisions.id,
         immutableRef: skillRevisions.immutableRef,
         contentHash: skillRevisions.contentHash,
+        upstreamHash: skillRevisions.upstreamHash,
         installSpec: skillRevisions.installSpecJson,
-        license: skillRevisions.license,
+        license: sql<string>`coalesce(${skillRevisions.license}, ${skills.license}, 'unknown')`,
         revisionMetadata: skillRevisions.metadataJson,
-        trustState: sql<"unreviewed" | "pass" | "warn">`
+        trustState: sql<CatalogTrustState>`
           case
+            when exists (
+              select 1 from trust_assessments ta
+              where ta.revision_id = ${skillRevisions.id}
+                and ta.immutable_ref = ${skillRevisions.immutableRef}
+                and ta.content_hash = ${skillRevisions.contentHash}
+                and ta.state in ('fail', 'quarantined')
+            ) then 'blocked'
             when exists (
               select 1 from trust_assessments ta
               where ta.revision_id = ${skillRevisions.id}
@@ -536,10 +620,12 @@ export class CatalogRepository {
             else 'unreviewed'
           end
         `,
+        activeSource: hasActiveSourceListing(),
+        cleanUpstreamAudit: noLatestObservedFail(),
         installs: sql<number>`coalesce(max(${sourceListings.installs}), 0)`,
       })
       .from(skills)
-      .innerJoin(
+      .leftJoin(
         skillRevisions,
         and(eq(skillRevisions.skillId, skills.id), eq(skillRevisions.isCurrent, true)),
       )
@@ -551,7 +637,38 @@ export class CatalogRepository {
       .orderBy(desc(sql`coalesce(max(${sourceListings.installs}), 0)`), asc(skills.upstreamName))
       .limit(limit)
       .offset(offset);
-    return rows.filter((row) => hasValidInstallSpec(row.installSpec));
+
+    return rows
+      .map((row) => {
+        const gateReasons: CatalogSelectionGateReason[] = [];
+        if (row.lifecycle !== "current") gateReasons.push("lifecycle-not-current");
+        if (
+          !row.revisionId ||
+          !row.immutableRef?.trim() ||
+          !row.contentHash?.trim() ||
+          !row.upstreamHash?.trim()
+        ) {
+          gateReasons.push("revision-evidence-missing");
+        }
+        if (!hasRevisionBoundInstallSpec(row.installSpec, row)) {
+          gateReasons.push("install-unresolved");
+        }
+        if (!Boolean(row.activeSource)) gateReasons.push("source-inactive");
+        if (!packageEligibleLicenseSet.has(row.license)) gateReasons.push("license-not-eligible");
+        if (!hasValidLicenseEvidence(row.revisionMetadata)) {
+          gateReasons.push("license-evidence-missing");
+        }
+        if (row.trustState === "blocked") gateReasons.push("trust-blocked");
+        if (row.trustState === "unreviewed") gateReasons.push("trust-pending");
+        if (!Boolean(row.cleanUpstreamAudit)) gateReasons.push("upstream-audit-failed");
+
+        return {
+          ...row,
+          selectable: gateReasons.length === 0,
+          gateReasons,
+        };
+      })
+      .filter((row) => options.includeUnselectable || row.selectable);
   }
 
   async facets() {
