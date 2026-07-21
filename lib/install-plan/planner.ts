@@ -195,7 +195,14 @@ function assertEligible(
     throw new InstallPlanError(
       "DISCOVERY_SCOPE_EVIDENCE_MISMATCH",
       "Branch head, artifact observation, and selector uniqueness evidence must bind to the same branch/path discovery scope.",
-      field("source.discoveryScope"),
+      [
+        { path: `selections.${index}.source.discoveryScope`, message: "scope mismatch" },
+        { path: `selections.${index}.observed.commitSha`, message: "scope mismatch" },
+        {
+          path: `selections.${index}.installer.verifiedDiscoveryScope`,
+          message: "scope mismatch",
+        },
+      ],
     );
   }
 

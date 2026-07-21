@@ -146,6 +146,7 @@ export const githubBranchSchema = z
       !branch.includes("..") &&
       !branch.endsWith(".") &&
       !branch.toLowerCase().endsWith(".lock") &&
+      branch.toUpperCase() !== "HEAD" &&
       !/^[0-9a-f]{40}$/i.test(branch),
     "must be an unambiguous branch name, not a commit SHA or unsafe Git ref",
   );
