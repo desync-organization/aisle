@@ -129,6 +129,46 @@ const githubRepositorySchema = z
     "must be a GitHub repository name",
   );
 
+const gitCommitShaSchema = z
+  .string()
+  .regex(/^[0-9a-f]{40}$/, "must be a lowercase Git commit SHA");
+
+export const githubBranchSchema = z
+  .string()
+  .min(1)
+  .max(128)
+  .regex(
+    /^[A-Za-z0-9][A-Za-z0-9._-]*$/,
+    "must be a safe single-segment GitHub branch name",
+  )
+  .refine(
+    (branch) =>
+      !branch.includes("..") &&
+      !branch.endsWith(".") &&
+      !branch.toLowerCase().endsWith(".lock") &&
+      !/^[0-9a-f]{40}$/i.test(branch),
+    "must be an unambiguous branch name, not a commit SHA or unsafe Git ref",
+  );
+
+export const githubDiscoveryPathSchema = z
+  .string()
+  .min(1)
+  .max(512)
+  .regex(
+    /^[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)*$/,
+    "must be a safe relative GitHub directory path",
+  )
+  .refine(
+    (path) => path.split("/").every((segment) => segment !== "." && segment !== ".."),
+    "must not contain traversal path segments",
+  );
+
+export const githubDiscoveryScopeSchema = z.strictObject({
+  branch: githubBranchSchema,
+  path: githubDiscoveryPathSchema,
+  branchHeadSha: gitCommitShaSchema,
+});
+
 const skillNameSchema = z
   .string()
   .min(1)
@@ -174,6 +214,7 @@ export const resolvedGithubSkillSchema = z.strictObject({
     kind: z.literal("github"),
     owner: githubOwnerSchema,
     repository: githubRepositorySchema,
+    discoveryScope: githubDiscoveryScopeSchema,
   }),
   publication: z.enum(["public", "private", "unknown"]),
   availability: z.enum(["current", "withdrawn", "superseded"]),
@@ -188,7 +229,7 @@ export const resolvedGithubSkillSchema = z.strictObject({
   }),
   compatibleAgents: uniqueAgentListSchema,
   observed: z.strictObject({
-    commitSha: z.string().regex(/^[0-9a-f]{40}$/, "must be a lowercase Git commit SHA"),
+    commitSha: gitCommitShaSchema,
     contentDigest: z
       .string()
       .regex(/^sha256:[0-9a-f]{64}$/, "must be a sha256 content digest"),
@@ -196,9 +237,7 @@ export const resolvedGithubSkillSchema = z.strictObject({
   installer: z.strictObject({
     selector: skillNameSchema,
     selectorVerifiedUnique: z.boolean(),
-    verifiedAtCommitSha: z
-      .string()
-      .regex(/^[0-9a-f]{40}$/, "must be a lowercase Git commit SHA"),
+    verifiedDiscoveryScope: githubDiscoveryScopeSchema,
   }),
 });
 
@@ -218,6 +257,7 @@ export type SupportedAgent = z.infer<typeof agentSchema>;
 export type InstallScope = z.infer<typeof installScopeSchema>;
 export type InstallMode = z.infer<typeof installModeSchema>;
 export type InstallShell = z.infer<typeof installShellSchema>;
+export type GithubDiscoveryScope = z.infer<typeof githubDiscoveryScopeSchema>;
 export type ResolvedGithubSkill = z.infer<typeof resolvedGithubSkillSchema>;
 export type InstallPlanOptions = z.infer<typeof installPlanOptionsSchema>;
 export type InstallPlanRequest = z.infer<typeof installPlanRequestSchema>;
@@ -235,6 +275,7 @@ export const installPlanErrorCodeSchema = z.enum([
   "UNLICENSED",
   "SELECTOR_NOT_UNIQUE",
   "SELECTOR_EVIDENCE_MISMATCH",
+  "DISCOVERY_SCOPE_EVIDENCE_MISMATCH",
   "INCOMPATIBLE_AGENT",
   "UNSUPPORTED_GLOBAL_SCOPE",
   "DUPLICATE_SELECTION",

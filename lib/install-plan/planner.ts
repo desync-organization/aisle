@@ -8,6 +8,7 @@ import {
   SKILLS_CLI_MINIMUM_NODE_VERSION,
   SKILLS_CLI_PACKAGE,
   installPlanRequestSchema,
+  type GithubDiscoveryScope,
   type InstallMode,
   type InstallPlanOptions,
   type InstallShell,
@@ -25,13 +26,14 @@ export type InstallStepSelection = Readonly<{
   contentDigest: string;
   installerSelector: string;
   selectorVerifiedUnique: true;
-  selectorVerifiedAtCommitSha: string;
+  verifiedDiscoveryScope: GithubDiscoveryScope;
 }>;
 
 export type InstallExecutionStep = Readonly<{
   id: string;
   source: string;
   sourceUrl: string;
+  discoveryScope: GithubDiscoveryScope;
   file: "npx";
   args: readonly string[];
   selections: readonly InstallStepSelection[];
@@ -77,8 +79,33 @@ function normalizeSkillName(name: string): string {
     .replace(/-+/g, "-");
 }
 
-function canonicalSource(skill: ResolvedGithubSkill): string {
+function canonicalRepository(skill: ResolvedGithubSkill): string {
   return `${skill.source.owner.toLowerCase()}/${skill.source.repository.toLowerCase()}`;
+}
+
+function encodedPath(path: string): string {
+  return path.split("/").map(encodeURIComponent).join("/");
+}
+
+function trustedScopeUrl(skill: ResolvedGithubSkill): string {
+  const repository = canonicalRepository(skill);
+  const { branch, path } = skill.source.discoveryScope;
+  return `https://github.com/${repository}/tree/${encodeURIComponent(branch)}/${encodedPath(path)}`;
+}
+
+function scopeLocatorKey(skill: ResolvedGithubSkill): string {
+  const { branch, path } = skill.source.discoveryScope;
+  return JSON.stringify([canonicalRepository(skill), branch, path]);
+}
+
+function exactScopeKey(skill: ResolvedGithubSkill): string {
+  const { branch, path, branchHeadSha } = skill.source.discoveryScope;
+  return JSON.stringify([
+    canonicalRepository(skill),
+    branch,
+    path,
+    branchHeadSha,
+  ]);
 }
 
 function assertScopeIsSupported(options: InstallPlanOptions): void {
@@ -145,18 +172,30 @@ function assertEligible(
   if (!skill.installer.selectorVerifiedUnique) {
     throw new InstallPlanError(
       "SELECTOR_NOT_UNIQUE",
-      "The CLI skill selector must be unique within its repository at the scanned revision.",
+      "The CLI skill selector must be unique within its verified branch/path discovery scope.",
       field("installer.selectorVerifiedUnique"),
     );
   }
-  if (
-    skill.installer.selector !== skill.name ||
-    skill.installer.verifiedAtCommitSha !== skill.observed.commitSha
-  ) {
+  if (skill.installer.selector !== skill.name) {
     throw new InstallPlanError(
       "SELECTOR_EVIDENCE_MISMATCH",
-      "Installer selector evidence must match the selected name and observed revision.",
+      "Installer selector evidence must match the selected public skill name.",
       field("installer"),
+    );
+  }
+
+  const sourceScope = skill.source.discoveryScope;
+  const verifiedScope = skill.installer.verifiedDiscoveryScope;
+  if (
+    sourceScope.branchHeadSha !== skill.observed.commitSha ||
+    verifiedScope.branch !== sourceScope.branch ||
+    verifiedScope.path !== sourceScope.path ||
+    verifiedScope.branchHeadSha !== sourceScope.branchHeadSha
+  ) {
+    throw new InstallPlanError(
+      "DISCOVERY_SCOPE_EVIDENCE_MISMATCH",
+      "Branch head, artifact observation, and selector uniqueness evidence must bind to the same branch/path discovery scope.",
+      field("source.discoveryScope"),
     );
   }
 
@@ -175,6 +214,7 @@ function assertNoSelectionConflicts(selections: readonly ResolvedGithubSkill[]):
   const revisions = new Set<string>();
   const canonicalRevisions = new Map<string, string>();
   const normalizedNames = new Map<string, string>();
+  const scopeHeads = new Map<string, string>();
 
   selections.forEach((skill, index) => {
     if (skill.normalizedName !== normalizeSkillName(skill.name)) {
@@ -204,7 +244,24 @@ function assertNoSelectionConflicts(selections: readonly ResolvedGithubSkill[]):
     }
     canonicalRevisions.set(skill.canonicalSkillId, skill.revisionId);
 
-    const source = canonicalSource(skill);
+    const locator = scopeLocatorKey(skill);
+    const previousHead = scopeHeads.get(locator);
+    if (
+      previousHead !== undefined &&
+      previousHead !== skill.source.discoveryScope.branchHeadSha
+    ) {
+      throw new InstallPlanError(
+        "DISCOVERY_SCOPE_EVIDENCE_MISMATCH",
+        "One branch/path discovery scope cannot carry conflicting observed branch heads.",
+        [{
+          path: `selections.${index}.source.discoveryScope.branchHeadSha`,
+          message: "conflicting branch head evidence",
+        }],
+      );
+    }
+    scopeHeads.set(locator, skill.source.discoveryScope.branchHeadSha);
+
+    const source = canonicalRepository(skill);
     const previousSource = normalizedNames.get(skill.normalizedName);
     if (previousSource !== undefined) {
       throw new InstallPlanError(
@@ -220,7 +277,7 @@ function assertNoSelectionConflicts(selections: readonly ResolvedGithubSkill[]):
 }
 
 function createArgs(
-  source: string,
+  sourceUrl: string,
   selections: readonly ResolvedGithubSkill[],
   options: Readonly<{ agents: readonly SupportedAgent[]; scope: InstallScope; mode: InstallMode }>,
 ): readonly string[] {
@@ -228,7 +285,7 @@ function createArgs(
     "--yes",
     SKILLS_CLI_PACKAGE,
     "add",
-    source,
+    sourceUrl,
     "--full-depth",
   ];
 
@@ -272,18 +329,35 @@ export function resolveInstallPlanCore(input: unknown): InstallPlanCore {
   const agents = [...options.agents].sort();
   selections.forEach((skill, index) => assertEligible(skill, agents, index));
 
-  const grouped = new Map<string, ResolvedGithubSkill[]>();
+  const grouped = new Map<
+    string,
+    Readonly<{
+      repository: string;
+      sourceUrl: string;
+      discoveryScope: GithubDiscoveryScope;
+      selections: ResolvedGithubSkill[];
+    }>
+  >();
   for (const selection of selections) {
-    const source = canonicalSource(selection);
-    const group = grouped.get(source) ?? [];
-    group.push(selection);
-    grouped.set(source, group);
+    const key = exactScopeKey(selection);
+    const existing = grouped.get(key);
+    if (existing) {
+      existing.selections.push(selection);
+      continue;
+    }
+
+    grouped.set(key, {
+      repository: canonicalRepository(selection),
+      sourceUrl: trustedScopeUrl(selection),
+      discoveryScope: selection.source.discoveryScope,
+      selections: [selection],
+    });
   }
 
   if (grouped.size > MAX_SOURCES_PER_PLAN) {
     throw new InstallPlanError(
       "SOURCE_LIMIT_EXCEEDED",
-      `A plan can contain at most ${MAX_SOURCES_PER_PLAN} GitHub sources.`,
+      `A plan can contain at most ${MAX_SOURCES_PER_PLAN} GitHub discovery scopes.`,
     );
   }
 
@@ -296,8 +370,8 @@ export function resolveInstallPlanCore(input: unknown): InstallPlanCore {
 
   const steps = [...grouped.entries()]
     .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
-    .map(([source, sourceSelections], index): InstallExecutionStep => {
-      const orderedSelections = [...sourceSelections].sort((left, right) =>
+    .map(([, group], index): InstallExecutionStep => {
+      const orderedSelections = [...group.selections].sort((left, right) =>
         left.normalizedName === right.normalizedName
           ? left.revisionId < right.revisionId
             ? -1
@@ -311,10 +385,11 @@ export function resolveInstallPlanCore(input: unknown): InstallPlanCore {
 
       return {
         id: `step-${String(index + 1).padStart(2, "0")}`,
-        source,
-        sourceUrl: `https://github.com/${source}`,
+        source: group.repository,
+        sourceUrl: group.sourceUrl,
+        discoveryScope: group.discoveryScope,
         file: "npx",
-        args: createArgs(source, orderedSelections, normalizedOptions),
+        args: createArgs(group.sourceUrl, orderedSelections, normalizedOptions),
         selections: orderedSelections.map((selection) => ({
           canonicalSkillId: selection.canonicalSkillId,
           revisionId: selection.revisionId,
@@ -324,7 +399,7 @@ export function resolveInstallPlanCore(input: unknown): InstallPlanCore {
           contentDigest: selection.observed.contentDigest,
           installerSelector: selection.installer.selector,
           selectorVerifiedUnique: true,
-          selectorVerifiedAtCommitSha: selection.installer.verifiedAtCommitSha,
+          verifiedDiscoveryScope: selection.installer.verifiedDiscoveryScope,
         })),
       };
     });
