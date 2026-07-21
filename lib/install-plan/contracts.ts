@@ -4,7 +4,11 @@ export const SKILLS_CLI_PACKAGE = "skills@1.5.19" as const;
 export const SKILLS_CLI_MINIMUM_NODE_VERSION = ">=22.20.0" as const;
 
 export const MAX_SKILLS_PER_PLAN = 64;
-export const MAX_SOURCES_PER_PLAN = 16;
+// A selected skill may be the only member of its verified discovery scope.
+// Keep the scope ceiling aligned so a valid skill selection is never rejected
+// solely because it spans more repositories; rendered command length remains
+// the final pasteability bound.
+export const MAX_SOURCES_PER_PLAN = MAX_SKILLS_PER_PLAN;
 export const MAX_AGENTS_PER_PLAN = 8;
 export const MAX_PASTEABLE_COMMAND_LENGTH = 7_600;
 

@@ -5,6 +5,7 @@ import {
   MAX_SKILLS_PER_PLAN,
   MAX_SOURCES_PER_PLAN,
   createInstallPlan,
+  resolveInstallPlanCore,
   type InstallPlanErrorCode,
   type InstallPlanOptions,
   type ResolvedGithubSkill,
@@ -247,18 +248,34 @@ describe("install plan resolution", () => {
     );
   });
 
-  it("rejects empty, excessive-selection, and excessive-source plans", () => {
+  it("rejects empty and excessive-selection plans", () => {
     expectPlanError(installPlanFixture([]), "EMPTY_SELECTION");
 
     const tooManySkills = Array.from({ length: MAX_SKILLS_PER_PLAN + 1 }, (_, index) =>
       installSkillFixture({ name: `skill-${index}` }),
     );
     expectPlanError(installPlanFixture(tooManySkills), "SELECTION_LIMIT_EXCEEDED");
+  });
 
-    const tooManySources = Array.from({ length: MAX_SOURCES_PER_PLAN + 1 }, (_, index) =>
+  it("accepts the launch set's 17-repository floor and one scope per skill", () => {
+    const launchRepositoryFloor = 17;
+    const launchScopes = Array.from({ length: launchRepositoryFloor }, (_, index) =>
       installSkillFixture({ name: `skill-${index}`, repository: `repo-${index}` }),
     );
-    expectPlanError(installPlanFixture(tooManySources), "SOURCE_LIMIT_EXCEEDED");
+
+    expect(resolveInstallPlanCore(installPlanFixture(launchScopes)).sourceCount).toBe(
+      launchRepositoryFloor,
+    );
+
+    const maximumScopes = Array.from({ length: MAX_SOURCES_PER_PLAN }, (_, index) =>
+      installSkillFixture({
+        name: `maximum-skill-${index}`,
+        repository: `maximum-repo-${index}`,
+      }),
+    );
+    expect(resolveInstallPlanCore(installPlanFixture(maximumScopes)).sourceCount).toBe(
+      MAX_SOURCES_PER_PLAN,
+    );
   });
 
   it("rejects plans that exceed the conservative pasteable-command cap", () => {

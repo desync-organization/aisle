@@ -73,6 +73,11 @@ and therefore adds no flag. Copy mode adds `--copy`; symlink mode is the pinned
 CLI default and there is no supported `--symlink` flag.
 
 The planner caps skills, discovery scopes, agents, and the final command length.
+The discovery-scope ceiling equals the 64-skill ceiling because every selected
+skill can legitimately come from a different verified repository/path scope.
+This also accommodates the launch package set's 46 members across 17 distinct
+repositories. The rendered command-length cap remains the final pasteability
+bound.
 It emits one single-line command for POSIX shells, PowerShell 7, Windows
 PowerShell 5.1, and cmd.exe. Arguments are quoted independently. The cmd.exe
 renderer uses the fixed trusted executable token `npx.cmd` without quotes;
