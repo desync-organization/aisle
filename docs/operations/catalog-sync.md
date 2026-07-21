@@ -2,6 +2,8 @@
 
 Aisle's production catalog sync runs from `.github/workflows/catalog-sync.yml` once per day and can also be started with GitHub Actions' **Run workflow** control. Workflow-level concurrency allows only one production sync at a time. The workflow applies migrations and idempotent seed data before ingestion, discovers the source IDs from the application, and gives each source its own process and 30-minute deadline. A timed-out or failed source is reported but does not prevent later sources from running.
 
+After every requested source has been attempted, the workflow runs curated package publication as a final bounded operation even when an individual source failed. Publication uses the existing transactional eligibility gates and fails closed until every required package member has current exact provenance, license, inventory, and trust evidence. A source or publication failure makes the workflow unsuccessful after all operations have had their turn; it never publishes a partial or unproven package set.
+
 The catalog's existing per-source database lease remains the final write fence. An interrupted process can therefore leave only its own source lease pending until it expires; another source does not share that lease.
 
 ## Repository secrets

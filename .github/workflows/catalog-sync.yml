@@ -107,4 +107,15 @@ jobs:
             echo "::endgroup::"
           done
 
+          echo "::group::Publish eligible curated packages"
+          if timeout --foreground --signal=TERM --kill-after=30s 30m \
+            npm run --silent packages:publish; then
+            echo "Published eligible curated packages."
+          else
+            exit_code=$?
+            echo "::error::Package publication exited with status $exit_code."
+            failures=1
+          fi
+          echo "::endgroup::"
+
           exit "$failures"

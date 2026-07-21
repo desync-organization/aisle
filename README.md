@@ -57,7 +57,7 @@ The catalog CLI reads its process environment. Use the names documented in `.env
 
 The command prints a per-connector JSON result. A fulfilled command is not a claim that every source is current: read each source's stored mode, coverage state, record count, last successful sync, failures, and exclusions before presenting coverage.
 
-Production synchronization is scheduled and manually dispatchable through GitHub Actions. Each connector runs in a separately bounded process so a slow upstream cannot block later sources. See the [production catalog synchronization runbook](docs/operations/catalog-sync.md) for source-scoped commands, required Turso secrets, and the public-only GitHub token boundary.
+Production synchronization and fail-closed curated package publication are scheduled and manually dispatchable through GitHub Actions. Each connector runs in a separately bounded process so a slow upstream cannot block later sources, and publication is attempted only after every requested source. See the [production catalog synchronization runbook](docs/operations/catalog-sync.md) for source-scoped commands, required Turso secrets, and the public-only GitHub token boundary.
 
 ## Curated package publication
 
