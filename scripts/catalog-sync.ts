@@ -6,6 +6,7 @@ import { GitHubCodeSearchConnector } from "../lib/catalog/adapters/github-code-s
 import { GitHubPublicRepositoryAdapter } from "../lib/catalog/adapters/github-public";
 import { providerApprovedRegistryStubs } from "../lib/catalog/adapters/registry-stubs";
 import { SkillMdAdapter } from "../lib/catalog/adapters/skillmd";
+import { SkillsReConnector } from "../lib/catalog/adapters/skills-re";
 import { WellKnownSkillsAdapter } from "../lib/catalog/adapters/well-known";
 import { SkillsShClient } from "../lib/catalog/connectors/skills-sh-client";
 import { SkillsShSync } from "../lib/catalog/connectors/skills-sh-sync";
@@ -76,6 +77,9 @@ async function main(): Promise<void> {
       }),
       new GetSkillaryConnector({
         enabled: explicitlyEnabled("AISLE_GETSKILLARY_ENABLED"),
+      }),
+      new SkillsReConnector({
+        enabled: explicitlyEnabled("AISLE_SKILLS_RE_ENABLED"),
       }),
       new GitHubCodeSearchConnector({
         enabled: explicitlyEnabled("AISLE_GITHUB_CODE_SEARCH_ENABLED"),
