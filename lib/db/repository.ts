@@ -357,6 +357,7 @@ export class CatalogRepository {
         skillId: null,
         status: "unresolved",
         sourceHash,
+        lastCompletedObservationRunId: null,
         duplicateIndicator: false,
         lastSeenRunId: fence.runId,
         lastSeenAt: now,
@@ -1002,11 +1003,23 @@ export class CatalogRepository {
       ) {
         await transaction
           .update(sourceListings)
+          .set({ lastCompletedObservationRunId: null })
+          .where(
+            and(
+              eq(sourceListings.sourceId, input.sourceId),
+              eq(sourceListings.lastSeenRunId, input.runId),
+            ),
+          );
+        await transaction
+          .update(sourceListings)
           .set({ lastCompletedObservationRunId: input.runId })
           .where(
             and(
               eq(sourceListings.sourceId, input.sourceId),
               eq(sourceListings.lastSeenRunId, input.runId),
+              inArray(sourceListings.status, ["current", "stale"]),
+              isNotNull(sourceListings.skillId),
+              isNotNull(sourceListings.sourceHash),
             ),
           );
         const missing = await transaction
@@ -1062,7 +1075,13 @@ export class CatalogRepository {
           const status = missed >= (input.unavailableAfter ?? 2) ? "unavailable" : "stale";
           await transaction
             .update(sourceListings)
-            .set({ status, missedCompleteCrawls: missed })
+            .set({
+              status,
+              missedCompleteCrawls: missed,
+              ...(status === "unavailable"
+                ? { lastCompletedObservationRunId: null }
+                : {}),
+            })
             .where(eq(sourceListings.id, listing.id));
           if (listing.skillId) changedSkills.add(listing.skillId);
         }
@@ -1207,6 +1226,9 @@ export class CatalogRepository {
         .limit(1);
       const nextSourceHash = input.sourceHash ??
         (input.preserveSourceHash === false ? null : previous?.sourceHash ?? null);
+      const sourceHashChanged = Boolean(
+        previous && previous.sourceHash !== nextSourceHash,
+      );
       const invalidatesExistingBinding = Boolean(
         previous?.skillId && previous.sourceHash !== nextSourceHash,
       );
@@ -1247,6 +1269,9 @@ export class CatalogRepository {
             lastSeenRunId: input.fence.runId,
             lastSeenAt: now,
             missedCompleteCrawls: 0,
+            ...(sourceHashChanged
+              ? { lastCompletedObservationRunId: null }
+              : {}),
             ...(invalidatesExistingBinding
               ? { skillId: null, status: "unresolved" as const }
               : restoresExistingBinding
@@ -1329,6 +1354,11 @@ export class CatalogRepository {
         .update(sourceListings)
         .set({
           sourceHash: input.hash,
+          lastCompletedObservationRunId: sql`case
+            when ${sourceListings.sourceHash} is ${input.hash}
+              then ${sourceListings.lastCompletedObservationRunId}
+            else null
+          end`,
           detailEtag: input.etag,
           detailLastModified: input.lastModified,
           hydratedAt: input.hydratedAt ?? new Date(),
@@ -1709,7 +1739,14 @@ export class CatalogRepository {
 
       const listingLink = await transaction
         .update(sourceListings)
-        .set({ skillId, status: "current", missedCompleteCrawls: 0 })
+        .set({
+          skillId,
+          status: "current",
+          missedCompleteCrawls: 0,
+          ...(listingObservation.skillId !== skillId
+            ? { lastCompletedObservationRunId: null }
+            : {}),
+        })
         .where(
           and(
             eq(sourceListings.id, input.listingId),
@@ -1851,7 +1888,13 @@ export class CatalogRepository {
         const status = missed >= unavailableAfter ? "unavailable" : "stale";
         await transaction
           .update(sourceListings)
-          .set({ status, missedCompleteCrawls: missed })
+          .set({
+            status,
+            missedCompleteCrawls: missed,
+            ...(status === "unavailable"
+              ? { lastCompletedObservationRunId: null }
+              : {}),
+          })
           .where(
             and(
               eq(sourceListings.id, listing.id),
@@ -1884,7 +1927,7 @@ export class CatalogRepository {
       if (!listing) return;
       await transaction
         .update(sourceListings)
-        .set({ status: "removed" })
+        .set({ status: "removed", lastCompletedObservationRunId: null })
         .where(
           and(
             eq(sourceListings.id, listing.id),
