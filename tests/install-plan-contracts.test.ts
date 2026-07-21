@@ -91,6 +91,7 @@ describe("install plan contracts", () => {
     ["control characters", installSkillFixture({ name: "skill\nwhoami" })],
     ["branch traversal", installSkillFixture({ branch: "../main" })],
     ["multi-segment branch ambiguity", installSkillFixture({ branch: "feature/release" })],
+    ["reserved HEAD ref", installSkillFixture({ branch: "HEAD" })],
     ["commit-shaped branch", installSkillFixture({ branch: "c".repeat(40) })],
     ["uppercase commit-shaped branch", installSkillFixture({ branch: "C".repeat(40) })],
     ["path traversal", installSkillFixture({ discoveryPath: "skills/../private" })],

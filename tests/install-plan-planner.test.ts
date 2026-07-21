@@ -200,7 +200,10 @@ describe("install plan resolution", () => {
   });
 
   it.each([
-    installSkillFixture({ commitSha: "c".repeat(40) }),
+    installSkillFixture({
+      branchHeadSha: "a".repeat(40),
+      commitSha: "c".repeat(40),
+    }),
     installSkillFixture({ selectorVerifiedBranch: "release" }),
     installSkillFixture({ selectorVerifiedDiscoveryPath: ".claude/skills" }),
     installSkillFixture({ selectorVerifiedBranchHeadSha: "c".repeat(40) }),
