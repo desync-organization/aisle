@@ -1,3 +1,9 @@
+import {
+  catalogSelectionGateReasons,
+  type CatalogSelectionGateReason,
+  type CatalogTrustState,
+} from "@/lib/marketplace/selection-gates";
+
 export const stackAgentOptions = [
   { id: "codex", label: "Codex" },
   { id: "claude-code", label: "Claude Code" },
@@ -14,8 +20,37 @@ export type StackScope = "project" | "global";
 export type StackMode = "copy" | "symlink";
 export type StackShell = "posix" | "powershell7" | "powershell51" | "cmd";
 
+export type StackPreflightRequest = Readonly<{
+  selectionIds: ReadonlyArray<string>;
+}>;
+
+export type StackPreflightRow = Readonly<{
+  id: string;
+  name: string;
+  sourceUrl: string;
+  license: string;
+  trust: CatalogTrustState;
+  revisionId: string | null;
+  immutableRef: string | null;
+  selectable: boolean;
+  gateReasons: ReadonlyArray<CatalogSelectionGateReason>;
+  warningFingerprint?: string;
+}>;
+
+export type StackPreflightSnapshot = Readonly<{
+  rows: ReadonlyArray<StackPreflightRow>;
+  revisionSetKey: string;
+}>;
+
+export type StackWarningAcknowledgement = Readonly<{
+  selectionId: string;
+  revisionId: string;
+  warningFingerprint: string;
+}>;
+
 export type StackResolveRequest = Readonly<{
   selectionIds: ReadonlyArray<string>;
+  acknowledgements: ReadonlyArray<StackWarningAcknowledgement>;
   options: Readonly<{
     agents: ReadonlyArray<StackAgent>;
     scope: StackScope;
@@ -69,7 +104,12 @@ type StackResolveFailure = Readonly<{
   }>;
 }>;
 
-export class StackResolveError extends Error {
+type StackPreflightSuccess = Readonly<{
+  ok: true;
+  rows: ReadonlyArray<StackPreflightRow>;
+}>;
+
+export class StackApiError extends Error {
   readonly code: string;
   readonly status: number;
   readonly fieldIssues: ReadonlyArray<Readonly<{ path: string; message: string }>>;
@@ -81,10 +121,34 @@ export class StackResolveError extends Error {
     fieldIssues: ReadonlyArray<Readonly<{ path: string; message: string }>> = [],
   ) {
     super(message);
-    this.name = "StackResolveError";
+    this.name = "StackApiError";
     this.code = code;
     this.status = status;
     this.fieldIssues = fieldIssues;
+  }
+}
+
+export class StackResolveError extends StackApiError {
+  constructor(
+    code: string,
+    message: string,
+    status: number,
+    fieldIssues: ReadonlyArray<Readonly<{ path: string; message: string }>> = [],
+  ) {
+    super(code, message, status, fieldIssues);
+    this.name = "StackResolveError";
+  }
+}
+
+export class StackPreflightError extends StackApiError {
+  constructor(
+    code: string,
+    message: string,
+    status: number,
+    fieldIssues: ReadonlyArray<Readonly<{ path: string; message: string }>> = [],
+  ) {
+    super(code, message, status, fieldIssues);
+    this.name = "StackPreflightError";
   }
 }
 
@@ -94,6 +158,26 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isFieldIssue(value: unknown): value is Readonly<{ path: string; message: string }> {
   return isRecord(value) && typeof value.path === "string" && typeof value.message === "string";
+}
+
+function isCatalogGateReason(value: unknown): value is CatalogSelectionGateReason {
+  return typeof value === "string" && catalogSelectionGateReasons.includes(
+    value as CatalogSelectionGateReason,
+  );
+}
+
+function isCatalogTrustState(value: unknown): value is CatalogTrustState {
+  return value === "pass" || value === "warn" || value === "unreviewed" || value === "blocked";
+}
+
+function isSafePublicSourceUrl(value: unknown): value is string {
+  if (typeof value !== "string" || value.length === 0 || value.length > 2_048) return false;
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" && url.username === "" && url.password === "";
+  } catch {
+    return false;
+  }
 }
 
 function parseFailure(payload: unknown, status: number): StackResolveError {
@@ -115,6 +199,143 @@ function parseFailure(payload: unknown, status: number): StackResolveError {
       : "The selected stack could not be resolved.",
     status,
   );
+}
+
+function parsePreflightFailure(payload: unknown, status: number): StackPreflightError {
+  if (isRecord(payload) && payload.ok === false && isRecord(payload.error)) {
+    const code = typeof payload.error.code === "string" ? payload.error.code : "PREFLIGHT_FAILED";
+    const message = typeof payload.error.message === "string"
+      ? payload.error.message
+      : "The selected stack could not be reviewed.";
+    const fieldIssues = Array.isArray(payload.error.fieldIssues)
+      ? payload.error.fieldIssues.filter(isFieldIssue)
+      : [];
+    return new StackPreflightError(code, message, status, fieldIssues);
+  }
+
+  return new StackPreflightError(
+    status === 404 ? "PREFLIGHT_UNAVAILABLE" : "PREFLIGHT_FAILED",
+    status === 404
+      ? "Stack preflight is not available in this environment yet."
+      : "The selected stack could not be reviewed.",
+    status,
+  );
+}
+
+function parsePreflightRow(value: unknown, index: number): StackPreflightRow {
+  if (!isRecord(value)) {
+    throw new StackPreflightError(
+      "INVALID_RESPONSE",
+      `Preflight row ${index + 1} is invalid.`,
+      502,
+    );
+  }
+
+  const gateReasons = Array.isArray(value.gateReasons) && value.gateReasons.every(isCatalogGateReason)
+    ? [...value.gateReasons]
+    : null;
+  const revisionId = typeof value.revisionId === "string" && value.revisionId.length > 0
+    ? value.revisionId
+    : value.revisionId === null
+      ? null
+      : undefined;
+  const immutableRef = typeof value.immutableRef === "string" && value.immutableRef.length > 0
+    ? value.immutableRef
+    : value.immutableRef === null
+      ? null
+      : undefined;
+  const warningFingerprint = typeof value.warningFingerprint === "string" &&
+    value.warningFingerprint.length > 0 &&
+    value.warningFingerprint.length <= 512
+    ? value.warningFingerprint
+    : undefined;
+
+  if (
+    typeof value.id !== "string" ||
+    value.id.length === 0 ||
+    typeof value.name !== "string" ||
+    value.name.trim().length === 0 ||
+    value.name.length > 300 ||
+    !isSafePublicSourceUrl(value.sourceUrl) ||
+    typeof value.license !== "string" ||
+    value.license.length === 0 ||
+    value.license.length > 100 ||
+    !isCatalogTrustState(value.trust) ||
+    revisionId === undefined ||
+    immutableRef === undefined ||
+    typeof value.selectable !== "boolean" ||
+    gateReasons === null ||
+    new Set(gateReasons).size !== gateReasons.length ||
+    (value.selectable && (
+      gateReasons.length > 0 ||
+      revisionId === null ||
+      immutableRef === null ||
+      (value.trust !== "pass" && value.trust !== "warn")
+    )) ||
+    (!value.selectable && gateReasons.length === 0) ||
+    (value.trust === "warn" && (
+      revisionId === null ||
+      immutableRef === null ||
+      !warningFingerprint
+    ))
+  ) {
+    throw new StackPreflightError(
+      "INVALID_RESPONSE",
+      `Preflight row ${index + 1} did not satisfy the revision-bound contract.`,
+      502,
+    );
+  }
+
+  return {
+    id: value.id,
+    name: value.name,
+    sourceUrl: value.sourceUrl,
+    license: value.license,
+    trust: value.trust,
+    revisionId,
+    immutableRef,
+    selectable: value.selectable,
+    gateReasons,
+    ...(warningFingerprint ? { warningFingerprint } : {}),
+  };
+}
+
+function parsePreflight(
+  payload: unknown,
+  selectionIds: ReadonlyArray<string>,
+): StackPreflightSnapshot {
+  if (!isRecord(payload) || payload.ok !== true || !Array.isArray(payload.rows)) {
+    throw new StackPreflightError(
+      "INVALID_RESPONSE",
+      "The stack preflight returned an invalid response.",
+      502,
+    );
+  }
+
+  const rows = payload.rows.map(parsePreflightRow);
+  const rowsById = new Map(rows.map((row) => [row.id, row]));
+  if (
+    rows.length !== selectionIds.length ||
+    rowsById.size !== rows.length ||
+    selectionIds.some((id) => !rowsById.has(id))
+  ) {
+    throw new StackPreflightError(
+      "INCOMPLETE_PREFLIGHT",
+      "The stack preflight did not return the exact selected ID set.",
+      502,
+    );
+  }
+
+  const orderedRows = selectionIds.map((id) => rowsById.get(id)!);
+  return {
+    rows: orderedRows,
+    revisionSetKey: JSON.stringify(orderedRows.map((row) => [
+      row.id,
+      row.revisionId,
+      row.immutableRef,
+      row.warningFingerprint ?? null,
+    ])),
+  };
 }
 
 function parsePlan(payload: unknown): StackResolvePlan {
@@ -180,6 +401,38 @@ function parsePlan(payload: unknown): StackResolvePlan {
     warnings: [...plan.warnings],
     ...(resolvedSkills ? { resolvedSkills } : {}),
   };
+}
+
+export async function preflightStack(
+  request: StackPreflightRequest,
+  options: Readonly<{ signal?: AbortSignal }> = {},
+): Promise<StackPreflightSnapshot> {
+  let response: Response;
+  try {
+    response = await fetch("/api/v1/stack/preflight", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(request),
+      cache: "no-store",
+      signal: options.signal,
+    });
+  } catch {
+    throw new StackPreflightError(
+      "NETWORK_ERROR",
+      "Stack preflight could not be reached.",
+      0,
+    );
+  }
+
+  let payload: unknown;
+  try {
+    payload = await response.json();
+  } catch {
+    payload = null;
+  }
+
+  if (!response.ok) throw parsePreflightFailure(payload, response.status);
+  return parsePreflight(payload as StackPreflightSuccess, request.selectionIds);
 }
 
 export async function resolveStack(

@@ -2,30 +2,36 @@
 
 import {
   AlertTriangle,
+  ArrowUpRight,
   Check,
   Clipboard,
   Code2,
   Layers3,
   LoaderCircle,
   LockKeyhole,
+  RefreshCw,
   ServerCog,
   ShieldAlert,
   Trash2,
   X,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 
 import { Button } from "@/components/ui/button";
 import {
-  StackResolveError,
+  StackApiError,
+  preflightStack,
   resolveStack,
   stackAgentOptions,
   type StackAgent,
   type StackMode,
+  type StackPreflightRow,
+  type StackPreflightSnapshot,
   type StackResolvePlan,
   type StackScope,
   type StackShell,
 } from "@/lib/marketplace/stack-api";
+import { catalogSelectionGateCopy } from "@/lib/marketplace/selection-gates";
 import { useSelection } from "@/lib/selection/react";
 
 type ResolutionState =
@@ -33,6 +39,22 @@ type ResolutionState =
   | Readonly<{ status: "loading"; requestKey: string }>
   | Readonly<{ status: "success"; requestKey: string; plan: StackResolvePlan }>
   | Readonly<{ status: "error"; requestKey: string; code: string; message: string; fieldIssues: ReadonlyArray<Readonly<{ path: string; message: string }>> }>;
+
+type PreflightState =
+  | Readonly<{ status: "idle" }>
+  | Readonly<{ status: "loading"; selectionKey: string }>
+  | Readonly<{ status: "success"; selectionKey: string; snapshot: StackPreflightSnapshot }>
+  | Readonly<{
+      status: "error";
+      selectionKey: string;
+      code: string;
+      message: string;
+      fieldIssues: ReadonlyArray<Readonly<{ path: string; message: string }>>;
+    }>;
+
+function warningAcknowledgementKey(row: StackPreflightRow): string {
+  return JSON.stringify([row.id, row.revisionId, row.warningFingerprint]);
+}
 
 const scopeOptions: ReadonlyArray<Readonly<{ id: StackScope; label: string; note: string }>> = [
   { id: "project", label: "Project", note: "Install for this workspace" },
@@ -64,20 +86,96 @@ export function StackBuilder() {
   const [scope, setScope] = useState<StackScope>("project");
   const [mode, setMode] = useState<StackMode>("copy");
   const [shell, setShell] = useState<StackShell>("powershell7");
+  const [preflightState, setPreflight] = useState<PreflightState>({ status: "idle" });
+  const [preflightAttempt, setPreflightAttempt] = useState(0);
+  const [acknowledgedWarnings, setAcknowledgedWarnings] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
   const [resolutionState, setResolution] = useState<ResolutionState>({ status: "idle" });
   const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
-  const controllerRef = useRef<AbortController | null>(null);
+  const preflightControllerRef = useRef<AbortController | null>(null);
+  const resolveControllerRef = useRef<AbortController | null>(null);
 
-  const requestKey = `${state.ids.join(",")}|${agents.join(",")}|${scope}|${mode}|${shell}`;
+  const selectionKey = state.ids.join(",");
+  const preflight = preflightState.status !== "idle" && preflightState.selectionKey !== selectionKey
+    ? ({ status: "idle" } as const)
+    : preflightState;
+  const preflightRows = preflight.status === "success" ? preflight.snapshot.rows : [];
+  const warningRows = preflightRows.filter((row) => row.trust === "warn");
+  const hasUnselectableRows = preflightRows.some((row) => !row.selectable);
+  const allWarningsAcknowledged = warningRows.every((row) => (
+    acknowledgedWarnings.has(warningAcknowledgementKey(row))
+  ));
+  const reviewReady = preflight.status === "success" &&
+    preflightRows.length === state.count &&
+    !hasUnselectableRows &&
+    allWarningsAcknowledged;
+  const revisionSetKey = preflight.status === "success"
+    ? preflight.snapshot.revisionSetKey
+    : "unreviewed";
+  const acknowledgementSetKey = JSON.stringify([...acknowledgedWarnings].toSorted());
+  const requestKey = `${selectionKey}|${revisionSetKey}|${acknowledgementSetKey}|${agents.join(",")}|${scope}|${mode}|${shell}`;
   const resolution = resolutionState.status !== "idle" && resolutionState.requestKey !== requestKey
     ? ({ status: "idle" } as const)
     : resolutionState;
-  const resolvedSkills = useMemo(() => {
-    if (resolution.status !== "success" || !resolution.plan.resolvedSkills) return new Map<string, string>();
-    return new Map(resolution.plan.resolvedSkills.map((skill) => [skill.id, skill.name]));
-  }, [resolution]);
 
-  useEffect(() => () => controllerRef.current?.abort(), []);
+  useEffect(() => {
+    resolveControllerRef.current?.abort();
+    setResolution({ status: "idle" });
+    setCopyState("idle");
+  }, [requestKey]);
+
+  useEffect(() => {
+    preflightControllerRef.current?.abort();
+    resolveControllerRef.current?.abort();
+    setAcknowledgedWarnings(new Set());
+    setResolution({ status: "idle" });
+    setCopyState("idle");
+
+    if (!state.hydrated || state.count === 0) {
+      setPreflight({ status: "idle" });
+      return;
+    }
+
+    const controller = new AbortController();
+    preflightControllerRef.current = controller;
+    const selectionIds = [...state.ids];
+    setPreflight({ status: "loading", selectionKey });
+
+    void preflightStack({ selectionIds }, { signal: controller.signal })
+      .then((snapshot) => {
+        if (!controller.signal.aborted) {
+          setPreflight({ status: "success", selectionKey, snapshot });
+        }
+      })
+      .catch((error: unknown) => {
+        if (controller.signal.aborted) return;
+        if (error instanceof StackApiError) {
+          setPreflight({
+            status: "error",
+            selectionKey,
+            code: error.code,
+            message: error.message,
+            fieldIssues: error.fieldIssues,
+          });
+          return;
+        }
+        setPreflight({
+          status: "error",
+          selectionKey,
+          code: "PREFLIGHT_FAILED",
+          message: "The selected stack could not be reviewed.",
+          fieldIssues: [],
+        });
+      });
+
+    return () => controller.abort();
+  }, [preflightAttempt, selectionKey, state.count, state.hydrated, state.ids]);
+
+  useEffect(() => () => {
+    preflightControllerRef.current?.abort();
+    resolveControllerRef.current?.abort();
+  }, []);
 
   function toggleAgent(agent: StackAgent) {
     setAgents((current) => current.includes(agent)
@@ -85,25 +183,55 @@ export function StackBuilder() {
       : [...current, agent]);
   }
 
+  function toggleWarningAcknowledgement(row: StackPreflightRow) {
+    const key = warningAcknowledgementKey(row);
+    setAcknowledgedWarnings((current) => {
+      const next = new Set(current);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }
+
+  function retryPreflight() {
+    setPreflightAttempt((attempt) => attempt + 1);
+  }
+
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (state.count === 0 || agents.length === 0) return;
+    if (
+      state.count === 0 ||
+      agents.length === 0 ||
+      preflight.status !== "success" ||
+      !reviewReady
+    ) return;
 
-    controllerRef.current?.abort();
+    const acknowledgedRows = warningRows.filter((row): row is StackPreflightRow & Readonly<{
+      revisionId: string;
+      warningFingerprint: string;
+    }> => Boolean(row.revisionId && row.warningFingerprint));
+    if (acknowledgedRows.length !== warningRows.length) return;
+
+    resolveControllerRef.current?.abort();
     const controller = new AbortController();
-    controllerRef.current = controller;
+    resolveControllerRef.current = controller;
     setCopyState("idle");
     setResolution({ status: "loading", requestKey });
 
     try {
       const plan = await resolveStack({
-        selectionIds: state.ids,
+        selectionIds: preflight.snapshot.rows.map((row) => row.id),
+        acknowledgements: acknowledgedRows.map((row) => ({
+          selectionId: row.id,
+          revisionId: row.revisionId,
+          warningFingerprint: row.warningFingerprint,
+        })),
         options: { agents, scope, mode, shell },
       }, { signal: controller.signal });
       if (!controller.signal.aborted) setResolution({ status: "success", requestKey, plan });
     } catch (error) {
       if (controller.signal.aborted) return;
-      if (error instanceof StackResolveError) {
+      if (error instanceof StackApiError) {
         setResolution({
           status: "error",
           requestKey,
@@ -159,22 +287,93 @@ export function StackBuilder() {
             <span>{state.count}/{meta.maxSelections}</span>
           </div>
           <p className="stack-review-card__note">
-            These are opaque Aisle catalog IDs. The server must resolve every ID to one current, public, licensed, trust-eligible revision before a command is returned.
+            The server binds every device-local ID to current public metadata before configuration begins. Review the exact source, license, trust state, and revision below.
           </p>
-          <ul className="stack-selection-list">
-            {state.ids.map((id, index) => (
-              <li key={id}>
-                <span>{String(index + 1).padStart(2, "0")}</span>
-                <div>
-                  <strong>{resolvedSkills.get(id) || "Catalog selection"}</strong>
-                  <code>{id}</code>
-                </div>
-                <Button aria-label={`Remove selection ${id}`} onClick={() => actions.remove(id)} variant="quiet">
-                  <X aria-hidden="true" size={15} />
-                </Button>
-              </li>
-            ))}
-          </ul>
+          {preflight.status === "loading" || preflight.status === "idle" ? (
+            <div className="stack-preflight-status">
+              <LoaderCircle aria-hidden="true" className="stack-spinner" size={17} />
+              <div><strong>Reviewing selected revisions</strong><span>No command can be requested until every row returns.</span></div>
+            </div>
+          ) : null}
+          {preflight.status === "error" ? (
+            <div className="stack-preflight-status stack-preflight-status--error">
+              <AlertTriangle aria-hidden="true" size={17} />
+              <div>
+                <strong>{preflight.message}</strong>
+                <span>{preflight.code}</span>
+                {preflight.fieldIssues.length > 0 ? (
+                  <ul>{preflight.fieldIssues.map((issue) => <li key={`${issue.path}:${issue.message}`}>{issue.path}: {issue.message}</li>)}</ul>
+                ) : null}
+              </div>
+              <Button onClick={retryPreflight} variant="quiet"><RefreshCw aria-hidden="true" size={14} /> Retry</Button>
+            </div>
+          ) : null}
+
+          {preflight.status === "success" ? (
+            <ul className="stack-selection-list stack-selection-list--reviewed">
+              {preflight.snapshot.rows.map((row, index) => {
+                const warningKey = warningAcknowledgementKey(row);
+                const warningAcknowledged = acknowledgedWarnings.has(warningKey);
+                return (
+                  <li data-selectable={row.selectable ? "true" : "false"} key={row.id}>
+                    <span>{String(index + 1).padStart(2, "0")}</span>
+                    <div className="stack-selection-list__body">
+                      <div className="stack-selection-list__title">
+                        <strong>{row.name}</strong>
+                        <span className={`trust-pill trust-pill--${row.trust}`}>
+                          {row.trust === "pass" ? "Trust checked" : row.trust === "warn" ? "Review warning" : row.trust}
+                        </span>
+                      </div>
+                      <code>{row.id}</code>
+                      <dl className="stack-selection-metadata">
+                        <div>
+                          <dt>Source</dt>
+                          <dd><a href={row.sourceUrl} rel="noreferrer" target="_blank">{row.sourceUrl} <ArrowUpRight aria-hidden="true" size={11} /></a></dd>
+                        </div>
+                        <div><dt>License</dt><dd>{row.license}</dd></div>
+                        <div><dt>Revision ID</dt><dd>{row.revisionId || "Pending"}</dd></div>
+                        <div><dt>Immutable ref</dt><dd>{row.immutableRef || "Pending"}</dd></div>
+                      </dl>
+                      {row.gateReasons.length > 0 ? (
+                        <ul className="stack-selection-gates">
+                          {row.gateReasons.map((reason) => <li key={reason}>{catalogSelectionGateCopy[reason]}</li>)}
+                        </ul>
+                      ) : null}
+                      {row.trust === "warn" && row.warningFingerprint ? (
+                        <label className="stack-warning-ack" data-checked={warningAcknowledged ? "true" : "false"}>
+                          <input
+                            checked={warningAcknowledged}
+                            onChange={() => toggleWarningAcknowledgement(row)}
+                            type="checkbox"
+                          />
+                          <span>{warningAcknowledged ? <Check aria-hidden="true" size={12} /> : null}</span>
+                          <span>
+                            I acknowledge this warning for revision {row.immutableRef?.slice(0, 12)}.
+                            <code>{row.warningFingerprint.slice(0, 16)}</code>
+                          </span>
+                        </label>
+                      ) : null}
+                    </div>
+                    <Button aria-label={`Remove ${row.name}`} onClick={() => actions.remove(row.id)} variant="quiet">
+                      <X aria-hidden="true" size={15} />
+                    </Button>
+                  </li>
+                );
+              })}
+            </ul>
+          ) : (
+            <ul className="stack-selection-list">
+              {state.ids.map((id, index) => (
+                <li key={id}>
+                  <span>{String(index + 1).padStart(2, "0")}</span>
+                  <div><strong>Catalog selection</strong><code>{id}</code></div>
+                  <Button aria-label={`Remove selection ${id}`} onClick={() => actions.remove(id)} variant="quiet">
+                    <X aria-hidden="true" size={15} />
+                  </Button>
+                </li>
+              ))}
+            </ul>
+          )}
           <Button className="stack-clear" onClick={() => actions.clear()} variant="quiet">
             <Trash2 aria-hidden="true" size={15} /> Clear selection
           </Button>
@@ -221,13 +420,34 @@ export function StackBuilder() {
           </fieldset>
 
           {agents.length === 0 ? <p className="stack-options-card__error">Choose at least one supported agent.</p> : null}
-          <Button className="stack-resolve-button" disabled={agents.length === 0 || resolution.status === "loading"} type="submit">
-            {resolution.status === "loading"
+          {preflight.status === "error" ? <p className="stack-options-card__error">Revision review must succeed before a command can be requested.</p> : null}
+          {preflight.status === "success" && hasUnselectableRows ? (
+            <p className="stack-options-card__error">Remove every blocked selection before continuing.</p>
+          ) : null}
+          {preflight.status === "success" && !hasUnselectableRows && !allWarningsAcknowledged ? (
+            <p className="stack-options-card__error">Acknowledge each revision-bound warning in the review panel.</p>
+          ) : null}
+          <Button
+            className="stack-resolve-button"
+            disabled={agents.length === 0 || !reviewReady || resolution.status === "loading"}
+            type="submit"
+          >
+            {resolution.status === "loading" || preflight.status === "loading"
               ? <LoaderCircle aria-hidden="true" className="stack-spinner" size={17} />
               : <LockKeyhole aria-hidden="true" size={17} />}
-            {resolution.status === "loading" ? "Resolving every skill…" : "Generate reviewed command"}
+            {resolution.status === "loading"
+              ? "Resolving every skill…"
+              : preflight.status === "loading" || preflight.status === "idle"
+                ? "Reviewing selected revisions…"
+                : hasUnselectableRows
+                  ? "Remove blocked skills"
+                  : !allWarningsAcknowledged
+                    ? "Acknowledge revision warnings"
+                    : preflight.status === "error"
+                      ? "Revision review unavailable"
+                      : "Generate reviewed command"}
           </Button>
-          <p className="stack-options-card__boundary">No command is assembled in the browser. The server resolves and revalidates the complete selection first.</p>
+          <p className="stack-options-card__boundary">No command is assembled in the browser. Resolve receives only the reviewed IDs plus acknowledgements bound to the returned revision and warning fingerprint.</p>
         </form>
       </div>
 
@@ -249,7 +469,7 @@ export function StackBuilder() {
             <div>
               <p className="eyebrow">03 / Command</p>
               <h2>No command generated yet.</h2>
-              <p>Review the selections and target above, then ask the server to resolve every skill.</p>
+              <p>Complete revision review and any warning acknowledgements, then ask the server to revalidate the exact stack.</p>
             </div>
           </>
         ) : null}
