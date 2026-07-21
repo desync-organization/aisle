@@ -57,11 +57,13 @@ export function SkillsExplorer({
   const [provenance, setProvenance] = useState<ProvenanceFilter>("all");
   const [sort, setSort] = useState<SortMode>("popular");
   const deferredQuery = useDeferredValue(query.trim().toLowerCase());
+  const appliedQuery = initialQuery.trim().toLowerCase();
+  const localDraftQuery = deferredQuery === appliedQuery ? "" : deferredQuery;
 
   const visibleSkills = useMemo(() => {
     const next = skills.filter((skill) => {
-      const matchesQuery = !deferredQuery || [skill.name, skill.description ?? "", skill.sourceUrl]
-        .some((value) => value.toLowerCase().includes(deferredQuery));
+      const matchesQuery = !localDraftQuery || [skill.name, skill.description ?? "", skill.sourceUrl]
+        .some((value) => value.toLowerCase().includes(localDraftQuery));
       const matchesTrust = trust === "all" || skill.trustState === trust;
       const matchesProvenance = provenance === "all" ||
         (provenance === "official" ? skill.officialProvenance : !skill.officialProvenance);
@@ -81,7 +83,7 @@ export function SkillsExplorer({
       }
       return right.installs - left.installs || left.name.localeCompare(right.name);
     });
-  }, [deferredQuery, provenance, skills, sort, trust]);
+  }, [localDraftQuery, provenance, skills, sort, trust]);
 
   const emptyCopy = availabilityCopy[availability];
 
@@ -175,7 +177,7 @@ export function SkillsExplorer({
             <p>{emptyCopy.body}</p>
           </div>
           {skills.length > 0 ? (
-            <Button onClick={() => { setQuery(""); setTrust("all"); setProvenance("all"); }} variant="secondary">
+            <Button onClick={() => { clearSearch(); setTrust("all"); setProvenance("all"); }} variant="secondary">
               Reset filters
             </Button>
           ) : null}

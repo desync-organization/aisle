@@ -272,6 +272,15 @@ function hasActiveSourceListing() {
   )`;
 }
 
+function hasEnabledSyncSource() {
+  return sql<boolean>`exists (
+    select 1
+    from catalog_sources enabled_sync_source
+    where enabled_sync_source.id = ${syncRuns.sourceId}
+      and enabled_sync_source.enabled = 1
+  )`;
+}
+
 function hasRevisionBoundInstallSpecSql() {
   return sql<boolean>`case
     when json_valid(${skillRevisions.installSpecJson}) = 0 then 0
@@ -453,7 +462,6 @@ export class CatalogRepository {
           eq(syncRuns.leaseToken, fence.leaseToken),
           gt(syncRuns.leaseExpiresAt, new Date()),
           eq(catalogSources.enabled, true),
-          ne(catalogSources.coverageState, "not-configured"),
         ),
       )
       .limit(1);
@@ -969,6 +977,14 @@ export class CatalogRepository {
         .limit(1);
       const enabled = input.enabled ?? true;
       const freshnessPolicy = input.freshnessPolicy ?? "retain";
+      const configuredInitialCoverageState =
+        input.initialCoverageState && input.initialCoverageState !== "not-configured"
+          ? input.initialCoverageState
+          : "not-synced";
+      const initialCoverageState = enabled
+        ? configuredInitialCoverageState
+        : "not-configured";
+      const reenabled = previous?.enabled === false && enabled;
       await transaction
         .insert(catalogSources)
         .values({
@@ -976,7 +992,7 @@ export class CatalogRepository {
           termsUrl: input.termsUrl ?? null,
           enabled,
           freshnessPolicy,
-          coverageState: input.initialCoverageState ?? "not-synced",
+          coverageState: initialCoverageState,
           exclusionsJson: input.knownExclusions ? [...input.knownExclusions] : [],
           createdAt: now,
           updatedAt: now,
@@ -991,6 +1007,16 @@ export class CatalogRepository {
             upstreamIdentifier: input.upstreamIdentifier,
             termsUrl: input.termsUrl ?? null,
             enabled,
+            ...(reenabled
+              ? {
+                  coverageState: configuredInitialCoverageState,
+                  lastSuccessfulSyncAt: null,
+                  recordCount: 0,
+                  unavailableCount: 0,
+                  lastError: null,
+                  exclusionsJson: input.knownExclusions ? [...input.knownExclusions] : [],
+                }
+              : {}),
             updatedAt: now,
           },
         });
@@ -1017,6 +1043,7 @@ export class CatalogRepository {
 
   async markSourceNotConfigured(sourceId: string, exclusions: readonly string[]): Promise<void> {
     await this.db.transaction(async (transaction) => {
+      const now = new Date();
       const affected = await transaction
         .selectDistinct({ skillId: sourceListings.skillId })
         .from(sourceListings)
@@ -1029,13 +1056,35 @@ export class CatalogRepository {
       await transaction
         .update(catalogSources)
         .set({
+          enabled: false,
           coverageState: "not-configured",
           lastSuccessfulSyncAt: null,
+          recordCount: 0,
+          unavailableCount: 0,
           lastError: null,
           exclusionsJson: [...exclusions],
-          updatedAt: new Date(),
+          updatedAt: now,
         })
         .where(eq(catalogSources.id, sourceId));
+      await transaction
+        .update(syncRuns)
+        .set({
+          status: "partial",
+          finishedAt: now,
+          cursor: null,
+          failure: "Source was disabled before the sync completed",
+          nextRetryAt: null,
+          completeCrawl: false,
+          observationSweepComplete: false,
+          leaseToken: null,
+          leaseExpiresAt: null,
+        })
+        .where(
+          and(
+            eq(syncRuns.sourceId, sourceId),
+            eq(syncRuns.status, "running"),
+          ),
+        );
       await this.recomputeSkillCategoryMaterializationInTransaction(
         transaction,
         affected.flatMap(({ skillId }) => skillId ? [skillId] : []),
@@ -1077,9 +1126,18 @@ export class CatalogRepository {
     }
 
     if (options.query?.trim()) {
-      const pattern = `%${options.query.trim()}%`;
+      const query = options.query.trim();
       conditions.push(
-        or(like(skills.upstreamName, pattern), like(skills.upstreamDescription, pattern))!,
+        sql<boolean>`(
+          instr(lower(${skills.upstreamName}), lower(${query})) > 0
+          or instr(lower(coalesce(${skills.upstreamDescription}, '')), lower(${query})) > 0
+          or instr(lower(${skills.sourceUrl}), lower(${query})) > 0
+          or instr(lower(${skills.provider}), lower(${query})) > 0
+          or instr(lower(coalesce(${repositories.owner}, '')), lower(${query})) > 0
+          or instr(lower(coalesce(${repositories.name}, '')), lower(${query})) > 0
+          or instr(lower(coalesce(${categories.slug}, '')), lower(${query})) > 0
+          or instr(lower(coalesce(${categories.name}, '')), lower(${query})) > 0
+        )`,
       );
     }
 
@@ -1142,6 +1200,7 @@ export class CatalogRepository {
         and(eq(skillRevisions.skillId, skills.id), eq(skillRevisions.isCurrent, true)),
       )
       .leftJoin(skillDuplicates, eq(skillDuplicates.skillId, skills.id))
+      .leftJoin(repositories, eq(repositories.id, skills.repositoryId))
       .leftJoin(sourceListings, eq(sourceListings.skillId, skills.id))
       .leftJoin(skillCategories, eq(skillCategories.skillId, skills.id))
       .leftJoin(categories, eq(categories.id, skillCategories.categoryId))
@@ -2079,6 +2138,7 @@ export class CatalogRepository {
           eq(syncRuns.status, "running"),
           eq(syncRuns.leaseToken, input.leaseToken),
           gt(syncRuns.leaseExpiresAt, now),
+          hasEnabledSyncSource(),
         ),
       );
     if (result.rowsAffected !== 1) {
@@ -2101,6 +2161,7 @@ export class CatalogRepository {
           eq(syncRuns.status, "running"),
           eq(syncRuns.leaseToken, leaseToken),
           gt(syncRuns.leaseExpiresAt, now),
+          hasEnabledSyncSource(),
         ),
       );
     if (result.rowsAffected !== 1) {
@@ -2144,6 +2205,7 @@ export class CatalogRepository {
             eq(syncRuns.status, "running"),
             eq(syncRuns.leaseToken, input.leaseToken),
             gt(syncRuns.leaseExpiresAt, now),
+            eq(catalogSources.enabled, true),
           ),
         )
         .limit(1);
@@ -2277,7 +2339,7 @@ export class CatalogRepository {
       if (result.rowsAffected !== 1) {
         throw new CatalogSyncLeaseLostError(input.runId);
       }
-      await transaction
+      const sourceResult = await transaction
         .update(catalogSources)
         .set({
           coverageState: failure ? "partial" : "current",
@@ -2288,7 +2350,15 @@ export class CatalogRepository {
           exclusionsJson: input.exclusions ?? [],
           updatedAt: now,
         })
-        .where(eq(catalogSources.id, input.sourceId));
+        .where(
+          and(
+            eq(catalogSources.id, input.sourceId),
+            eq(catalogSources.enabled, true),
+          ),
+        );
+      if (sourceResult.rowsAffected !== 1) {
+        throw new CatalogSyncLeaseLostError(input.runId);
+      }
       await this.recomputeSourceCategoryMaterializationInTransaction(
         transaction,
         input.sourceId,

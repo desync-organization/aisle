@@ -8,6 +8,10 @@ import {
   type SQL,
 } from "drizzle-orm";
 
+import {
+  isIndividuallySelectableLicense,
+  publicLicenseLabel,
+} from "@/lib/catalog/license-policy";
 import { normalizeSkillPath, normalizeSourceUrl } from "@/lib/catalog/normalization";
 import { installSpecSchema } from "@/lib/catalog/source-contract";
 import type { CatalogDatabase } from "@/lib/db/client";
@@ -116,10 +120,53 @@ const currentObservationExpression = sql<boolean>`exists (
   from source_listings api_listing
   join catalog_sources api_source on api_source.id = api_listing.source_id
   where api_listing.skill_id = ${skills.id}
-    and api_listing.status = 'current'
+    and api_listing.status in ('current', 'stale')
     and api_listing.source_hash = ${skillRevisions.upstreamHash}
     and api_source.enabled = 1
-    and api_source.coverage_state = 'current'
+    and api_source.coverage_state in ('current', 'partial')
+    and (
+      (
+        api_source.freshness_policy = 'retain'
+        and exists (
+          select 1
+          from skill_category_observations api_observation
+          join sync_runs api_observation_run
+            on api_observation_run.id = api_observation.observed_run_id
+            and api_observation_run.source_id = api_listing.source_id
+          where api_observation.source_listing_id = api_listing.id
+            and api_observation.skill_id = ${skills.id}
+            and api_observation.revision_id = ${skillRevisions.id}
+            and api_observation.source_hash = api_listing.source_hash
+            and api_observation_run.status in ('succeeded', 'partial')
+            and api_observation_run.finished_at is not null
+        )
+      )
+      or (
+        api_source.freshness_policy = 'latest-completed-observation'
+        and api_listing.last_completed_observation_run_id is not null
+        and exists (
+          select 1
+          from skill_category_observations api_certified_observation
+          where api_certified_observation.source_listing_id = api_listing.id
+            and api_certified_observation.observed_run_id = api_listing.last_completed_observation_run_id
+            and api_certified_observation.skill_id = ${skills.id}
+            and api_certified_observation.revision_id = ${skillRevisions.id}
+            and api_certified_observation.source_hash = api_listing.source_hash
+        )
+        and api_listing.last_completed_observation_run_id = (
+          select api_completed_run.id
+          from sync_runs api_completed_run
+          where api_completed_run.source_id = api_listing.source_id
+            and api_completed_run.observation_sweep_complete = 1
+            and api_completed_run.finished_at is not null
+            and api_completed_run.status in ('succeeded', 'partial')
+          order by api_completed_run.finished_at desc,
+            api_completed_run.started_at desc,
+            api_completed_run.id desc
+          limit 1
+        )
+      )
+    )
 )`;
 
 const latestAuditFailureExpression = sql<boolean>`exists (
@@ -219,13 +266,39 @@ function hasVerifiedLicense(
 
 function sourceBindingMatches(row: VisibleSkillRow): boolean {
   const parsed = installSpecSchema.safeParse(row.installSpec);
-  if (!parsed.success) return false;
-  if (parsed.data.kind === "registry") return true;
-  if (!row.immutableRef) return false;
+  if (
+    !parsed.success ||
+    parsed.data.kind !== "source" ||
+    !row.immutableRef ||
+    !row.repositoryUrl ||
+    !row.repositoryOwner ||
+    !row.repositoryName ||
+    row.repositoryProvider !== "github" ||
+    row.repositoryVisibility !== "public"
+  ) {
+    return false;
+  }
 
   try {
+    const sourceUrl = normalizeSourceUrl(row.sourceUrl);
+    const repositoryUrl = normalizeSourceUrl(row.repositoryUrl);
+    const source = new URL(sourceUrl);
+    const repository = new URL(repositoryUrl);
+    const coordinates = repository.pathname.split("/").filter(Boolean);
     return (
-      normalizeSourceUrl(parsed.data.sourceUrl) === normalizeSourceUrl(row.sourceUrl) &&
+      source.protocol === "https:" &&
+      source.hostname === "github.com" &&
+      source.username === "" &&
+      source.password === "" &&
+      repository.protocol === "https:" &&
+      repository.hostname === "github.com" &&
+      repository.username === "" &&
+      repository.password === "" &&
+      coordinates.length === 2 &&
+      coordinates[0]!.toLowerCase() === row.repositoryOwner.toLowerCase() &&
+      coordinates[1]!.toLowerCase() === row.repositoryName.toLowerCase() &&
+      sourceUrl === repositoryUrl &&
+      normalizeSourceUrl(parsed.data.sourceUrl) === sourceUrl &&
       normalizeSkillPath(parsed.data.skillPath) === normalizeSkillPath(row.skillPath) &&
       parsed.data.immutableRef === row.immutableRef
     );
@@ -268,7 +341,11 @@ function gateReasons(row: VisibleSkillRow): SkillGateReason[] {
   if (!row.hasCurrentObservation) {
     add("NO_CURRENT_SOURCE_OBSERVATION", "No current enabled source observation matches this revision.");
   }
-  if (!hasVerifiedLicense(row.revisionMetadata, row.revisionLicense ?? row.catalogLicense)) {
+  const license = publicLicenseLabel(row.revisionLicense ?? row.catalogLicense);
+  if (!isIndividuallySelectableLicense(license)) {
+    add("LICENSE_NOT_ELIGIBLE", "The public license identifier is not eligible for individual selection.");
+  }
+  if (!hasVerifiedLicense(row.revisionMetadata, license)) {
     add("LICENSE_UNVERIFIED", "Revision-bound public license evidence is not available.");
   }
   if (row.trustState === "unreviewed") {
@@ -319,7 +396,7 @@ function publicSkill(
     description: row.description,
     compatibility: row.compatibility,
     lifecycle: row.lifecycle,
-    license: row.revisionLicense ?? row.catalogLicense,
+    license: publicLicenseLabel(row.revisionLicense ?? row.catalogLicense),
     official: row.officialProvenance,
     categories: categoryMap.get(row.id) ?? [],
     installs: row.installs,
@@ -635,7 +712,7 @@ export async function getPublicPackage(
       skill: {
         name: member.name,
         description: member.description,
-        license: member.license,
+        license: publicLicenseLabel(member.license),
         official: member.officialProvenance,
         trust: { state: member.trustState },
         publisher: {
@@ -646,6 +723,20 @@ export async function getPublicPackage(
       },
     })),
   };
+}
+
+function boundedPublicExclusions(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const exclusions = new Set<string>();
+  for (const candidate of value.slice(0, 50)) {
+    if (typeof candidate !== "string") continue;
+    const normalized = candidate
+      .replace(/[\u0000-\u001f\u007f]+/gu, " ")
+      .trim()
+      .slice(0, 512);
+    if (normalized) exclusions.add(normalized);
+  }
+  return [...exclusions];
 }
 
 export async function publicCoverage(repository: CatalogRepository) {
@@ -660,7 +751,7 @@ export async function publicCoverage(repository: CatalogRepository) {
     lastSuccessfulSyncAt: row.lastSuccessfulSyncAt?.toISOString() ?? null,
     lagMs: row.lagMs,
     degraded: Boolean(row.error) || !["current", "not-configured"].includes(row.state),
-    exclusions: row.exclusions,
+    exclusions: boundedPublicExclusions(row.exclusions),
   }));
   return {
     summary: {

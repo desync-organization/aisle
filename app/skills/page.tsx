@@ -103,6 +103,7 @@ export default async function SkillsPage({ searchParams }: SkillsPageProps) {
             availability={catalog.availability}
             category={category?.slug}
             initialQuery={query}
+            key={`${category?.slug ?? "all"}:${query}`}
             pagination={catalog.pagination}
             skills={catalog.skills}
           />
