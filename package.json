@@ -9,7 +9,7 @@
     "start": "next start",
     "lint": "eslint . --max-warnings=0",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run",
+    "test": "vitest run lib/db && vitest run lib/catalog && vitest run tests",
     "test:watch": "vitest",
     "check": "npm run lint && npm run typecheck && npm test",
     "db:migrate": "tsx scripts/db-migrate.ts",
