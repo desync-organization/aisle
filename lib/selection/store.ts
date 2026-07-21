@@ -4,11 +4,13 @@ import {
   canonicalizePackageSelectionAssertions,
   catalogSkillIdListSchema,
   catalogSkillIdSchema,
+  deriveSelectedCatalogSkillIds,
   LEGACY_SELECTION_STORAGE_KEY,
   MAX_PACKAGE_ASSERTION_MEMBER_REFERENCES,
   MAX_PACKAGE_SELECTION_ASSERTIONS,
   MAX_SELECTED_SKILLS,
   packageSelectionAssertionSchema,
+  packageSelectionSlugSchema,
   SELECTION_STORAGE_KEY,
   SELECTION_STORAGE_VERSION,
   sortAndDedupeCatalogSkillIds,
@@ -28,6 +30,7 @@ export type SelectionPersistenceStatus =
 
 export type SelectionSnapshot = Readonly<{
   ids: readonly CatalogSkillId[];
+  individualIds: readonly CatalogSkillId[];
   packageAssertions: readonly PackageSelectionAssertion[];
   count: number;
   hydrated: boolean;
@@ -63,6 +66,7 @@ export interface SelectionActions {
   toggle(id: unknown): SelectionMutationResult;
   addMany(ids: unknown): SelectionMutationResult;
   addPackage(assertion: unknown): SelectionMutationResult;
+  removePackage(slug: unknown): SelectionMutationResult;
   remove(id: unknown): SelectionMutationResult;
   replace(ids: unknown): SelectionMutationResult;
   clear(): SelectionMutationResult;
@@ -90,6 +94,7 @@ const emptyPackageAssertions = Object.freeze([]) as readonly PackageSelectionAss
 
 export const EMPTY_SELECTION_SERVER_SNAPSHOT: SelectionSnapshot = Object.freeze({
   ids: emptyIds,
+  individualIds: emptyIds,
   packageAssertions: emptyPackageAssertions,
   count: 0,
   hydrated: false,
@@ -98,20 +103,26 @@ export const EMPTY_SELECTION_SERVER_SNAPSHOT: SelectionSnapshot = Object.freeze(
 });
 
 function createSnapshot(
-  ids: readonly CatalogSkillId[],
+  individualIds: readonly CatalogSkillId[],
   packageAssertions: readonly PackageSelectionAssertion[],
   hydrated: boolean,
   persistence: SelectionPersistenceStatus,
 ): SelectionSnapshot {
-  const stableIds = Object.freeze([...ids]);
+  const stableIndividualIds = Object.freeze([
+    ...sortAndDedupeCatalogSkillIds(individualIds),
+  ]);
   const stablePackageAssertions = Object.freeze(
     canonicalizePackageSelectionAssertions(packageAssertions).map((assertion) => Object.freeze({
       ...assertion,
       members: Object.freeze(assertion.members.map((member) => Object.freeze({ ...member }))),
     })),
   );
+  const stableIds = Object.freeze([
+    ...deriveSelectedCatalogSkillIds(stableIndividualIds, stablePackageAssertions),
+  ]);
   return Object.freeze({
     ids: stableIds,
+    individualIds: stableIndividualIds,
     packageAssertions: stablePackageAssertions,
     count: stableIds.length,
     hydrated,
@@ -177,7 +188,7 @@ export function createSelectionStore(
 
       if (decoded.status === "valid") {
         const canonicalPayload = encodePersistedSelection(
-          decoded.ids,
+          decoded.individualIds,
           decoded.packageAssertions,
         );
         let persistence: SelectionPersistenceStatus = "available";
@@ -190,7 +201,7 @@ export function createSelectionStore(
           }
         }
         emit(createSnapshot(
-          decoded.ids,
+          decoded.individualIds,
           decoded.packageAssertions,
           true,
           persistence,
@@ -210,14 +221,17 @@ export function createSelectionStore(
   }
 
   function persist(
-    ids: readonly CatalogSkillId[],
+    individualIds: readonly CatalogSkillId[],
     packageAssertions: readonly PackageSelectionAssertion[],
   ): SelectionPersistenceStatus {
     const storage = resolveStorage();
     if (storage === null) return "unavailable";
 
     try {
-      storage.setItem(storageKey, encodePersistedSelection(ids, packageAssertions));
+      storage.setItem(
+        storageKey,
+        encodePersistedSelection(individualIds, packageAssertions),
+      );
       return "available";
     } catch {
       return "error";
@@ -225,16 +239,16 @@ export function createSelectionStore(
   }
 
   function success(
-    ids: readonly CatalogSkillId[],
+    individualIds: readonly CatalogSkillId[],
     packageAssertions: readonly PackageSelectionAssertion[],
     changed: boolean,
   ): SelectionMutationResult {
     if (changed) {
       emit(createSnapshot(
-        ids,
+        individualIds,
         packageAssertions,
         true,
-        persist(ids, packageAssertions),
+        persist(individualIds, packageAssertions),
       ));
     }
     return { ok: true, changed, snapshot };
@@ -273,6 +287,14 @@ export function createSelectionStore(
     return sortAndDedupeCatalogSkillIds(parsed.data);
   }
 
+  function parsePackageSlug(slug: unknown): string | SelectionMutationResult {
+    const parsed = packageSelectionSlugSchema.safeParse(slug);
+    if (!parsed.success) {
+      return failure("invalid-selection", issuesFromZod(parsed.error.issues));
+    }
+    return parsed.data;
+  }
+
   function isMutationResult(
     value: readonly CatalogSkillId[] | SelectionMutationResult,
   ): value is SelectionMutationResult {
@@ -284,13 +306,12 @@ export function createSelectionStore(
     return snapshot.ids;
   }
 
-  function retainedAssertions(
-    ids: readonly CatalogSkillId[],
-  ): readonly PackageSelectionAssertion[] {
-    const selected = new Set(ids);
-    return snapshot.packageAssertions.filter((assertion) =>
-      assertion.members.every((member) => selected.has(member.selectionId)),
-    );
+  function sameIds(
+    left: readonly CatalogSkillId[],
+    right: readonly CatalogSkillId[],
+  ): boolean {
+    return left.length === right.length &&
+      left.every((id, index) => id === right[index]);
   }
 
   function sameAssertions(
@@ -301,6 +322,25 @@ export function createSelectionStore(
       JSON.stringify(canonicalizePackageSelectionAssertions(right));
   }
 
+  function removeSelectedId(id: CatalogSkillId): SelectionMutationResult {
+    const brokenAssertions = snapshot.packageAssertions.filter((assertion) =>
+      assertion.members.some((member) => member.selectionId === id),
+    );
+    const retainedAssertions = snapshot.packageAssertions.filter((assertion) =>
+      !assertion.members.some((member) => member.selectionId === id),
+    );
+    const promotedIndividuals = brokenAssertions.flatMap((assertion) =>
+      assertion.members
+        .filter((member) => member.selectionId !== id)
+        .map((member) => member.selectionId),
+    );
+    const nextIndividuals = sortAndDedupeCatalogSkillIds([
+      ...snapshot.individualIds.filter((candidate) => candidate !== id),
+      ...promotedIndividuals,
+    ]);
+    return success(nextIndividuals, retainedAssertions, true);
+  }
+
   const actions: SelectionActions = {
     toggle(id) {
       const parsed = parseId(id);
@@ -308,15 +348,14 @@ export function createSelectionStore(
 
       const current = currentIds();
       if (current.includes(parsed)) {
-        const next = current.filter((candidate) => candidate !== parsed);
-        return success(next, retainedAssertions(next), true);
+        return removeSelectedId(parsed);
       }
       if (current.length === MAX_SELECTED_SKILLS) {
         return failure("limit-exceeded");
       }
 
       return success(
-        sortAndDedupeCatalogSkillIds([...current, parsed]),
+        sortAndDedupeCatalogSkillIds([...snapshot.individualIds, parsed]),
         snapshot.packageAssertions,
         true,
       );
@@ -326,14 +365,21 @@ export function createSelectionStore(
       const parsed = parseIds(ids);
       if (isMutationResult(parsed)) return parsed;
 
-      const current = currentIds();
-      const next = sortAndDedupeCatalogSkillIds([...current, ...parsed]);
-      if (next.length > MAX_SELECTED_SKILLS) {
+      hydrate();
+      const nextIndividuals = sortAndDedupeCatalogSkillIds([
+        ...snapshot.individualIds,
+        ...parsed,
+      ]);
+      const nextIds = deriveSelectedCatalogSkillIds(
+        nextIndividuals,
+        snapshot.packageAssertions,
+      );
+      if (nextIds.length > MAX_SELECTED_SKILLS) {
         return failure("limit-exceeded");
       }
 
-      const changed = next.length !== current.length;
-      return success(next, snapshot.packageAssertions, changed);
+      const changed = !sameIds(snapshot.individualIds, nextIndividuals);
+      return success(nextIndividuals, snapshot.packageAssertions, changed);
     },
 
     addPackage(assertion) {
@@ -342,13 +388,6 @@ export function createSelectionStore(
       if (!parsed.success) {
         return failure("invalid-selection", issuesFromZod(parsed.error.issues));
       }
-      const current = currentIds();
-      const nextIds = sortAndDedupeCatalogSkillIds([
-        ...current,
-        ...parsed.data.members.map((member) => member.selectionId),
-      ]);
-      if (nextIds.length > MAX_SELECTED_SKILLS) return failure("limit-exceeded");
-
       const nextAssertions = canonicalizePackageSelectionAssertions([
         ...snapshot.packageAssertions.filter(
           (candidate) => candidate.packageSlug !== parsed.data.packageSlug,
@@ -364,9 +403,28 @@ export function createSelectionStore(
       ) {
         return failure("limit-exceeded");
       }
-      const changed = nextIds.length !== current.length ||
-        !sameAssertions(snapshot.packageAssertions, nextAssertions);
-      return success(nextIds, nextAssertions, changed);
+      const nextIds = deriveSelectedCatalogSkillIds(
+        snapshot.individualIds,
+        nextAssertions,
+      );
+      if (nextIds.length > MAX_SELECTED_SKILLS) return failure("limit-exceeded");
+
+      const changed = !sameAssertions(snapshot.packageAssertions, nextAssertions);
+      return success(snapshot.individualIds, nextAssertions, changed);
+    },
+
+    removePackage(slug) {
+      const parsed = parsePackageSlug(slug);
+      if (typeof parsed !== "string") return parsed;
+      hydrate();
+
+      const nextAssertions = snapshot.packageAssertions.filter(
+        (assertion) => assertion.packageSlug !== parsed,
+      );
+      if (nextAssertions.length === snapshot.packageAssertions.length) {
+        return success(snapshot.individualIds, snapshot.packageAssertions, false);
+      }
+      return success(snapshot.individualIds, nextAssertions, true);
     },
 
     remove(id) {
@@ -375,25 +433,22 @@ export function createSelectionStore(
 
       const current = currentIds();
       if (!current.includes(parsed)) {
-        return success(current, snapshot.packageAssertions, false);
+        return success(snapshot.individualIds, snapshot.packageAssertions, false);
       }
-      const next = current.filter((candidate) => candidate !== parsed);
-      return success(next, retainedAssertions(next), true);
+      return removeSelectedId(parsed);
     },
 
     replace(ids) {
       const parsed = parseIds(ids);
       if (isMutationResult(parsed)) return parsed;
 
-      const current = currentIds();
-      const changed =
-        parsed.length !== current.length ||
-        parsed.some((id, index) => id !== current[index]);
-      const nextAssertions = retainedAssertions(parsed);
+      hydrate();
+      const changed = !sameIds(parsed, snapshot.individualIds) ||
+        snapshot.packageAssertions.length > 0;
       return success(
         parsed,
-        nextAssertions,
-        changed || !sameAssertions(snapshot.packageAssertions, nextAssertions),
+        emptyPackageAssertions,
+        changed,
       );
     },
 
@@ -402,7 +457,8 @@ export function createSelectionStore(
       return success(
         emptyIds,
         emptyPackageAssertions,
-        current.length > 0 || snapshot.packageAssertions.length > 0,
+        current.length > 0 || snapshot.individualIds.length > 0 ||
+          snapshot.packageAssertions.length > 0,
       );
     },
   };

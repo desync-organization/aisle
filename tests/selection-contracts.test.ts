@@ -37,7 +37,8 @@ describe("selection persistence contracts", () => {
   it("uses a strict versioned envelope for IDs and immutable package assertions", () => {
     const envelope = {
       version: SELECTION_STORAGE_VERSION,
-      ids: [catalogId("skill-b"), catalogId("skill-a")],
+      ids: [catalogId("skill-a"), catalogId("skill-b")],
+      individualIds: [catalogId("skill-a"), catalogId("skill-b")],
       packageAssertions: [],
     };
     expect(persistedSelectionEnvelopeSchema.safeParse(envelope).success).toBe(true);
@@ -59,23 +60,31 @@ describe("selection persistence contracts", () => {
     expect(decodePersistedSelection(null)).toEqual({
       status: "missing",
       ids: [],
+      individualIds: [],
       packageAssertions: [],
     });
     expect(decodePersistedSelection("{not-json")).toEqual({
       status: "corrupt",
       ids: [],
+      individualIds: [],
       packageAssertions: [],
     });
     expect(decodePersistedSelection('{"version":0,"ids":["skill-a"]}')).toEqual({
       status: "unsupported-version",
       ids: [],
+      individualIds: [],
       packageAssertions: [],
     });
     expect(
       decodePersistedSelection(
         '{"version":1,"ids":["skill-a"],"command":"whoami"}',
       ),
-    ).toEqual({ status: "corrupt", ids: [], packageAssertions: [] });
+    ).toEqual({
+      status: "corrupt",
+      ids: [],
+      individualIds: [],
+      packageAssertions: [],
+    });
   });
 
   it("serializes a stable sorted and deduplicated payload", () => {
@@ -86,19 +95,20 @@ describe("selection persistence contracts", () => {
     ]);
 
     expect(encoded).toBe(
-      '{"version":2,"ids":["skill-a","skill-z"],"packageAssertions":[]}',
+      '{"version":2,"ids":["skill-a","skill-z"],"individualIds":["skill-a","skill-z"],"packageAssertions":[]}',
     );
     expect(encoded).not.toMatch(/source|command|url/i);
     expect(decodePersistedSelection(encoded)).toEqual({
       status: "valid",
       ids: ["skill-a", "skill-z"],
+      individualIds: ["skill-a", "skill-z"],
       packageAssertions: [],
     });
   });
 
   it("canonicalizes a bounded package receipt with exact member revisions", () => {
     const encoded = encodePersistedSelection(
-      [catalogId("skill_aaaaaaaaaaaaaaaaaaaaaaaa")],
+      [],
       [{
         packageSlug: "frontend-foundations",
         packageVersion: 3,
@@ -112,11 +122,33 @@ describe("selection persistence contracts", () => {
 
     expect(decodePersistedSelection(encoded)).toMatchObject({
       status: "valid",
+      ids: ["skill_aaaaaaaaaaaaaaaaaaaaaaaa"],
+      individualIds: [],
       packageAssertions: [{
         packageSlug: "frontend-foundations",
         packageVersion: 3,
         members: [{ revisionId: "revision_cccccccccccccccccccccccc" }],
       }],
     });
+  });
+
+  it("migrates legacy v1 IDs as explicit individual selections", () => {
+    expect(decodePersistedSelection(
+      '{"version":1,"ids":["skill-z","skill-a","skill-z"]}',
+    )).toEqual({
+      status: "valid",
+      ids: ["skill-a", "skill-z"],
+      individualIds: ["skill-a", "skill-z"],
+      packageAssertions: [],
+    });
+  });
+
+  it("rejects a v2 envelope whose IDs are not the exact provenance union", () => {
+    expect(persistedSelectionEnvelopeSchema.safeParse({
+      version: SELECTION_STORAGE_VERSION,
+      ids: [catalogId("skill-a"), catalogId("skill-orphan")],
+      individualIds: [catalogId("skill-a")],
+      packageAssertions: [],
+    }).success).toBe(false);
   });
 });

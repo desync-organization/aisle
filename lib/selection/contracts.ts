@@ -41,12 +41,14 @@ export const packageSelectionMemberAssertionSchema = z.strictObject({
   revisionId: z.string().regex(/^revision_[a-f0-9]{24}$/),
 });
 
+export const packageSelectionSlugSchema = z
+  .string()
+  .min(1)
+  .max(MAX_PACKAGE_SLUG_LENGTH)
+  .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/);
+
 export const packageSelectionAssertionSchema = z.strictObject({
-  packageSlug: z
-    .string()
-    .min(1)
-    .max(MAX_PACKAGE_SLUG_LENGTH)
-    .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
+  packageSlug: packageSelectionSlugSchema,
   packageVersion: z.number().int().positive().max(2_147_483_647),
   blueprintDigest: z.string().regex(/^sha256:[a-f0-9]{64}$/),
   members: z
@@ -97,21 +99,47 @@ export const persistedSelectionEnvelopeSchema = z
   .strictObject({
     version: z.literal(SELECTION_STORAGE_VERSION),
     ids: catalogSkillIdListSchema,
+    individualIds: catalogSkillIdListSchema,
     packageAssertions: packageSelectionAssertionListSchema,
   })
   .superRefine((envelope, context) => {
-    const selected = new Set(envelope.ids);
-    envelope.packageAssertions.forEach((assertion, assertionIndex) => {
-      assertion.members.forEach((member, memberIndex) => {
-        if (!selected.has(member.selectionId)) {
-          context.addIssue({
-            code: "custom",
-            path: ["packageAssertions", assertionIndex, "members", memberIndex, "selectionId"],
-            message: "Package assertions can reference only selected skill IDs.",
-          });
-        }
+    const canonicalIndividuals = sortAndDedupeCatalogSkillIds(envelope.individualIds);
+    if (
+      canonicalIndividuals.length !== envelope.individualIds.length ||
+      canonicalIndividuals.some((id, index) => id !== envelope.individualIds[index])
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["individualIds"],
+        message: "Individual selection IDs must be unique and canonically sorted.",
       });
-    });
+    }
+
+    const canonicalAssertions = canonicalizePackageSelectionAssertions(
+      envelope.packageAssertions,
+    );
+    if (JSON.stringify(canonicalAssertions) !== JSON.stringify(envelope.packageAssertions)) {
+      context.addIssue({
+        code: "custom",
+        path: ["packageAssertions"],
+        message: "Package assertions and their members must be canonically sorted.",
+      });
+    }
+
+    const derivedIds = deriveSelectedCatalogSkillIds(
+      envelope.individualIds,
+      envelope.packageAssertions,
+    );
+    if (
+      derivedIds.length !== envelope.ids.length ||
+      derivedIds.some((id, index) => id !== envelope.ids[index])
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["ids"],
+        message: "Selected IDs must be the canonical exact union of individual and package selections.",
+      });
+    }
   });
 
 export const legacyPersistedSelectionEnvelopeSchema = z.strictObject({
@@ -129,8 +157,12 @@ export type PackageSelectionAssertion = Readonly<
   }
 >;
 export type PersistedSelectionEnvelope = Readonly<
-  Omit<z.infer<typeof persistedSelectionEnvelopeSchema>, "ids" | "packageAssertions"> & {
+  Omit<
+    z.infer<typeof persistedSelectionEnvelopeSchema>,
+    "ids" | "individualIds" | "packageAssertions"
+  > & {
     ids: readonly CatalogSkillId[];
+    individualIds: readonly CatalogSkillId[];
     packageAssertions: readonly PackageSelectionAssertion[];
   }
 >;
@@ -164,4 +196,16 @@ export function canonicalizePackageSelectionAssertions(
           ? 1
           : 0,
     );
+}
+
+export function deriveSelectedCatalogSkillIds(
+  individualIds: readonly CatalogSkillId[],
+  assertions: readonly PackageSelectionAssertion[],
+): readonly CatalogSkillId[] {
+  return sortAndDedupeCatalogSkillIds([
+    ...individualIds,
+    ...assertions.flatMap((assertion) =>
+      assertion.members.map((member) => member.selectionId),
+    ),
+  ]);
 }
