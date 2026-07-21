@@ -100,6 +100,7 @@ function coverageRecord(
     repositoryLicenseEvidence: null,
     artifact: null,
     raw: {
+      kind: "getskillary-observation",
       schemaVersion: 1,
       observationKind: "coverage-only",
       providerRecordId: skill.providerRecordId,
