@@ -3,10 +3,17 @@ import { resolve } from "node:path";
 
 import { createCatalogDatabase } from "@/lib/db/client";
 import { CatalogRepository } from "@/lib/db/repository";
+import { normalizeSkillPath, normalizeSourceUrl } from "@/lib/catalog/normalization";
+import type {
+  PackageBindingIssue,
+  PublishedPackageBinding,
+  PublishedPackageMemberBinding,
+} from "@/lib/marketplace/package-binding";
 import type {
   CatalogSelectionGateReason,
   CatalogTrustState,
 } from "@/lib/marketplace/selection-gates";
+import { packageBlueprintDigest, type PackageBlueprint } from "@/lib/packages";
 
 const DEFAULT_CATALOG_PAGE_SIZE = 48;
 const MAX_CATALOG_PAGE_SIZE = 48;
@@ -57,16 +64,11 @@ export type MarketplaceCatalogSnapshot = Readonly<{
 }>;
 
 export type ResolvedPackageSnapshot = Readonly<{
-  availability: "resolved" | "pending" | "not-configured" | "unavailable";
-  members: ReadonlyArray<
-    Readonly<{
-      position: number;
-      skillId: string;
-      name: string;
-      trustState: "unreviewed" | "pass" | "warn";
-      immutableRef: string;
-    }>
-  >;
+  availability: "resolved" | "pending" | "binding-mismatch" | "not-configured" | "unavailable";
+  expectedBlueprintDigest: string;
+  binding: PublishedPackageBinding | null;
+  mismatchReasons: ReadonlyArray<PackageBindingIssue>;
+  members: ReadonlyArray<PublishedPackageMemberBinding>;
 }>;
 
 export type MarketplaceSkillSnapshot = Readonly<{
@@ -170,30 +172,246 @@ export async function loadMarketplaceCatalog(
   }
 }
 
-export async function loadResolvedPackage(slug: string): Promise<ResolvedPackageSnapshot> {
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function canonicalJson(value: unknown): string | null {
+  if (value === null || typeof value === "string" || typeof value === "boolean") {
+    return JSON.stringify(value) ?? null;
+  }
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? JSON.stringify(value) ?? null : null;
+  }
+  if (Array.isArray(value)) {
+    const entries = value.map(canonicalJson);
+    return entries.some((entry) => entry === null) ? null : `[${entries.join(",")}]`;
+  }
+  if (!isRecord(value)) return null;
+  const entries = Object.keys(value).sort().map((key) => {
+    const serialized = canonicalJson(value[key]);
+    return serialized === null ? null : `${JSON.stringify(key) ?? '""'}:${serialized}`;
+  });
+  return entries.some((entry) => entry === null) ? null : `{${entries.join(",")}}`;
+}
+
+function inspectPublishedPackage(
+  rows: ReadonlyArray<unknown>,
+  blueprint: PackageBlueprint,
+  expectedBlueprintDigest: string,
+): Omit<ResolvedPackageSnapshot, "availability" | "expectedBlueprintDigest"> & Readonly<{
+  exact: boolean;
+}> {
+  const mismatchReasons = new Set<PackageBindingIssue>();
+  const records = rows.filter(isRecord);
+  const first = records[0];
+  if (!first || records.length !== rows.length) {
+    return {
+      exact: false,
+      binding: null,
+      mismatchReasons: ["publication-metadata-missing"],
+      members: [],
+    };
+  }
+
+  const versionId = typeof first.versionId === "string" && first.versionId.length > 0
+    ? first.versionId
+    : null;
+  const version = typeof first.version === "number" && Number.isSafeInteger(first.version) && first.version > 0
+    ? first.version
+    : null;
+  const blueprintSchemaVersion = typeof first.blueprintSchemaVersion === "number" &&
+    Number.isSafeInteger(first.blueprintSchemaVersion) &&
+    first.blueprintSchemaVersion > 0
+    ? first.blueprintSchemaVersion
+    : null;
+  const blueprintDigest = typeof first.blueprintDigest === "string" &&
+    /^sha256:[a-f0-9]{64}$/.test(first.blueprintDigest)
+    ? first.blueprintDigest
+    : null;
+  const editorial = isRecord(first.editorial) ? first.editorial : null;
+
+  if (!versionId || version === null || blueprintSchemaVersion === null || !blueprintDigest || !editorial) {
+    mismatchReasons.add("publication-metadata-missing");
+  }
+
+  const binding: PublishedPackageBinding | null = versionId &&
+    version !== null &&
+    blueprintSchemaVersion !== null &&
+    blueprintDigest &&
+    editorial
+    ? { versionId, version, blueprintSchemaVersion, blueprintDigest, editorial }
+    : null;
+
+  if (blueprintDigest && blueprintDigest !== expectedBlueprintDigest) {
+    mismatchReasons.add("blueprint-digest-mismatch");
+  }
+  if (blueprintSchemaVersion !== null && blueprintSchemaVersion !== blueprint.schemaVersion) {
+    mismatchReasons.add("schema-version-mismatch");
+  }
+  if (
+    editorial &&
+    canonicalJson(editorial) !== canonicalJson(blueprint.editorial)
+  ) {
+    mismatchReasons.add("editorial-mismatch");
+  }
+  if (
+    first.slug !== blueprint.slug ||
+    first.title !== blueprint.editorial.title ||
+    first.description !== blueprint.editorial.summary
+  ) {
+    mismatchReasons.add("editorial-mismatch");
+  }
+  if (records.length !== blueprint.members.length) {
+    mismatchReasons.add("member-count-mismatch");
+  }
+
+  const members: PublishedPackageMemberBinding[] = [];
+  const recordsByPosition = new Map<number, Record<string, unknown>>();
+  for (const row of records) {
+    if (typeof row.position !== "number" || !Number.isSafeInteger(row.position)) {
+      mismatchReasons.add("member-count-mismatch");
+      continue;
+    }
+    if (recordsByPosition.has(row.position)) mismatchReasons.add("member-count-mismatch");
+    recordsByPosition.set(row.position, row);
+
+    if (
+      row.versionId !== versionId ||
+      row.version !== version ||
+      row.blueprintSchemaVersion !== blueprintSchemaVersion ||
+      row.blueprintDigest !== blueprintDigest ||
+      canonicalJson(row.editorial) !== canonicalJson(editorial)
+    ) {
+      mismatchReasons.add("publication-metadata-missing");
+    }
+  }
+
+  for (const expected of blueprint.members) {
+    const row = recordsByPosition.get(expected.position);
+    if (!row) {
+      mismatchReasons.add("member-count-mismatch");
+      continue;
+    }
+
+    let normalizedLocatorMatches = false;
+    if (typeof row.sourceUrl === "string" && typeof row.skillPath === "string") {
+      try {
+        normalizedLocatorMatches =
+          normalizeSourceUrl(row.sourceUrl) === normalizeSourceUrl(expected.locator.repositoryUrl) &&
+          normalizeSkillPath(row.skillPath) === normalizeSkillPath(expected.locator.skillPath);
+      } catch {
+        normalizedLocatorMatches = false;
+      }
+    }
+    const locatorMatches = normalizedLocatorMatches &&
+      row.name === expected.locator.upstreamSkillName &&
+      row.selectedByDefault === expected.defaultSelected;
+    if (!locatorMatches) mismatchReasons.add("member-locator-mismatch");
+
+    const expectedHead = expected.observedSource?.headSha;
+    const revisionMatches = typeof expectedHead === "string" &&
+      row.immutableRef === expectedHead &&
+      typeof row.skillId === "string" &&
+      row.skillId.length > 0 &&
+      typeof row.revisionId === "string" &&
+      row.revisionId.length > 0 &&
+      typeof row.contentHash === "string" &&
+      row.contentHash.length > 0 &&
+      (row.trustState === "pass" || row.trustState === "warn");
+    if (!revisionMatches) mismatchReasons.add("member-revision-mismatch");
+    if (row.license !== expected.observedLicense.spdx) {
+      mismatchReasons.add("member-license-mismatch");
+    }
+
+    if (
+      typeof row.skillId === "string" &&
+      typeof row.name === "string" &&
+      typeof row.sourceUrl === "string" &&
+      typeof row.skillPath === "string" &&
+      typeof row.revisionId === "string" &&
+      typeof row.immutableRef === "string" &&
+      typeof row.contentHash === "string" &&
+      typeof row.license === "string" &&
+      (row.trustState === "pass" || row.trustState === "warn")
+    ) {
+      members.push({
+        position: expected.position,
+        skillId: row.skillId,
+        name: row.name,
+        sourceUrl: row.sourceUrl,
+        skillPath: row.skillPath,
+        revisionId: row.revisionId,
+        immutableRef: row.immutableRef,
+        contentHash: row.contentHash,
+        license: row.license,
+        trustState: row.trustState,
+      });
+    }
+  }
+
+  if (members.length !== blueprint.members.length) mismatchReasons.add("member-count-mismatch");
+  if (
+    new Set(members.map((member) => member.skillId)).size !== members.length ||
+    new Set(members.map((member) => member.revisionId)).size !== members.length ||
+    new Set(members.map((member) => member.contentHash)).size !== members.length
+  ) {
+    mismatchReasons.add("member-revision-mismatch");
+  }
+  return {
+    exact: mismatchReasons.size === 0 && binding !== null,
+    binding,
+    mismatchReasons: [...mismatchReasons],
+    members,
+  };
+}
+
+export async function loadResolvedPackage(
+  blueprint: PackageBlueprint,
+): Promise<ResolvedPackageSnapshot> {
+  const expectedBlueprintDigest = packageBlueprintDigest(blueprint);
   if (!hasConfiguredDatabase()) {
-    return { availability: "not-configured", members: [] };
+    return {
+      availability: "not-configured",
+      expectedBlueprintDigest,
+      binding: null,
+      mismatchReasons: [],
+      members: [],
+    };
   }
 
   const connection = createCatalogDatabase();
   const repository = new CatalogRepository(connection.db);
 
   try {
-    const rows = await repository.resolvePackage(slug);
-    if (rows.length === 0) return { availability: "pending", members: [] };
+    const rows = await repository.resolvePackage(blueprint.slug);
+    if (rows.length === 0) {
+      return {
+        availability: "pending",
+        expectedBlueprintDigest,
+        binding: null,
+        mismatchReasons: [],
+        members: [],
+      };
+    }
+
+    const inspected = inspectPublishedPackage(rows, blueprint, expectedBlueprintDigest);
 
     return {
-      availability: "resolved",
-      members: rows.map((row) => ({
-        position: row.position,
-        skillId: row.skillId,
-        name: row.name,
-        trustState: row.trustState,
-        immutableRef: row.immutableRef,
-      })),
+      availability: inspected.exact ? "resolved" : "binding-mismatch",
+      expectedBlueprintDigest,
+      binding: inspected.binding,
+      mismatchReasons: inspected.mismatchReasons,
+      members: inspected.members,
     };
   } catch {
-    return { availability: "unavailable", members: [] };
+    return {
+      availability: "unavailable",
+      expectedBlueprintDigest,
+      binding: null,
+      mismatchReasons: [],
+      members: [],
+    };
   } finally {
     connection.client.close();
   }

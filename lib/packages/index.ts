@@ -5,6 +5,7 @@ export {
   githubSkillLocatorSchema,
   launchLicenseSpdxSchema,
   licenseEvidenceClassSchema,
+  packageBlueprintDigest,
   packageBlueprintMemberSchema,
   packageBlueprintSchema,
   packageCategories,

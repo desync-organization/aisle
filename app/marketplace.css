@@ -647,8 +647,19 @@
   background: rgba(134, 232, 196, 0.035);
 }
 
+.package-resolution--mismatch {
+  color: var(--danger);
+  border-color: rgba(255, 141, 141, 0.24);
+  background: rgba(255, 141, 141, 0.035);
+}
+
 .package-resolution strong { color: var(--paper); font-size: 0.75rem; }
-.package-resolution p { margin: 5px 0 0; color: var(--muted); font-size: 0.64rem; line-height: 1.55; }
+.package-resolution p { margin: 5px 0 0; color: var(--muted); font-size: 0.64rem; line-height: 1.55; overflow-wrap: anywhere; }
+.package-resolution__issues { margin: 10px 0 0; padding-left: 18px; color: #c99e9e; font-size: 0.55rem; line-height: 1.55; }
+.package-resolution__receipt { display: grid; gap: 5px; margin: 12px 0 0; }
+.package-resolution__receipt > div { display: grid; grid-template-columns: 60px minmax(0, 1fr); gap: 8px; }
+.package-resolution__receipt dt { color: #857b88; font-size: 0.5rem; text-transform: uppercase; }
+.package-resolution__receipt dd { min-width: 0; margin: 0; color: #b9adb9; font-family: "JetBrains Mono Variable", monospace; font-size: 0.49rem; overflow-wrap: anywhere; }
 .package-resolution__count { position: absolute; right: 24px; bottom: -29px; display: inline-flex; align-items: center; gap: 5px; color: var(--muted); font-size: 0.58rem; }
 
 .package-outcome {

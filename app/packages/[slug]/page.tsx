@@ -38,12 +38,14 @@ export default async function PackagePage({ params }: PackagePageProps) {
   const blueprint = getLaunchPackageBlueprint(slug);
   if (!blueprint) notFound();
 
-  const resolved = await loadResolvedPackage(slug);
+  const resolved = await loadResolvedPackage(blueprint);
   const category = getCatalogCategoryForEditorial(blueprint.editorial.category);
   const resolvedByPosition = new Map(resolved.members.map((member) => [member.position, member]));
-  const resolvedSkillIds = blueprint.members
-    .map((member) => resolvedByPosition.get(member.position)?.skillId)
-    .filter((skillId): skillId is string => Boolean(skillId));
+  const resolvedSkillIds = resolved.availability === "resolved"
+    ? blueprint.members
+        .map((member) => resolvedByPosition.get(member.position)?.skillId)
+        .filter((skillId): skillId is string => Boolean(skillId))
+    : [];
 
   return (
     <div className="site-frame">
@@ -71,7 +73,15 @@ export default async function PackagePage({ params }: PackagePageProps) {
             </dl>
           </header>
 
-          <PackageSelection availability={resolved.availability} memberCount={blueprint.members.length} skillIds={resolvedSkillIds} />
+          <PackageSelection
+            availability={resolved.availability}
+            binding={resolved.binding}
+            expectedBlueprintDigest={resolved.expectedBlueprintDigest}
+            expectedBlueprintSchemaVersion={blueprint.schemaVersion}
+            memberCount={blueprint.members.length}
+            mismatchReasons={resolved.mismatchReasons}
+            skillIds={resolvedSkillIds}
+          />
 
           <section aria-labelledby="package-outcome" className="package-outcome">
             <span>Designed outcome</span>
@@ -89,7 +99,9 @@ export default async function PackagePage({ params }: PackagePageProps) {
             </div>
             <ol className="package-member-list">
               {blueprint.members.map((member) => {
-                const resolvedMember = resolvedByPosition.get(member.position);
+                const resolvedMember = resolved.availability === "resolved"
+                  ? resolvedByPosition.get(member.position)
+                  : undefined;
                 const snapshotUrl = sourceSnapshotUrl(
                   member.locator.repositoryUrl,
                   member.locator.skillPath,
@@ -112,7 +124,9 @@ export default async function PackagePage({ params }: PackagePageProps) {
                       <div><dt>Revision</dt><dd>{member.observedSource?.headSha.slice(0, 8) ?? "Not observed"}</dd></div>
                     </dl>
                     <div className="package-member-list__actions">
-                      {resolvedMember ? <span className="member-ready"><Check aria-hidden="true" size={13} /> Catalog ready</span> : <span>Resolution pending</span>}
+                      {resolvedMember
+                        ? <span className="member-ready"><Check aria-hidden="true" size={13} /> Exact binding</span>
+                        : <span>{resolved.availability === "binding-mismatch" ? "Binding mismatch" : "Resolution pending"}</span>}
                       <a href={snapshotUrl} rel="noreferrer" target="_blank">
                         <GitBranch aria-hidden="true" size={14} /> View source <ArrowUpRight aria-hidden="true" size={13} />
                       </a>
