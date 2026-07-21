@@ -139,7 +139,12 @@ export default function SafetyPage() {
               </p>
             </div>
           </div>
-          <div className="trust-table-shell">
+          <div
+            aria-label="Trust label table, horizontally scrollable"
+            className="trust-table-shell"
+            role="region"
+            tabIndex={0}
+          >
             <table className="trust-table">
               <caption className="sr-only">Aisle trust labels, meanings, and default install behavior</caption>
               <thead>

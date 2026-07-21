@@ -1718,6 +1718,12 @@ input:focus-visible {
   border: 1px solid var(--line);
   border-radius: var(--radius-md);
   background: rgba(255, 255, 255, 0.012);
+  scrollbar-color: var(--iris-dark) var(--ink-soft);
+}
+
+.trust-table-shell:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--iris-bright) 86%, white);
+  outline-offset: 4px;
 }
 
 .trust-table {
