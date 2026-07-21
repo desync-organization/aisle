@@ -264,6 +264,43 @@ describe("CatalogRepository invariants", () => {
     );
   });
 
+  it("does not let canonical re-ingestion overwrite a newer quarantine for the same scanner", async () => {
+    const run = await repository.acquireSyncRun("skills-sh");
+    const fixture = candidate("canonical-monotonic-trust");
+    const persisted = await ingestion.persist("skills-sh", run.id, fixture);
+    await repository.recordTrustAssessment({
+      revisionId: persisted.revisionId!,
+      immutableRef: fixture.immutableRef!,
+      contentHash: fixture.contentHash!,
+      scanner: "aisle-static",
+      scannerVersion: "manual-review-1",
+      state: "quarantined",
+      quarantineReason: "Inert future quarantine fixture.",
+      findings: [
+        {
+          code: "FUTURE_QUARANTINE_FIXTURE",
+          severity: "critical",
+          path: "SKILL.md",
+          message: "Inert.",
+          evidence: null,
+        },
+      ],
+      scannedAt: new Date(Date.now() + 60_000),
+    });
+
+    await ingestion.persist("skills-sh", run.id, fixture);
+
+    expect(await repository.trustDetails(persisted.revisionId!)).toEqual([
+      expect.objectContaining({
+        scanner: "aisle-static",
+        scannerVersion: "manual-review-1",
+        state: "quarantined",
+        code: "FUTURE_QUARANTINE_FIXTURE",
+      }),
+    ]);
+    expect(await repository.search()).toEqual([]);
+  });
+
   it("binds observation failures to the explicit provider hash, not local scan bytes", async () => {
     const run = await repository.acquireSyncRun("skills-sh");
     const upstreamHash = "provider-revision-v1";
@@ -497,6 +534,63 @@ describe("CatalogRepository invariants", () => {
       ],
     });
     expect(await repository.resolvePackage("invariants", 1)).toEqual([]);
+  });
+
+  it("blocks an unlinked unresolved package member while retaining its provenance", async () => {
+    const run = await repository.acquireSyncRun("skills-sh");
+    const fixture = candidate("unresolved-package", { sourceRecordId: "unresolved-package" });
+    const persisted = await ingestion.persist("skills-sh", run.id, fixture);
+    const now = new Date();
+    await connection.db.insert(packages).values({
+      id: "unresolved-package",
+      slug: "unresolved-package",
+      title: "Unresolved package",
+      description: "Inert unresolved-listing fixture.",
+      published: true,
+      createdAt: now,
+      updatedAt: now,
+    });
+    await connection.db.insert(packageVersions).values({
+      id: "unresolved-package-v1",
+      packageId: "unresolved-package",
+      version: 1,
+      publishedAt: now,
+      createdAt: now,
+    });
+    await connection.db.insert(packageMembers).values({
+      packageVersionId: "unresolved-package-v1",
+      skillId: persisted.skillId!,
+      revisionId: persisted.revisionId!,
+      position: 0,
+    });
+    expect(await repository.resolvePackage("unresolved-package")).toHaveLength(1);
+
+    await repository.markCompleteCrawlMisses("skills-sh", "unseen-run", 2);
+    expect(await repository.resolvePackage("unresolved-package")).toHaveLength(1);
+
+    const unresolved = { ...fixture, artifact: null };
+    expect(await ingestion.persist("skills-sh", run.id, unresolved)).toMatchObject({
+      resolved: false,
+      skillId: null,
+      revisionId: null,
+    });
+    expect(await repository.resolvePackage("unresolved-package")).toEqual([]);
+
+    const [listing] = await connection.db
+      .select()
+      .from(sourceListings)
+      .where(eq(sourceListings.id, persisted.listingId));
+    const [retainedSkill] = await connection.db
+      .select()
+      .from(skills)
+      .where(eq(skills.id, persisted.skillId!));
+    const [retainedRevision] = await connection.db
+      .select()
+      .from(skillRevisions)
+      .where(eq(skillRevisions.id, persisted.revisionId!));
+    expect(listing).toMatchObject({ status: "unresolved", skillId: null });
+    expect(retainedSkill?.id).toBe(persisted.skillId);
+    expect(retainedRevision?.id).toBe(persisted.revisionId);
   });
 
   it("allows package resolution from exact repository-root license evidence", async () => {

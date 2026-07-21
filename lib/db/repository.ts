@@ -41,6 +41,34 @@ import {
 
 type SourceMode = (typeof sourceModes)[number];
 type LifecycleState = (typeof lifecycleStates)[number];
+type CatalogTransaction = Parameters<Parameters<CatalogDatabase["transaction"]>[0]>[0];
+type TrustState = "unreviewed" | "pass" | "warn" | "fail" | "quarantined";
+type TrustFindingInput = {
+  code: string;
+  severity: "info" | "warning" | "critical";
+  path: string | null;
+  message: string;
+  evidence: string | null;
+};
+type TrustAssessmentWrite = {
+  revisionId: string;
+  immutableRef: string;
+  contentHash: string;
+  scanner: string;
+  scannerVersion: string;
+  state: TrustState;
+  quarantineReason: string | null;
+  findings: TrustFindingInput[];
+  scannedAt: Date;
+};
+
+const trustStateRank: Record<TrustState, number> = {
+  unreviewed: 0,
+  pass: 1,
+  warn: 2,
+  fail: 3,
+  quarantined: 4,
+};
 const packageEligibleLicenses = [
   "MIT",
   "Apache-2.0",
@@ -89,6 +117,14 @@ function hasSelectableTrust() {
       and selectable_trust.immutable_ref = ${skillRevisions.immutableRef}
       and selectable_trust.content_hash = ${skillRevisions.contentHash}
       and selectable_trust.state in ('pass', 'warn')
+  )`;
+}
+
+function hasActiveSourceListing() {
+  return sql<boolean>`exists (
+    select 1 from source_listings active_listing
+    where active_listing.skill_id = ${skills.id}
+      and active_listing.status in ('current', 'stale')
   )`;
 }
 
@@ -203,6 +239,99 @@ export class CatalogSyncLeaseLostError extends Error {
 export class CatalogRepository {
   constructor(readonly db: CatalogDatabase) {}
 
+  private async writeMonotonicTrustAssessment(
+    transaction: CatalogTransaction,
+    input: TrustAssessmentWrite,
+  ): Promise<boolean> {
+    if (
+      input.findings.some((finding) => finding.severity === "critical") &&
+      !["fail", "quarantined"].includes(input.state)
+    ) {
+      throw new Error("Critical trust findings require a fail or quarantined state");
+    }
+
+    const [revision] = await transaction
+      .select({
+        immutableRef: skillRevisions.immutableRef,
+        contentHash: skillRevisions.contentHash,
+      })
+      .from(skillRevisions)
+      .where(eq(skillRevisions.id, input.revisionId))
+      .limit(1);
+    if (
+      !revision ||
+      revision.immutableRef !== input.immutableRef ||
+      revision.contentHash !== input.contentHash
+    ) {
+      throw new Error("Trust assessment did not match the immutable revision and content hash");
+    }
+
+    const [existing] = await transaction
+      .select({
+        id: trustAssessments.id,
+        scannedAt: trustAssessments.scannedAt,
+        state: trustAssessments.state,
+      })
+      .from(trustAssessments)
+      .where(
+        and(
+          eq(trustAssessments.revisionId, input.revisionId),
+          eq(trustAssessments.scanner, input.scanner),
+        ),
+      )
+      .limit(1);
+    if (
+      existing &&
+      (existing.scannedAt > input.scannedAt ||
+        (existing.scannedAt.getTime() === input.scannedAt.getTime() &&
+          trustStateRank[existing.state] >= trustStateRank[input.state]))
+    ) {
+      return false;
+    }
+
+    const assessmentId =
+      existing?.id ?? stableId("assessment", `${input.revisionId}:${input.scanner}`);
+    await transaction
+      .insert(trustAssessments)
+      .values({
+        id: assessmentId,
+        revisionId: input.revisionId,
+        scanner: input.scanner,
+        scannerVersion: input.scannerVersion,
+        immutableRef: input.immutableRef,
+        contentHash: input.contentHash,
+        state: input.state,
+        quarantineReason: input.quarantineReason,
+        scannedAt: input.scannedAt,
+      })
+      .onConflictDoUpdate({
+        target: [trustAssessments.revisionId, trustAssessments.scanner],
+        set: {
+          scannerVersion: input.scannerVersion,
+          immutableRef: input.immutableRef,
+          contentHash: input.contentHash,
+          state: input.state,
+          quarantineReason: input.quarantineReason,
+          scannedAt: input.scannedAt,
+        },
+      });
+
+    await transaction
+      .delete(trustFindings)
+      .where(eq(trustFindings.assessmentId, assessmentId));
+    for (const [index, finding] of input.findings.entries()) {
+      await transaction.insert(trustFindings).values({
+        id: stableId(
+          "finding",
+          `${assessmentId}:${index}:${finding.code}:${finding.path ?? ""}`,
+        ),
+        assessmentId,
+        ...finding,
+      });
+    }
+    return true;
+  }
+
   async upsertCategory(input: {
     slug: string;
     name: string;
@@ -277,6 +406,7 @@ export class CatalogRepository {
       isNotNull(skillRevisions.upstreamHash),
       ne(skillRevisions.upstreamHash, ""),
       hasStructurallyValidInstallSpec(),
+      hasActiveSourceListing(),
       notExists(
         this.db
           .select({ value: sql`1` })
@@ -479,6 +609,7 @@ export class CatalogRepository {
           isNotNull(skillRevisions.upstreamHash),
           ne(skillRevisions.upstreamHash, ""),
           hasStructurallyValidInstallSpec(),
+          hasActiveSourceListing(),
           inArray(skillRevisions.license, packageEligibleLicenses),
           sql`json_extract(${skillRevisions.metadataJson}, '$.licenseEvidence.sha256') is not null`,
           notExists(
@@ -1092,104 +1223,16 @@ export class CatalogRepository {
     contentHash: string;
     scanner: string;
     scannerVersion: string;
-    state: "unreviewed" | "pass" | "warn" | "fail" | "quarantined";
+    state: TrustState;
     quarantineReason: string | null;
-    findings: Array<{
-      code: string;
-      severity: "info" | "warning" | "critical";
-      path: string | null;
-      message: string;
-      evidence: string | null;
-    }>;
+    findings: TrustFindingInput[];
     scannedAt?: Date;
   }): Promise<void> {
-    if (
-      input.findings.some((finding) => finding.severity === "critical") &&
-      !["fail", "quarantined"].includes(input.state)
-    ) {
-      throw new Error("Critical trust findings require a fail or quarantined state");
-    }
-    const scannedAt = input.scannedAt ?? new Date();
-    const assessmentId = stableId("assessment", `${input.revisionId}:${input.scanner}`);
     await this.db.transaction(async (transaction) => {
-      const [revision] = await transaction
-        .select({
-          immutableRef: skillRevisions.immutableRef,
-          contentHash: skillRevisions.contentHash,
-        })
-        .from(skillRevisions)
-        .where(eq(skillRevisions.id, input.revisionId))
-        .limit(1);
-      if (
-        !revision ||
-        revision.immutableRef !== input.immutableRef ||
-        revision.contentHash !== input.contentHash
-      ) {
-        throw new Error("Trust assessment did not match the immutable revision and content hash");
-      }
-      const [existing] = await transaction
-        .select({ scannedAt: trustAssessments.scannedAt, state: trustAssessments.state })
-        .from(trustAssessments)
-        .where(
-          and(
-            eq(trustAssessments.revisionId, input.revisionId),
-            eq(trustAssessments.scanner, input.scanner),
-          ),
-        )
-        .limit(1);
-      if (existing) {
-        const stateRank = {
-          unreviewed: 0,
-          pass: 1,
-          warn: 2,
-          fail: 3,
-          quarantined: 4,
-        } as const;
-        if (
-          existing.scannedAt > scannedAt ||
-          (existing.scannedAt.getTime() === scannedAt.getTime() &&
-            stateRank[existing.state] >= stateRank[input.state])
-        ) {
-          return;
-        }
-      }
-      await transaction
-        .insert(trustAssessments)
-        .values({
-          id: assessmentId,
-          revisionId: input.revisionId,
-          scanner: input.scanner,
-          scannerVersion: input.scannerVersion,
-          immutableRef: input.immutableRef,
-          contentHash: input.contentHash,
-          state: input.state,
-          quarantineReason: input.quarantineReason,
-          scannedAt,
-        })
-        .onConflictDoUpdate({
-          target: [trustAssessments.revisionId, trustAssessments.scanner],
-          set: {
-            scannerVersion: input.scannerVersion,
-            immutableRef: input.immutableRef,
-            contentHash: input.contentHash,
-            state: input.state,
-            quarantineReason: input.quarantineReason,
-            scannedAt,
-          },
-        });
-      await transaction
-        .delete(trustFindings)
-        .where(eq(trustFindings.assessmentId, assessmentId));
-      for (const [index, finding] of input.findings.entries()) {
-        await transaction.insert(trustFindings).values({
-          id: stableId(
-            "finding",
-            `${assessmentId}:${index}:${finding.code}:${finding.path ?? ""}`,
-          ),
-          assessmentId,
-          ...finding,
-        });
-      }
+      await this.writeMonotonicTrustAssessment(transaction, {
+        ...input,
+        scannedAt: input.scannedAt ?? new Date(),
+      });
     });
   }
 
@@ -1447,56 +1490,13 @@ export class CatalogRepository {
         .limit(1);
 
       if (input.trustAssessment) {
-        const hasCritical = input.trustAssessment.findings.some(
-          (finding) => finding.severity === "critical",
-        );
-        if (
-          hasCritical &&
-          !["fail", "quarantined"].includes(input.trustAssessment.state)
-        ) {
-          throw new Error("Critical trust findings require a fail or quarantined state");
-        }
-        const assessmentId = stableId(
-          "assessment",
-          `${revisionId}:${input.trustAssessment.scanner}`,
-        );
-        await transaction
-          .insert(trustAssessments)
-          .values({
-            id: assessmentId,
-            revisionId,
-            scanner: input.trustAssessment.scanner,
-            scannerVersion: input.trustAssessment.scannerVersion,
-            immutableRef: input.immutableRef,
-            contentHash: input.contentHash,
-            state: input.trustAssessment.state,
-            quarantineReason: input.trustAssessment.quarantineReason,
-            scannedAt: now,
-          })
-          .onConflictDoUpdate({
-            target: [trustAssessments.revisionId, trustAssessments.scanner],
-            set: {
-              scannerVersion: input.trustAssessment.scannerVersion,
-              immutableRef: input.immutableRef,
-              contentHash: input.contentHash,
-              state: input.trustAssessment.state,
-              quarantineReason: input.trustAssessment.quarantineReason,
-              scannedAt: now,
-            },
-          });
-        await transaction
-          .delete(trustFindings)
-          .where(eq(trustFindings.assessmentId, assessmentId));
-        for (const [index, finding] of input.trustAssessment.findings.entries()) {
-          await transaction.insert(trustFindings).values({
-            id: stableId(
-              "finding",
-              `${assessmentId}:${index}:${finding.code}:${finding.path ?? ""}`,
-            ),
-            assessmentId,
-            ...finding,
-          });
-        }
+        await this.writeMonotonicTrustAssessment(transaction, {
+          revisionId,
+          immutableRef: input.immutableRef,
+          contentHash: input.contentHash,
+          ...input.trustAssessment,
+          scannedAt: now,
+        });
       }
       for (const audit of input.upstreamAudits ?? []) {
         await transaction.insert(auditRecords).values({
