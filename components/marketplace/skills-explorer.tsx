@@ -177,7 +177,7 @@ export function SkillsExplorer({
             <p>{emptyCopy.body}</p>
           </div>
           {skills.length > 0 ? (
-            <Button onClick={() => { setQuery(""); setTrust("all"); setProvenance("all"); }} variant="secondary">
+            <Button onClick={() => { clearSearch(); setTrust("all"); setProvenance("all"); }} variant="secondary">
               Reset filters
             </Button>
           ) : null}
