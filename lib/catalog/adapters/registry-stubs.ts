@@ -35,5 +35,7 @@ export const providerApprovedRegistryStubs: CatalogSourceConnector[] = [
       "The documented API requires a search query and rejects wildcard enumeration, so only future labeled federated searches are eligible.",
     ],
   }),
-  ...widerPublicSourceDescriptors.map((descriptor) => new ProviderApprovedStub(descriptor)),
+  ...widerPublicSourceDescriptors
+    .filter((descriptor) => descriptor.id !== "agentskills-in")
+    .map((descriptor) => new ProviderApprovedStub(descriptor)),
 ];

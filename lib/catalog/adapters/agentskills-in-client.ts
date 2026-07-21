@@ -39,7 +39,7 @@ const providerSkillSchema = z
 
 const listResponseSchema = z
   .object({
-    skills: z.array(providerSkillSchema),
+    skills: z.array(providerSkillSchema).max(MAX_PAGE_SIZE),
     total: z.number().int().nonnegative(),
     limit: z.number().int().positive().max(MAX_PAGE_SIZE),
     offset: z.number().int().nonnegative(),
@@ -194,6 +194,11 @@ export class AgentSkillsInClient {
 
     const skills = response.skills.map(normalizeSkill);
     const advancedOffset = response.offset + skills.length;
+    if (advancedOffset > response.total) {
+      throw new RegistryContractError(
+        `AgentSkills.in page ended at ${advancedOffset}, beyond its reported total ${response.total}`,
+      );
+    }
     const stalledBeforeReportedEnd = skills.length === 0 && advancedOffset < response.total;
     const hasMore = skills.length > 0 && advancedOffset < response.total;
 

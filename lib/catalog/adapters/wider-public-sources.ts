@@ -10,9 +10,10 @@ export const agentSkillsInSourceDescriptor = {
   enabled: false,
   initialCoverageState: "not-configured",
   knownExclusions: [
-    "The client contract is implemented, but catalog hydration and synchronization are not connected; no records are claimed.",
+    "Synchronization is an explicit opt-in and requires a public-only GitHub API token for exact repository hydration.",
     "Offset pages are mutable and have no snapshot token, so one sweep cannot prove a current source-wide snapshot or retire absent records.",
-    "Listings do not provide an immutable revision; every candidate must be rebound to an exact public GitHub commit, path, artifact, and license before selection.",
+    "Every provider identity is rebound to its observed exact public GitHub repository and SKILL.md path; hydration failures are excluded.",
+    "Provider names, descriptions, categories, totals, ranking, and content-availability flags are discovery observations, not Aisle trust or completeness evidence.",
   ],
 } satisfies CatalogSourceDescriptor;
 

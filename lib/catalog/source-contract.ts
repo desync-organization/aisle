@@ -25,6 +25,12 @@ export const discoveredSkillRecordSchema = z.object({
   skillPath: z.string().min(1),
   upstreamName: z.string().min(1).nullable(),
   upstreamDescription: z.string().min(1).nullable(),
+  categoryHints: z
+    .object({
+      categories: z.array(z.string().trim().min(1).max(128)).max(16),
+      tags: z.array(z.string().trim().min(1).max(64)).max(32),
+    })
+    .optional(),
   compatibility: z.string().min(1).nullable().optional(),
   license: z.string().min(1).nullable().optional(),
   installUrl: z.url().nullable(),
