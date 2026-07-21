@@ -771,7 +771,11 @@ export class CatalogRepository {
     }));
   }
 
-  async acquireSyncRun(sourceId: string, leaseDurationMs = 300_000) {
+  async acquireSyncRun(
+    sourceId: string,
+    leaseDurationMs = 300_000,
+    options: { resumePartial?: boolean } = {},
+  ) {
     const now = new Date();
     const leaseExpiresAt = new Date(now.getTime() + Math.max(leaseDurationMs, 100));
     const leaseToken = randomUUID();
@@ -798,31 +802,39 @@ export class CatalogRepository {
           .where(eq(syncRuns.id, active.id));
       }
 
-      const [resumable] = await transaction
-        .select()
-        .from(syncRuns)
-        .where(
-          and(
-            eq(syncRuns.sourceId, sourceId),
-            eq(syncRuns.status, "partial"),
-            isNotNull(syncRuns.cursor),
-          ),
-        )
-        .orderBy(desc(syncRuns.startedAt))
-        .limit(1);
-      if (resumable) {
-        await transaction
-          .update(syncRuns)
-          .set({
-            status: "running",
-            failure: null,
-            finishedAt: null,
-            nextRetryAt: null,
+      if (options.resumePartial !== false) {
+        const [resumable] = await transaction
+          .select()
+          .from(syncRuns)
+          .where(
+            and(
+              eq(syncRuns.sourceId, sourceId),
+              eq(syncRuns.status, "partial"),
+              isNotNull(syncRuns.cursor),
+            ),
+          )
+          .orderBy(desc(syncRuns.startedAt))
+          .limit(1);
+        if (resumable) {
+          await transaction
+            .update(syncRuns)
+            .set({
+              status: "running",
+              failure: null,
+              finishedAt: null,
+              nextRetryAt: null,
+              leaseToken,
+              leaseExpiresAt,
+            })
+            .where(eq(syncRuns.id, resumable.id));
+          return {
+            ...resumable,
+            status: "running" as const,
             leaseToken,
             leaseExpiresAt,
-          })
-          .where(eq(syncRuns.id, resumable.id));
-        return { ...resumable, status: "running" as const, leaseToken, leaseExpiresAt, resumed: true };
+            resumed: true,
+          };
+        }
       }
 
       const id = randomUUID();

@@ -142,12 +142,14 @@ describe("SkillsShSync", () => {
     );
   });
 
-  it("checkpoints a partial listing crawl and resumes from the failed page", async () => {
+  it("checkpoints a partial crawl but restarts page zero without mixing mutable pages", async () => {
     let failPageOne = true;
+    const requestedPages: number[] = [];
     const fetchMock = vi.fn<typeof fetch>(async (input) => {
       const url = requestUrl(input);
       if (url.pathname.endsWith("/api/v1/skills")) {
         const page = Number(url.searchParams.get("page"));
+        requestedPages.push(page);
         if (page === 1 && failPageOne) {
           return json({ error: "temporarily_unavailable", message: "Fixture outage" }, 503);
         }
@@ -184,21 +186,26 @@ describe("SkillsShSync", () => {
 
     const interrupted = await sync.run();
     failPageOne = false;
-    const resumed = await sync.run();
-    const [run] = await connection.db
+    const restarted = await sync.run();
+    const [interruptedRun] = await connection.db
       .select()
       .from(syncRuns)
       .where(eq(syncRuns.id, interrupted.runId));
 
     expect(interrupted).toMatchObject({ status: "partial", pages: 1, processed: 1 });
-    expect(resumed).toMatchObject({
+    expect(restarted).toMatchObject({
       status: "current",
-      runId: interrupted.runId,
-      resumed: true,
+      resumed: false,
       pages: 2,
       processed: 2,
     });
-    expect(run).toMatchObject({ status: "succeeded", nextPage: 2, completeCrawl: true });
+    expect(restarted.runId).not.toBe(interrupted.runId);
+    expect(requestedPages).toEqual([0, 1, 0, 1]);
+    expect(interruptedRun).toMatchObject({
+      status: "partial",
+      nextPage: 1,
+      completeCrawl: false,
+    });
     expect(await repository.countSourceListings("skills-sh")).toBe(2);
   });
 

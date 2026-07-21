@@ -141,7 +141,11 @@ export class SkillsShSync {
   }
 
   async run(): Promise<SkillsShSyncResult> {
-    const run = await this.repository.acquireSyncRun(this.sourceId, this.leaseDurationMs);
+    const run = await this.repository.acquireSyncRun(
+      this.sourceId,
+      this.leaseDurationMs,
+      { resumePartial: false },
+    );
     const fence: CatalogMutationFence = {
       sourceId: this.sourceId,
       runId: run.id,
@@ -162,6 +166,18 @@ export class SkillsShSync {
     const seenIds = new Set<string>();
 
     try {
+      if (
+        run.resumed ||
+        run.nextPage !== 0 ||
+        run.pageCount !== 0 ||
+        run.processedCount !== 0 ||
+        run.sourceTotal !== null ||
+        run.cursor !== null
+      ) {
+        throw new Error(
+          "skills.sh pagination lacks a snapshot token and must start from a fresh page-zero run",
+        );
+      }
       while (true) {
         const response = await this.client.listSkills(pageNumber, this.perPage);
         if (response.notModified) {
