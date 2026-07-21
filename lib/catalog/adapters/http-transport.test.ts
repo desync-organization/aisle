@@ -136,7 +136,7 @@ describe("BoundedHttpTransport", () => {
   });
 
   it("refuses an external redirect without fetching or processing its destination", async () => {
-    const cancel = vi.fn(async () => undefined);
+    const cancel = vi.fn(() => new Promise<void>(() => undefined));
     const validate = vi.fn((value: { ok: boolean }) => value);
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
       new Response(new ReadableStream<Uint8Array>({ cancel }), {

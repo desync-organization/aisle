@@ -121,15 +121,19 @@ function validateBaseUrl(value: string): URL {
   return parsed;
 }
 
-async function cancelResponse(response: Response | undefined): Promise<void> {
+function requestCancellation(cancel: () => Promise<void>): void {
+  try {
+    void cancel().catch(() => undefined);
+  } catch {
+    // A custom stream can throw synchronously. Disposal is always best effort.
+  }
+}
+
+function cancelResponse(response: Response | undefined): void {
   if (!response?.body) {
     return;
   }
-  try {
-    await response.body.cancel();
-  } catch {
-    // Aborted and errored streams can reject cancellation. The body is still discarded.
-  }
+  requestCancellation(() => response.body!.cancel());
 }
 
 function contentLength(response: Response): number | null {
@@ -166,7 +170,7 @@ function retryableResponse(response: Response): boolean {
 async function readBoundedBody(response: Response, maxBytes: number): Promise<Uint8Array> {
   const declaredLength = contentLength(response);
   if (declaredLength !== null && declaredLength > maxBytes) {
-    await cancelResponse(response);
+    cancelResponse(response);
     throw new RegistryBodyTooLargeError(maxBytes, declaredLength);
   }
 
@@ -192,18 +196,14 @@ async function readBoundedBody(response: Response, maxBytes: number): Promise<Ui
 
       total += value.byteLength;
       if (total > maxBytes) {
-        await reader.cancel();
+        requestCancellation(() => reader.cancel());
         throw new RegistryBodyTooLargeError(maxBytes, total);
       }
       chunks.push(value);
     }
   } catch (error) {
     if (!completed) {
-      try {
-        await reader.cancel();
-      } catch {
-        // Ignore cancellation errors from an already aborted/errored stream.
-      }
+      requestCancellation(() => reader.cancel());
     }
     throw error;
   }
@@ -339,7 +339,7 @@ export class BoundedHttpTransport {
             response.status,
             response.headers.get("location"),
           );
-          await cancelResponse(response);
+          cancelResponse(response);
           throw error;
         }
 
@@ -353,7 +353,7 @@ export class BoundedHttpTransport {
             response.status,
             retryAfterMs,
           );
-          await cancelResponse(response);
+          cancelResponse(response);
 
           if (!retryableResponse(response) || attempt + 1 >= this.maxAttempts) {
             throw error;
@@ -370,7 +370,7 @@ export class BoundedHttpTransport {
         const body = await Promise.race([readBoundedBody(response, maxBytes), timeout]);
         return { body, contentType: response.headers.get("content-type") };
       } catch (error) {
-        await cancelResponse(response);
+        cancelResponse(response);
 
         if (
           error instanceof RegistryBodyTooLargeError ||

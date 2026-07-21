@@ -131,6 +131,7 @@ describe("GitHubCodeSearchClient", () => {
     expect(headers.get("authorization")).toBe("Bearer fixture-server-token");
     expect(headers.get("user-agent")).toBe("Aisle catalog sync");
     expect(headers.get("x-github-api-version")).toBe("2026-03-10");
+    expect(fetchMock.mock.calls[0]?.[1]?.redirect).toBe("manual");
     expect(page).toMatchObject({
       query: {
         user: "react animation",
