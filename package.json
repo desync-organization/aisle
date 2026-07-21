@@ -15,7 +15,8 @@
     "db:migrate": "tsx scripts/db-migrate.ts",
     "db:seed": "tsx scripts/db-seed.ts",
     "db:setup": "npm run db:migrate && npm run db:seed",
-    "catalog:sync": "tsx scripts/catalog-sync.ts"
+    "catalog:sync": "tsx scripts/catalog-sync.ts",
+    "packages:publish": "tsx scripts/packages-publish.ts"
   },
   "engines": {
     "node": ">=20.9.0"

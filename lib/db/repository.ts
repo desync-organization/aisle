@@ -17,6 +17,12 @@ import {
 } from "drizzle-orm";
 
 import { installSpecSchema } from "../catalog/source-contract";
+import { normalizeSkillPath, normalizeSourceUrl } from "../catalog/normalization";
+import {
+  parsePackageBlueprint,
+  type PackageBlueprint,
+  type PackageBlueprintMember,
+} from "../packages/package-blueprint";
 import type { CatalogDatabase } from "./client";
 import {
   auditRecords,
@@ -79,6 +85,126 @@ const packageEligibleLicenses = [
   "CC0-1.0",
   "Unlicense",
 ] as const;
+
+export type PackagePublicationErrorCode =
+  | "MEMBER_NOT_FOUND"
+  | "REVISION_MISMATCH"
+  | "LICENSE_EVIDENCE_MISMATCH"
+  | "TRUST_NOT_ELIGIBLE"
+  | "PROVENANCE_MISMATCH"
+  | "DUPLICATE_MEMBER";
+
+export class PackagePublicationError extends Error {
+  constructor(
+    readonly code: PackagePublicationErrorCode,
+    readonly packageSlug: string,
+    readonly memberPosition: number,
+    message: string,
+  ) {
+    super(message);
+    this.name = "PackagePublicationError";
+  }
+}
+
+export type PublishedPackageSummary = Readonly<{
+  id: string;
+  slug: string;
+  title: string;
+  description: string;
+  versionId: string;
+  version: number;
+  publishedAt: Date;
+  memberCount: number;
+  editorial: Record<string, unknown>;
+}>;
+
+export type PackagePublicationResult = Readonly<{
+  packageId: string;
+  packageVersionId: string;
+  slug: string;
+  version: number;
+  blueprintDigest: string;
+  memberCount: number;
+  publishedAt: Date;
+  reused: boolean;
+}>;
+
+type PersistedLicenseEvidence = Readonly<{
+  path: string;
+  sha256: string;
+  source: string;
+  sourceUrl?: string;
+  immutableRef?: string;
+}>;
+
+function packageBlueprintDigest(blueprint: PackageBlueprint): string {
+  return `sha256:${createHash("sha256").update(JSON.stringify(blueprint)).digest("hex")}`;
+}
+
+function persistedLicenseEvidence(metadata: Record<string, unknown> | null): PersistedLicenseEvidence | null {
+  const value = metadata?.licenseEvidence;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const evidence = value as Record<string, unknown>;
+  if (
+    typeof evidence.path !== "string" ||
+    typeof evidence.sha256 !== "string" ||
+    !/^[a-f0-9]{64}$/.test(evidence.sha256) ||
+    typeof evidence.source !== "string"
+  ) {
+    return null;
+  }
+  if (evidence.sourceUrl !== undefined && typeof evidence.sourceUrl !== "string") return null;
+  if (evidence.immutableRef !== undefined && typeof evidence.immutableRef !== "string") return null;
+  return {
+    path: evidence.path,
+    sha256: evidence.sha256,
+    source: evidence.source,
+    ...(typeof evidence.sourceUrl === "string" ? { sourceUrl: evidence.sourceUrl } : {}),
+    ...(typeof evidence.immutableRef === "string" ? { immutableRef: evidence.immutableRef } : {}),
+  };
+}
+
+function hasCompleteInventory(metadata: Record<string, unknown> | null, contentHash: string): boolean {
+  const value = metadata?.fileInventory;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const inventory = value as Record<string, unknown>;
+  return (
+    inventory.schemaVersion === 1 &&
+    inventory.complete === true &&
+    typeof inventory.fileCount === "number" &&
+    Number.isSafeInteger(inventory.fileCount) &&
+    inventory.fileCount > 0 &&
+    inventory.aggregateSha256 === contentHash
+  );
+}
+
+function packageLicenseEvidenceMatches(
+  member: PackageBlueprintMember,
+  evidence: PersistedLicenseEvidence,
+  normalizedSkillPath: string,
+  normalizedRepositoryUrl: string,
+  immutableRef: string,
+): boolean {
+  const expected = member.observedLicense;
+  if (expected.evidenceClass === "repository-license") {
+    return (
+      evidence.source === "repository-root-license-text" &&
+      evidence.path === expected.evidencePath &&
+      evidence.sourceUrl !== undefined &&
+      normalizeSourceUrl(evidence.sourceUrl) === normalizedRepositoryUrl &&
+      evidence.immutableRef === immutableRef
+    );
+  }
+  if (expected.evidenceClass === "skill-frontmatter") {
+    return evidence.source === "frontmatter-spdx" && evidence.path === "SKILL.md";
+  }
+  const repositoryEvidencePath =
+    normalizedSkillPath === "." ? evidence.path : `${normalizedSkillPath}/${evidence.path}`;
+  return (
+    evidence.source === "license-text-fingerprint" &&
+    repositoryEvidencePath === expected.evidencePath
+  );
+}
 
 function stableId(namespace: string, value: string): string {
   return `${namespace}_${createHash("sha256").update(value).digest("hex").slice(0, 24)}`;
@@ -520,6 +646,483 @@ export class CatalogRepository {
       .orderBy(asc(categories.sortOrder), asc(categories.name));
 
     return { lifecycle, category };
+  }
+
+  /**
+   * Resolves and publishes one editorial blueprint in a single database
+   * transaction. No skill instructions or upstream response bodies are
+   * copied into package storage: a version contains only editorial metadata
+   * and exact canonical skill/revision foreign keys.
+   */
+  async publishPackageBlueprint(input: unknown): Promise<PackagePublicationResult> {
+    const blueprint = parsePackageBlueprint(input);
+    const digest = packageBlueprintDigest(blueprint);
+    const now = new Date();
+
+    return this.db.transaction(async (transaction) => {
+      const resolved: Array<{
+        position: number;
+        selectedByDefault: true;
+        skillId: string;
+        revisionId: string;
+        contentHash: string;
+      }> = [];
+      const selectedSkillIds = new Set<string>();
+      const selectedContentHashes = new Set<string>();
+
+      const reject = (
+        code: PackagePublicationErrorCode,
+        member: PackageBlueprintMember,
+        message: string,
+      ): never => {
+        throw new PackagePublicationError(code, blueprint.slug, member.position, message);
+      };
+
+      for (const member of [...blueprint.members].sort(
+        (left, right) => left.position - right.position,
+      )) {
+        if (!member.observedSource) {
+          reject(
+            "REVISION_MISMATCH",
+            member,
+            "A package member requires an observed public branch head before publication.",
+          );
+        }
+        const repositoryUrl = normalizeSourceUrl(member.locator.repositoryUrl);
+        const skillPath = normalizeSkillPath(member.locator.skillPath);
+        const observedHead = member.observedSource.headSha;
+        const candidates = await transaction
+          .select({
+            repositoryUrl: repositories.normalizedUrl,
+            repositoryOwner: repositories.owner,
+            repositoryName: repositories.name,
+            repositoryVisibility: repositories.visibility,
+            repositoryDefaultBranch: repositories.defaultBranch,
+            skillId: skills.id,
+            sourceUrl: skills.sourceUrl,
+            skillPath: skills.skillPath,
+            name: skills.upstreamName,
+            lifecycle: skills.lifecycle,
+            public: skills.public,
+            internal: skills.internal,
+            officialProvenance: skills.officialProvenance,
+            revisionId: skillRevisions.id,
+            immutableRef: skillRevisions.immutableRef,
+            contentHash: skillRevisions.contentHash,
+            upstreamHash: skillRevisions.upstreamHash,
+            installSpec: skillRevisions.installSpecJson,
+            license: skillRevisions.license,
+            metadata: skillRevisions.metadataJson,
+            isCurrent: skillRevisions.isCurrent,
+          })
+          .from(repositories)
+          .innerJoin(skills, eq(skills.repositoryId, repositories.id))
+          .innerJoin(skillRevisions, eq(skillRevisions.skillId, skills.id))
+          .where(
+            and(
+              eq(repositories.provider, "github"),
+              eq(repositories.normalizedUrl, repositoryUrl),
+              eq(repositories.visibility, "public"),
+              eq(skills.provider, "github"),
+              eq(skills.sourceUrl, repositoryUrl),
+              eq(skills.skillPath, skillPath),
+              eq(skills.upstreamName, member.locator.upstreamSkillName),
+              eq(skillRevisions.isCurrent, true),
+            ),
+          )
+          .limit(2);
+        if (candidates.length !== 1) {
+          reject(
+            "MEMBER_NOT_FOUND",
+            member,
+            "The exact public GitHub repository, SKILL.md path, and upstream name did not resolve uniquely.",
+          );
+        }
+        const candidate = candidates[0]!;
+        if (
+          candidate.repositoryOwner?.toLowerCase() !== member.locator.owner.toLowerCase() ||
+          candidate.repositoryName?.toLowerCase() !== member.locator.repository.toLowerCase() ||
+          candidate.repositoryVisibility !== "public" ||
+          candidate.public !== true ||
+          candidate.internal !== false ||
+          candidate.lifecycle !== "current" ||
+          candidate.isCurrent !== true
+        ) {
+          reject(
+            "PROVENANCE_MISMATCH",
+            member,
+            "The catalog record no longer has the required public current repository provenance.",
+          );
+        }
+        if (
+          candidate.immutableRef !== observedHead ||
+          candidate.upstreamHash !== observedHead ||
+          !/^[a-f0-9]{40}$/.test(candidate.immutableRef) ||
+          !/^[a-f0-9]{64}$/.test(candidate.contentHash) ||
+          !hasCompleteInventory(candidate.metadata, candidate.contentHash)
+        ) {
+          reject(
+            "REVISION_MISMATCH",
+            member,
+            "The current ingested revision is not bound to the blueprint head and complete artifact fingerprint.",
+          );
+        }
+        const installSpec = installSpecSchema.safeParse(candidate.installSpec);
+        if (
+          !installSpec.success ||
+          installSpec.data.kind !== "source" ||
+          normalizeSourceUrl(installSpec.data.sourceUrl) !== repositoryUrl ||
+          normalizeSkillPath(installSpec.data.skillPath) !== skillPath ||
+          installSpec.data.immutableRef !== observedHead
+        ) {
+          reject(
+            "REVISION_MISMATCH",
+            member,
+            "The immutable install evidence does not match the resolved repository, path, and head.",
+          );
+        }
+
+        const activeListings = await transaction
+          .select({ id: sourceListings.id })
+          .from(sourceListings)
+          .innerJoin(catalogSources, eq(catalogSources.id, sourceListings.sourceId))
+          .where(
+            and(
+              eq(sourceListings.skillId, candidate.skillId),
+              eq(sourceListings.status, "current"),
+              eq(sourceListings.sourceHash, observedHead),
+              eq(catalogSources.enabled, true),
+              eq(catalogSources.coverageState, "current"),
+            ),
+          )
+          .limit(1);
+        if (activeListings.length !== 1) {
+          reject(
+            "PROVENANCE_MISMATCH",
+            member,
+            "No current enabled complete source observation is bound to the blueprint head.",
+          );
+        }
+
+        const assessments = await transaction
+          .select({
+            state: trustAssessments.state,
+            immutableRef: trustAssessments.immutableRef,
+            contentHash: trustAssessments.contentHash,
+          })
+          .from(trustAssessments)
+          .where(eq(trustAssessments.revisionId, candidate.revisionId));
+        const boundAssessments = assessments.filter(
+          (assessment) =>
+            assessment.immutableRef === candidate.immutableRef &&
+            assessment.contentHash === candidate.contentHash,
+        );
+        if (
+          !boundAssessments.some((assessment) => ["pass", "warn"].includes(assessment.state)) ||
+          boundAssessments.some((assessment) => ["fail", "quarantined"].includes(assessment.state))
+        ) {
+          reject(
+            "TRUST_NOT_ELIGIBLE",
+            member,
+            "The exact revision does not have selectable revision-bound trust evidence.",
+          );
+        }
+        const observations = await transaction
+          .select({
+            id: auditRecords.id,
+            provider: auditRecords.provider,
+            providerSlug: auditRecords.providerSlug,
+            status: auditRecords.status,
+            observedAt: auditRecords.observedAt,
+          })
+          .from(auditRecords)
+          .innerJoin(sourceListings, eq(sourceListings.id, auditRecords.sourceListingId))
+          .where(
+            and(
+              eq(sourceListings.skillId, candidate.skillId),
+              eq(auditRecords.scope, "observation"),
+              eq(auditRecords.upstreamContentHash, observedHead),
+            ),
+          )
+          .orderBy(desc(auditRecords.observedAt), desc(auditRecords.id));
+        const latestObservationKeys = new Set<string>();
+        for (const observation of observations) {
+          const key = `${observation.provider}\0${observation.providerSlug ?? ""}`;
+          if (latestObservationKeys.has(key)) continue;
+          latestObservationKeys.add(key);
+          if (observation.status === "fail") {
+            reject(
+              "TRUST_NOT_ELIGIBLE",
+              member,
+              "The latest upstream observation for the exact revision failed.",
+            );
+          }
+        }
+
+        const evidence = persistedLicenseEvidence(candidate.metadata);
+        if (
+          candidate.license !== member.observedLicense.spdx ||
+          !packageEligibleLicenses.includes(
+            candidate.license as (typeof packageEligibleLicenses)[number],
+          ) ||
+          !evidence ||
+          !packageLicenseEvidenceMatches(
+            member,
+            evidence,
+            skillPath,
+            repositoryUrl,
+            observedHead,
+          )
+        ) {
+          reject(
+            "LICENSE_EVIDENCE_MISMATCH",
+            member,
+            "Verified revision-bound license evidence does not match the blueprint observation.",
+          );
+        }
+        if (member.publisherClass === "official" && candidate.officialProvenance !== true) {
+          reject(
+            "PROVENANCE_MISMATCH",
+            member,
+            "An official package member requires catalog-verified official publisher provenance.",
+          );
+        }
+        if (
+          selectedSkillIds.has(candidate.skillId) ||
+          selectedContentHashes.has(candidate.contentHash)
+        ) {
+          reject(
+            "DUPLICATE_MEMBER",
+            member,
+            "A package version cannot include duplicate canonical skills or mirrored artifact content.",
+          );
+        }
+        selectedSkillIds.add(candidate.skillId);
+        selectedContentHashes.add(candidate.contentHash);
+        resolved.push({
+          position: member.position,
+          selectedByDefault: member.defaultSelected,
+          skillId: candidate.skillId,
+          revisionId: candidate.revisionId,
+          contentHash: candidate.contentHash,
+        });
+      }
+
+      const [existingPackage] = await transaction
+        .select({ id: packages.id })
+        .from(packages)
+        .where(eq(packages.slug, blueprint.slug))
+        .limit(1);
+      const packageId = existingPackage?.id ?? stableId("package", blueprint.slug);
+      await transaction
+        .insert(packages)
+        .values({
+          id: packageId,
+          slug: blueprint.slug,
+          title: blueprint.editorial.title,
+          description: blueprint.editorial.summary,
+          published: false,
+          createdAt: now,
+          updatedAt: now,
+        })
+        .onConflictDoUpdate({
+          target: packages.slug,
+          set: {
+            title: blueprint.editorial.title,
+            description: blueprint.editorial.summary,
+            updatedAt: now,
+          },
+        });
+
+      const packageVersionId = stableId("package-version", `${packageId}:${digest}`);
+      const [existingVersion] = await transaction
+        .select({
+          version: packageVersions.version,
+          publishedAt: packageVersions.publishedAt,
+          blueprintDigest: packageVersions.blueprintDigest,
+        })
+        .from(packageVersions)
+        .where(
+          and(
+            eq(packageVersions.id, packageVersionId),
+            eq(packageVersions.packageId, packageId),
+          ),
+        )
+        .limit(1);
+      if (existingVersion) {
+        const existingMembers = await transaction
+          .select({
+            skillId: packageMembers.skillId,
+            revisionId: packageMembers.revisionId,
+            position: packageMembers.position,
+            selectedByDefault: packageMembers.selectedByDefault,
+          })
+          .from(packageMembers)
+          .where(eq(packageMembers.packageVersionId, packageVersionId))
+          .orderBy(asc(packageMembers.position));
+        const memberCount = existingMembers.length;
+        const membersMatch = existingMembers.every((existingMember, index) => {
+          const resolvedMember = resolved[index];
+          return (
+            resolvedMember !== undefined &&
+            existingMember.skillId === resolvedMember.skillId &&
+            existingMember.revisionId === resolvedMember.revisionId &&
+            existingMember.position === resolvedMember.position &&
+            existingMember.selectedByDefault === resolvedMember.selectedByDefault
+          );
+        });
+        if (
+          existingVersion.blueprintDigest !== digest ||
+          existingVersion.publishedAt === null ||
+          memberCount !== resolved.length ||
+          !membersMatch
+        ) {
+          throw new PackagePublicationError(
+            "REVISION_MISMATCH",
+            blueprint.slug,
+            0,
+            "An incomplete or inconsistent version already occupies the deterministic blueprint identity.",
+          );
+        }
+        await transaction
+          .update(packages)
+          .set({ published: true, updatedAt: now })
+          .where(eq(packages.id, packageId));
+        return {
+          packageId,
+          packageVersionId,
+          slug: blueprint.slug,
+          version: existingVersion.version,
+          blueprintDigest: digest,
+          memberCount,
+          publishedAt: existingVersion.publishedAt,
+          reused: true,
+        };
+      }
+
+      const [{ latestVersion = 0 } = {}] = await transaction
+        .select({ latestVersion: sql<number>`coalesce(max(${packageVersions.version}), 0)` })
+        .from(packageVersions)
+        .where(eq(packageVersions.packageId, packageId));
+      const version = latestVersion + 1;
+      await transaction.insert(packageVersions).values({
+        id: packageVersionId,
+        packageId,
+        version,
+        blueprintSchemaVersion: blueprint.schemaVersion,
+        blueprintDigest: digest,
+        editorialJson: blueprint.editorial,
+        publishedAt: now,
+        createdAt: now,
+      });
+      for (const member of resolved) {
+        await transaction.insert(packageMembers).values({
+          packageVersionId,
+          skillId: member.skillId,
+          revisionId: member.revisionId,
+          position: member.position,
+          selectedByDefault: member.selectedByDefault,
+        });
+      }
+      await transaction
+        .update(packages)
+        .set({ published: true, updatedAt: now })
+        .where(eq(packages.id, packageId));
+      return {
+        packageId,
+        packageVersionId,
+        slug: blueprint.slug,
+        version,
+        blueprintDigest: digest,
+        memberCount: resolved.length,
+        publishedAt: now,
+        reused: false,
+      };
+    });
+  }
+
+  async listPublishedPackages(limit = 100): Promise<PublishedPackageSummary[]> {
+    const boundedLimit = Math.min(Math.max(limit, 1), 100);
+    const rows = await this.db
+      .select({
+        id: packages.id,
+        slug: packages.slug,
+        title: packages.title,
+        description: packages.description,
+        versionId: packageVersions.id,
+        version: packageVersions.version,
+        publishedAt: packageVersions.publishedAt,
+        editorial: packageVersions.editorialJson,
+        memberCount: sql<number>`(
+          select count(*) from package_members members
+          where members.package_version_id = ${packageVersions.id}
+        )`,
+      })
+      .from(packages)
+      .innerJoin(packageVersions, eq(packageVersions.packageId, packages.id))
+      .where(
+        and(
+          eq(packages.published, true),
+          isNotNull(packageVersions.publishedAt),
+          eq(packageVersions.blueprintSchemaVersion, 1),
+          like(packageVersions.blueprintDigest, "sha256:%"),
+          sql`${packageVersions.version} = (
+            select max(latest.version) from package_versions latest
+            where latest.package_id = ${packages.id}
+              and latest.published_at is not null
+          )`,
+        ),
+      )
+      .orderBy(asc(packages.title), asc(packages.id))
+      .limit(boundedLimit);
+    const visible: PublishedPackageSummary[] = [];
+    for (const row of rows) {
+      if (!row.publishedAt) continue;
+      const members = await this.resolvePackage(row.slug, row.version);
+      if (members.length !== row.memberCount) continue;
+      visible.push({ ...row, publishedAt: row.publishedAt });
+    }
+    return visible;
+  }
+
+  async publishedPackageDetails(packageId: string, version?: number) {
+    const versionCondition = version
+      ? eq(packageVersions.version, version)
+      : sql`${packageVersions.version} = (
+          select max(latest.version) from package_versions latest
+          where latest.package_id = ${packages.id}
+            and latest.published_at is not null
+        )`;
+    const [selected] = await this.db
+      .select({
+        id: packages.id,
+        slug: packages.slug,
+        title: packages.title,
+        description: packages.description,
+        versionId: packageVersions.id,
+        version: packageVersions.version,
+        blueprintSchemaVersion: packageVersions.blueprintSchemaVersion,
+        blueprintDigest: packageVersions.blueprintDigest,
+        editorial: packageVersions.editorialJson,
+        publishedAt: packageVersions.publishedAt,
+      })
+      .from(packages)
+      .innerJoin(packageVersions, eq(packageVersions.packageId, packages.id))
+      .where(
+        and(
+          eq(packages.id, packageId),
+          eq(packages.published, true),
+          isNotNull(packageVersions.publishedAt),
+          eq(packageVersions.blueprintSchemaVersion, 1),
+          like(packageVersions.blueprintDigest, "sha256:%"),
+          versionCondition,
+        ),
+      )
+      .limit(1);
+    if (!selected?.publishedAt) return null;
+    const members = await this.resolvePackage(selected.slug, selected.version);
+    if (members.length === 0) return null;
+    return { ...selected, publishedAt: selected.publishedAt, members };
   }
 
   async resolvePackage(slug: string, version?: number) {

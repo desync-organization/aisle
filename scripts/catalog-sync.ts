@@ -6,6 +6,7 @@ import { WellKnownSkillsAdapter } from "../lib/catalog/adapters/well-known";
 import { SkillsShClient } from "../lib/catalog/connectors/skills-sh-client";
 import { SkillsShSync } from "../lib/catalog/connectors/skills-sh-sync";
 import { CatalogIngestionService } from "../lib/catalog/ingestion";
+import { isVerifiedOfficialPublisher } from "../lib/catalog/official-publishers";
 import { CatalogSyncOrchestrator } from "../lib/catalog/orchestrator";
 import { createAgentSkillValidator } from "../lib/catalog/security";
 import type { CatalogSourceConnector } from "../lib/catalog/source-contract";
@@ -28,7 +29,11 @@ async function main(): Promise<void> {
     const repository = new CatalogRepository(connection.db);
     await seedCatalog(repository);
     const validator = createAgentSkillValidator();
-    const ingestion = new CatalogIngestionService(repository, validator);
+    const ingestion = new CatalogIngestionService(
+      repository,
+      validator,
+      isVerifiedOfficialPublisher,
+    );
     const connectors: CatalogSourceConnector[] = [
       new ClawHubAdapter(),
       new SkillMdAdapter({ githubToken: process.env.GITHUB_TOKEN }),
@@ -55,7 +60,10 @@ async function main(): Promise<void> {
       new SkillsShSync(repository, new SkillsShClient(), { ingestion }).run(),
     );
     const sources = await settle(() =>
-      new CatalogSyncOrchestrator(repository, { validateRecord: validator }).sync(connectors),
+      new CatalogSyncOrchestrator(repository, {
+        validateRecord: validator,
+        officialPublisherPolicy: isVerifiedOfficialPublisher,
+      }).sync(connectors),
     );
     const normalize = (result: PromiseSettledResult<unknown>) =>
       result.status === "fulfilled"
