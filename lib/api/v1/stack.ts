@@ -261,6 +261,52 @@ function eligibleLicense(license: string): boolean {
   );
 }
 
+function branchHeadEvidence(
+  row: PersistedStackSelection,
+): Readonly<{ branch: string; headSha: string }> | null {
+  const candidate = row.revisionMetadata?.branchHeadEvidence;
+  if (
+    !candidate ||
+    typeof candidate !== "object" ||
+    Array.isArray(candidate) ||
+    !row.repositoryUrl ||
+    !row.repositoryOwner ||
+    !row.repositoryName ||
+    !row.repositoryDefaultBranch ||
+    !row.immutableRef ||
+    !row.upstreamHash
+  ) {
+    return null;
+  }
+  const evidence = candidate as Record<string, unknown>;
+  if (
+    evidence.schemaVersion !== 1 ||
+    evidence.provider !== "github" ||
+    typeof evidence.repositoryUrl !== "string" ||
+    typeof evidence.owner !== "string" ||
+    typeof evidence.repository !== "string" ||
+    typeof evidence.branch !== "string" ||
+    typeof evidence.headSha !== "string" ||
+    !/^[a-f0-9]{40}$/.test(evidence.headSha) ||
+    evidence.owner.toLowerCase() !== row.repositoryOwner.toLowerCase() ||
+    evidence.repository.toLowerCase() !== row.repositoryName.toLowerCase() ||
+    evidence.branch !== row.repositoryDefaultBranch ||
+    evidence.headSha !== row.immutableRef ||
+    evidence.headSha !== row.upstreamHash ||
+    !githubBranchSchema.safeParse(evidence.branch).success
+  ) {
+    return null;
+  }
+  try {
+    if (normalizeSourceUrl(evidence.repositoryUrl) !== normalizeSourceUrl(row.repositoryUrl)) {
+      return null;
+    }
+  } catch {
+    return null;
+  }
+  return { branch: evidence.branch, headSha: evidence.headSha };
+}
+
 function exactGithubBinding(row: PersistedStackSelection): boolean {
   const installSpec = installSpecSchema.safeParse(row.installSpec);
   if (
@@ -304,6 +350,7 @@ function exactGithubBinding(row: PersistedStackSelection): boolean {
 
 function plannerSkill(row: PersistedStackSelection): ResolvedGithubSkill | null {
   const license = row.revisionLicense ?? row.catalogLicense;
+  const observedBranchHead = branchHeadEvidence(row);
   if (
     !row.revisionId ||
     !row.repositoryOwner ||
@@ -312,6 +359,7 @@ function plannerSkill(row: PersistedStackSelection): ResolvedGithubSkill | null 
     !row.immutableRef ||
     !row.upstreamHash ||
     !row.contentHash ||
+    !observedBranchHead ||
     !exactGithubBinding(row) ||
     row.selectorCount !== 1 ||
     !githubBranchSchema.safeParse(row.repositoryDefaultBranch).success ||
@@ -321,9 +369,9 @@ function plannerSkill(row: PersistedStackSelection): ResolvedGithubSkill | null 
   }
 
   const discoveryScope = {
-    branch: row.repositoryDefaultBranch,
+    branch: observedBranchHead.branch,
     path: row.skillPath,
-    branchHeadSha: row.upstreamHash,
+    branchHeadSha: observedBranchHead.headSha,
   };
   const candidate = resolvedGithubSkillSchema.safeParse({
     canonicalSkillId: row.id,
@@ -342,7 +390,7 @@ function plannerSkill(row: PersistedStackSelection): ResolvedGithubSkill | null 
     trust: { validation: "passed", blocked: false, quarantined: false },
     compatibleAgents: [...SUPPORTED_AGENTS],
     observed: {
-      commitSha: row.upstreamHash,
+      commitSha: observedBranchHead.headSha,
       contentDigest: `sha256:${row.contentHash}`,
     },
     installer: {

@@ -22,7 +22,7 @@ const repositorySchema = z.object({
   name: z.string().min(1),
 });
 
-const commitSchema = z.object({ sha: z.string().min(7) });
+const commitSchema = z.object({ sha: z.string().regex(/^[a-fA-F0-9]{40}$/) });
 
 const treeEntrySchema = z.object({
   path: z.string().min(1),
@@ -126,9 +126,10 @@ export class GitHubPublicRepositoryAdapter implements CatalogSourceConnector {
         `/repos/${this.coordinates.owner}/${this.coordinates.repository}/commits/${encodeURIComponent(repository.default_branch)}`,
       ),
     );
+    const observedHeadSha = commit.sha.toLowerCase();
     const tree = treeSchema.parse(
       await this.githubJson(
-        `/repos/${this.coordinates.owner}/${this.coordinates.repository}/git/trees/${encodeURIComponent(commit.sha)}?recursive=1`,
+        `/repos/${this.coordinates.owner}/${this.coordinates.repository}/git/trees/${encodeURIComponent(observedHeadSha)}?recursive=1`,
       ),
     );
     if (tree.truncated) {
@@ -138,7 +139,7 @@ export class GitHubPublicRepositoryAdapter implements CatalogSourceConnector {
     const exclusions: string[] = [];
     const repositoryLicenseEvidence = await this.loadRepositoryLicenseEvidence(
       tree.tree,
-      commit.sha,
+      observedHeadSha,
       repository.html_url,
       exclusions,
     );
@@ -163,16 +164,16 @@ export class GitHubPublicRepositoryAdapter implements CatalogSourceConnector {
         upstreamDescription: null,
         compatibility: null,
         license: null,
-        installUrl: `https://github.com/${repository.full_name}/tree/${commit.sha}${skillPath === "." ? "" : `/${skillPath}`}`,
+        installUrl: `https://github.com/${repository.full_name}/tree/${observedHeadSha}${skillPath === "." ? "" : `/${skillPath}`}`,
         installSpec: {
           kind: "source",
           sourceUrl: repository.html_url,
-          immutableRef: commit.sha,
+          immutableRef: observedHeadSha,
           skillPath,
         },
-        immutableRef: commit.sha,
+        immutableRef: observedHeadSha,
         contentHash: null,
-        upstreamHash: commit.sha,
+        upstreamHash: observedHeadSha,
         public: true,
         internal: false,
         aliases: [],
@@ -183,14 +184,18 @@ export class GitHubPublicRepositoryAdapter implements CatalogSourceConnector {
           name: repository.name,
           visibility: "public",
           defaultBranch: repository.default_branch,
+          observedBranchHead: {
+            branch: repository.default_branch,
+            headSha: observedHeadSha,
+          },
         },
         artifact: null,
-        raw: { repository: repository.full_name, manifestPath: manifest.path, commit: commit.sha, reason },
+        raw: { repository: repository.full_name, manifestPath: manifest.path, commit: observedHeadSha, reason },
       });
       const manifestUrl = `/repos/${this.coordinates.owner}/${this.coordinates.repository}/contents/${manifest.path
         .split("/")
         .map(encodeURIComponent)
-        .join("/")}?ref=${encodeURIComponent(commit.sha)}`;
+        .join("/")}?ref=${encodeURIComponent(observedHeadSha)}`;
       const response = await this.githubFetch(manifestUrl, "application/vnd.github.raw+json");
       if (!response.ok) {
         cancelBestEffort(response.body, "GitHub manifest response discarded");
@@ -245,7 +250,7 @@ export class GitHubPublicRepositoryAdapter implements CatalogSourceConnector {
           const supportUrl = `/repos/${this.coordinates.owner}/${this.coordinates.repository}/contents/${entry.path
             .split("/")
             .map(encodeURIComponent)
-            .join("/")}?ref=${encodeURIComponent(commit.sha)}`;
+            .join("/")}?ref=${encodeURIComponent(observedHeadSha)}`;
           const supportResponse = await this.githubFetch(
             supportUrl,
             "application/vnd.github.raw+json",
@@ -310,16 +315,16 @@ export class GitHubPublicRepositoryAdapter implements CatalogSourceConnector {
         upstreamDescription: null,
         compatibility: null,
         license: null,
-        installUrl: `https://github.com/${repository.full_name}/tree/${commit.sha}${skillPath === "." ? "" : `/${skillPath}`}`,
+        installUrl: `https://github.com/${repository.full_name}/tree/${observedHeadSha}${skillPath === "." ? "" : `/${skillPath}`}`,
         installSpec: {
           kind: "source",
           sourceUrl: repository.html_url,
-          immutableRef: commit.sha,
+          immutableRef: observedHeadSha,
           skillPath,
         },
-        immutableRef: commit.sha,
+        immutableRef: observedHeadSha,
         contentHash: artifactComplete ? computeArtifactContentHash(artifactFiles) : null,
-        upstreamHash: commit.sha,
+        upstreamHash: observedHeadSha,
         public: true,
         internal: false,
         aliases: [],
@@ -330,6 +335,10 @@ export class GitHubPublicRepositoryAdapter implements CatalogSourceConnector {
           name: repository.name,
           visibility: "public",
           defaultBranch: repository.default_branch,
+          observedBranchHead: {
+            branch: repository.default_branch,
+            headSha: observedHeadSha,
+          },
         },
         repositoryLicenseEvidence,
         artifact: {
@@ -342,7 +351,7 @@ export class GitHubPublicRepositoryAdapter implements CatalogSourceConnector {
         raw: {
           repository: repository.full_name,
           manifestPath: manifest.path,
-          commit: commit.sha,
+          commit: observedHeadSha,
           tree: tree.sha,
         },
       });

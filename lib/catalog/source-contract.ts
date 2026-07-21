@@ -43,6 +43,13 @@ export const discoveredSkillRecordSchema = z.object({
       name: z.string().min(1).nullable(),
       visibility: z.literal("public"),
       defaultBranch: z.string().min(1).nullable(),
+      observedBranchHead: z
+        .object({
+          branch: z.string().min(1).max(256),
+          headSha: z.string().regex(/^[a-fA-F0-9]{40}$/),
+        })
+        .nullable()
+        .optional(),
     })
     .nullable()
     .default(null),

@@ -1,4 +1,8 @@
-import { normalizeDiscoveredSkill } from "./normalization";
+import {
+  normalizeDiscoveredSkill,
+  normalizeSourceUrl,
+  type NormalizedSkillRecord,
+} from "./normalization";
 import { createPersistedFileInventory } from "./artifact-fingerprint";
 import {
   discoveredSkillRecordSchema,
@@ -63,6 +67,62 @@ export type DiscoveryRecordValidator = (
 export type OfficialPublisherPolicy = (
   record: DiscoveredSkillRecord,
 ) => boolean | Promise<boolean>;
+
+function persistedBranchHeadEvidence(
+  record: NormalizedSkillRecord,
+): Record<string, unknown> | null {
+  const repository = record.repository;
+  const observation = repository?.observedBranchHead;
+  if (
+    !repository ||
+    repository.provider !== "github" ||
+    !repository.owner ||
+    !repository.name ||
+    !repository.defaultBranch ||
+    !observation ||
+    observation.branch !== repository.defaultBranch ||
+    !record.immutableRef ||
+    !record.upstreamHash
+  ) {
+    return null;
+  }
+
+  const headSha = observation.headSha.toLowerCase();
+  if (
+    !/^[a-f0-9]{40}$/.test(headSha) ||
+    headSha !== record.immutableRef.toLowerCase() ||
+    headSha !== record.upstreamHash.toLowerCase()
+  ) {
+    return null;
+  }
+
+  try {
+    const repositoryUrl = normalizeSourceUrl(repository.url);
+    const sourceUrl = normalizeSourceUrl(record.sourceUrl);
+    const parsed = new URL(repositoryUrl);
+    const coordinates = parsed.pathname.split("/").filter(Boolean);
+    if (
+      repositoryUrl !== sourceUrl ||
+      parsed.hostname !== "github.com" ||
+      coordinates.length !== 2 ||
+      coordinates[0]!.toLowerCase() !== repository.owner.toLowerCase() ||
+      coordinates[1]!.toLowerCase() !== repository.name.toLowerCase()
+    ) {
+      return null;
+    }
+    return {
+      schemaVersion: 1,
+      provider: "github",
+      repositoryUrl,
+      owner: repository.owner,
+      repository: repository.name,
+      branch: observation.branch,
+      headSha,
+    };
+  } catch {
+    return null;
+  }
+}
 
 export class CatalogIngestionService {
   constructor(
@@ -154,6 +214,7 @@ export class CatalogIngestionService {
       };
     }
 
+    const branchHeadEvidence = persistedBranchHeadEvidence(normalized);
     const persisted = await this.repository.upsertCanonicalSkill({
       canonicalKey: normalized.canonicalKey,
       provider: normalized.provider,
@@ -167,6 +228,7 @@ export class CatalogIngestionService {
         ...(validation.metadata.licenseEvidence
           ? { licenseEvidence: validation.metadata.licenseEvidence }
           : {}),
+        ...(branchHeadEvidence ? { branchHeadEvidence } : {}),
         fileInventory,
       },
       officialProvenance: await this.officialPublisherPolicy(decoded),
