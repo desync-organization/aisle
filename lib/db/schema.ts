@@ -335,6 +335,12 @@ export const packageVersions = sqliteTable(
       .notNull()
       .references(() => packages.id, { onDelete: "cascade" }),
     version: integer("version").notNull(),
+    blueprintSchemaVersion: integer("blueprint_schema_version").notNull().default(1),
+    blueprintDigest: text("blueprint_digest").notNull().default(""),
+    editorialJson: text("editorial_json", { mode: "json" })
+      .$type<Record<string, unknown>>()
+      .notNull()
+      .default(sql`'{}'`),
     publishedAt: integer("published_at", { mode: "timestamp_ms" }),
     createdAt: integer("created_at", { mode: "timestamp_ms" })
       .notNull()
