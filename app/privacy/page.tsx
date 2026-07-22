@@ -26,7 +26,12 @@ const privacyAreas = [
   {
     icon: HardDrive,
     title: "Local selection state",
-    body: "The stack builder keeps public catalog identifiers and interface choices in browser storage on this device. It is not an account or cloud backup, and clearing site data removes it.",
+    body: "The stack builder keeps public catalog identifiers, interface choices, and anonymous collection ownership tokens in browser storage on this device. Clearing site data removes this local ownership record.",
+  },
+  {
+    icon: KeyRound,
+    title: "Public collections",
+    body: "When you explicitly create a collection, Aisle stores its name and referenced public skill IDs so the shared page remains available. The public link never includes the private owner token.",
   },
   {
     icon: GitFork,
@@ -79,19 +84,19 @@ export default function PrivacyPage() {
           <ShieldCheck aria-hidden="true" size={23} />
           <div>
             <span className="eyebrow">Current transparency release</span>
-            <h2>Selections stay local; command requests are revalidated on the server.</h2>
+            <h2>Selections stay local unless you explicitly publish a collection.</h2>
             <p>
-              A configured deployment can serve synchronized public catalog metadata. Preflight and command requests send the selected opaque catalog IDs, install-target choices, and any revision-bound warning acknowledgements to Aisle for current eligibility checks. This release does not save cloud stack records or install history, and it includes no account, analytics, advertising, or payment flow.
+              A configured deployment can serve synchronized public catalog metadata. Preflight and command requests send selected opaque catalog IDs, install-target choices, and revision-bound warning acknowledgements for current eligibility checks. Creating a collection stores its public name and skill references in Aisle’s database; anonymous ownership remains on the creator’s device. This release does not save install history and includes no account, analytics, advertising, or payment flow.
             </p>
           </div>
-          <time dateTime="2026-07-21">Reviewed 21 Jul 2026</time>
+          <time dateTime="2026-07-22">Reviewed 22 Jul 2026</time>
         </section>
 
         <section className="docs-section privacy-section">
           <div className="docs-section__heading">
             <span>01 / DATA MAP</span>
             <div>
-              <h2>Four boundaries worth keeping distinct.</h2>
+              <h2>Five boundaries worth keeping distinct.</h2>
               <p>
                 “Public data” describes where catalog material came from; it does not describe every request needed to deliver a website or every third-party tool a user may choose to run.
               </p>

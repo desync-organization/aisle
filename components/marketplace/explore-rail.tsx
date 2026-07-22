@@ -1,8 +1,9 @@
-import { ArrowUpRight, Boxes, Grid2X2, Layers3, ShieldCheck } from "lucide-react";
+import { ArrowUpRight, Boxes, FolderHeart, Grid2X2, Layers3, ShieldCheck } from "lucide-react";
 import Link from "next/link";
 
 const destinations = [
   { href: "/packages", icon: Boxes, id: "packages", label: "Packages", note: "Curated workflows" },
+  { href: "/collections", icon: FolderHeart, id: "collections", label: "Collections", note: "Community stacks" },
   { href: "/skills", icon: Layers3, id: "skills", label: "Skills", note: "Public catalog" },
   { href: "/categories", icon: Grid2X2, id: "categories", label: "Categories", note: "Browse by outcome" },
 ] as const;

@@ -74,6 +74,7 @@ export default async function HomePage() {
               <nav aria-label="Marketplace views">
                 <Link aria-current="page" href="/">Featured</Link>
                 <Link href="/packages">Packages</Link>
+                <Link href="/collections">Collections</Link>
                 <Link href="/skills">All skills</Link>
               </nav>
             </header>
@@ -84,6 +85,7 @@ export default async function HomePage() {
                   <span>Browse</span>
                   <Link aria-current="page" href="/"><Check aria-hidden="true" size={14} /> Featured</Link>
                   <Link href="/packages">Packages</Link>
+                  <Link href="/collections">Collections</Link>
                   <Link href="/skills">All skills</Link>
                   <Link href="/coverage">Source coverage</Link>
                 </div>
