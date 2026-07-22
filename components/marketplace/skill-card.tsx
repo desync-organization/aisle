@@ -73,8 +73,6 @@ export function SkillCard({ compact = false, skill }: { compact?: boolean; skill
         {skill.description || "The upstream publisher did not provide a catalog description."}
       </p>
       <dl className="skill-card__facts">
-        <div><dt>License</dt><dd>{skill.license}</dd></div>
-        <div><dt>Revision</dt><dd>{skill.immutableRef?.slice(0, 8) || "Pending"}</dd></div>
         <div><dt>Observed installs</dt><dd>{formatInstalls(skill.installs)}</dd></div>
       </dl>
       <Button
