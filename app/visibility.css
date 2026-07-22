@@ -581,6 +581,54 @@ select:focus-visible {
   border-color: #c9c8c2;
 }
 
+.skills-search {
+  grid-column: 1 / -1;
+}
+
+.skills-availability-toggle {
+  display: inline-flex;
+  width: fit-content;
+  min-height: 42px;
+  align-items: center;
+  gap: 3px;
+  padding: 3px;
+  border: 1px solid #484848;
+  border-radius: 10px;
+  background: #0d0d0d;
+}
+
+.skills-availability-toggle a {
+  display: inline-flex;
+  min-height: 34px;
+  align-items: center;
+  padding-inline: 12px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  color: #a8a7a1;
+  font-size: 0.64rem;
+  text-decoration: none;
+}
+
+.skills-availability-toggle a:hover {
+  color: #eeede7;
+  background: #181818;
+}
+
+.skills-availability-toggle a[aria-current="page"] {
+  border-color: #858580;
+  color: #111;
+  background: #d5d4ce;
+}
+
+.skills-availability-toggle a:focus-visible {
+  outline: 2px solid #d5d4ce;
+  outline-offset: 3px;
+}
+
+.skills-toolbar__selects {
+  justify-self: end;
+}
+
 .skill-card {
   border-color: #484848;
   background: #121212 !important;
@@ -1669,6 +1717,17 @@ select:focus-visible {
   .skills-search,
   .skills-toolbar select {
     min-height: 46px;
+  }
+
+  .skills-availability-toggle,
+  .skills-toolbar__selects {
+    width: 100%;
+    justify-self: stretch;
+  }
+
+  .skills-availability-toggle a {
+    flex: 1;
+    justify-content: center;
   }
 
   .collection-creator,

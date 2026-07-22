@@ -40,12 +40,14 @@ const availabilityCopy: Record<CatalogAvailability, { title: string; body: strin
 export function SkillsExplorer({
   availability,
   category,
+  includeUnavailable = false,
   initialQuery = "",
   pagination,
   skills,
 }: {
   availability: CatalogAvailability;
   category?: string;
+  includeUnavailable?: boolean;
   initialQuery?: string;
   pagination: MarketplaceCatalogSnapshot["pagination"];
   skills: ReadonlyArray<MarketplaceSkillSummary>;
@@ -87,10 +89,15 @@ export function SkillsExplorer({
 
   const emptyCopy = availabilityCopy[availability];
 
-  function catalogUrl(nextQuery: string, nextPage = 1): string {
+  function catalogUrl(
+    nextQuery: string,
+    nextPage = 1,
+    showUnavailable = includeUnavailable,
+  ): string {
     const params = new URLSearchParams();
     if (category) params.set("category", category);
     if (nextQuery) params.set("q", nextQuery);
+    if (showUnavailable) params.set("status", "all");
     if (nextPage > 1) params.set("page", String(nextPage));
     const encoded = params.toString();
     return encoded ? `/skills?${encoded}` : "/skills";
@@ -129,6 +136,20 @@ export function SkillsExplorer({
             </button>
           </span>
         </form>
+        <nav aria-label="Skill availability" className="skills-availability-toggle">
+          <Link
+            aria-current={!includeUnavailable ? "page" : undefined}
+            href={catalogUrl(initialQuery, 1, false)}
+          >
+            Ready to add
+          </Link>
+          <Link
+            aria-current={includeUnavailable ? "page" : undefined}
+            href={catalogUrl(initialQuery, 1, true)}
+          >
+            All records
+          </Link>
+        </nav>
         <div className="skills-toolbar__selects">
           <label>
             <span>Trust</span>
@@ -160,8 +181,14 @@ export function SkillsExplorer({
       </section>
 
       <div className="skills-result-bar">
-        <span><SlidersHorizontal aria-hidden="true" size={14} /> {visibleSkills.length} shown on this page</span>
-        <span>{skills.length} skills loaded · page {pagination.page}</span>
+        <span>
+          <SlidersHorizontal aria-hidden="true" size={14} /> {visibleSkills.length} {includeUnavailable ? "records" : "ready skills"} shown
+        </span>
+        <span>
+          {includeUnavailable
+            ? "Pending and blocked records are included"
+            : "Every result on this page can be added now"} · page {pagination.page}
+        </span>
       </div>
 
       {visibleSkills.length > 0 ? (

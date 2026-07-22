@@ -37,11 +37,13 @@ export default async function SkillsPage({ searchParams }: SkillsPageProps) {
   const params = await searchParams;
   const query = firstValue(params.q).slice(0, 160);
   const page = catalogPage(params.page);
+  const includeUnavailable = firstValue(params.status) === "all";
   const requestedCategory = firstValue(params.category);
   const category = getCatalogCategory(requestedCategory);
   const catalog = await loadMarketplaceCatalog({
     query,
     category: category?.slug,
+    includeUnavailable,
     page,
     pageSize: 48,
   });
@@ -102,8 +104,9 @@ export default async function SkillsPage({ searchParams }: SkillsPageProps) {
           <SkillsExplorer
             availability={catalog.availability}
             category={category?.slug}
+            includeUnavailable={includeUnavailable}
             initialQuery={query}
-            key={`${category?.slug ?? "all"}:${query}`}
+            key={`${category?.slug ?? "all"}:${query}:${includeUnavailable ? "all" : "ready"}`}
             pagination={catalog.pagination}
             skills={catalog.skills}
           />
