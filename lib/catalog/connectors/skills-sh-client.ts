@@ -35,6 +35,10 @@ const detailFileSchema = z.object({
   contents: z.string(),
 });
 
+const auditTimestampSchema = z
+  .iso.datetime({ offset: true })
+  .transform((value) => new Date(value).toISOString());
+
 export const skillsShDetailResponseSchema = z.object({
   id: z.string().min(1).max(1_024),
   source: z.string().min(1).max(512),
@@ -50,7 +54,7 @@ const auditEntrySchema = z
     slug: z.string().min(1).max(128),
     status: z.enum(["pass", "warn", "fail"]),
     summary: z.string().min(1).max(4_096),
-    auditedAt: z.iso.datetime().optional(),
+    auditedAt: auditTimestampSchema.optional(),
     riskLevel: z.string().min(1).max(128).optional(),
   });
 
