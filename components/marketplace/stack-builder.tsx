@@ -2,7 +2,6 @@
 
 import {
   AlertTriangle,
-  ArrowUpRight,
   Check,
   Clipboard,
   Code2,
@@ -32,7 +31,6 @@ import {
   type StackScope,
   type StackShell,
 } from "@/lib/marketplace/stack-api";
-import { catalogSelectionGateCopy } from "@/lib/marketplace/selection-gates";
 import { useSelection } from "@/lib/selection/react";
 
 type ResolutionState =
@@ -338,7 +336,7 @@ export function StackBuilder() {
             <span>{state.count}/{meta.maxSelections}</span>
           </div>
           <p className="stack-review-card__note">
-            The server binds every device-local ID to current public metadata before configuration begins. Review the exact source, license, trust state, and revision below.
+            Aisle rechecks every selected skill before configuration. This view stays intentionally minimal; source and revision validation still happen on the server.
           </p>
           {preflight.status === "loading" || preflight.status === "idle" ? (
             <div className="stack-preflight-status">
@@ -368,48 +366,18 @@ export function StackBuilder() {
                 return (
                   <li data-selectable={row.selectable ? "true" : "false"} key={row.id}>
                     <span>{String(index + 1).padStart(2, "0")}</span>
-                    <div className="stack-selection-list__body">
-                      <div className="stack-selection-list__title">
-                        <strong>{row.name}</strong>
-                        <span className={`trust-pill trust-pill--${row.trust}`}>
-                          {row.trust === "pass" ? "Trust checked" : row.trust === "warn" ? "Review warning" : row.trust}
-                        </span>
-                      </div>
-                      <code>{row.id}</code>
-                      <dl className="stack-selection-metadata">
-                        <div>
-                          <dt>Source</dt>
-                          <dd><a href={row.sourceUrl} rel="noreferrer" target="_blank">{row.sourceUrl} <ArrowUpRight aria-hidden="true" size={11} /></a></dd>
-                        </div>
-                        <div><dt>License</dt><dd>{row.license}</dd></div>
-                        <div><dt>Revision ID</dt><dd>{row.revisionId || "Pending"}</dd></div>
-                        <div><dt>Immutable ref</dt><dd>{row.immutableRef || "Pending"}</dd></div>
-                      </dl>
-                      {row.compatibilityAdvisory ? (
-                        <p className="stack-selection-list__compatibility">
-                          <strong>Upstream compatibility note:</strong> {row.compatibilityAdvisory}
-                        </p>
-                      ) : null}
-                      {row.gateReasons.length > 0 ? (
-                        <ul className="stack-selection-gates">
-                          {row.gateReasons.map((reason) => <li key={reason}>{catalogSelectionGateCopy[reason]}</li>)}
-                        </ul>
-                      ) : null}
-                      {row.trust === "warn" && row.warningFingerprint ? (
-                        <label className="stack-warning-ack" data-checked={warningAcknowledged ? "true" : "false"}>
-                          <input
-                            checked={warningAcknowledged}
-                            onChange={() => toggleWarningAcknowledgement(row)}
-                            type="checkbox"
-                          />
-                          <span>{warningAcknowledged ? <Check aria-hidden="true" size={12} /> : null}</span>
-                          <span>
-                            I acknowledge this warning for revision {row.immutableRef?.slice(0, 12)}.
-                            <code>{row.warningFingerprint.slice(0, 16)}</code>
-                          </span>
-                        </label>
-                      ) : null}
-                    </div>
+                    <strong>{row.name}</strong>
+                    {row.trust === "warn" && row.warningFingerprint ? (
+                      <label className="stack-warning-ack" data-checked={warningAcknowledged ? "true" : "false"}>
+                        <input
+                          checked={warningAcknowledged}
+                          onChange={() => toggleWarningAcknowledgement(row)}
+                          type="checkbox"
+                        />
+                        <span>{warningAcknowledged ? <Check aria-hidden="true" size={12} /> : null}</span>
+                        <span>Acknowledge</span>
+                      </label>
+                    ) : <span aria-hidden="true" className="stack-selection-list__spacer" />}
                     <Button aria-label={`Remove ${row.name}`} onClick={() => actions.remove(row.id)} variant="quiet">
                       <X aria-hidden="true" size={15} />
                     </Button>
@@ -422,7 +390,8 @@ export function StackBuilder() {
               {state.ids.map((id, index) => (
                 <li key={id}>
                   <span>{String(index + 1).padStart(2, "0")}</span>
-                  <div><strong>Catalog selection</strong><code>{id}</code></div>
+                  <strong>Reviewing selected skill</strong>
+                  <span aria-hidden="true" className="stack-selection-list__spacer" />
                   <Button aria-label={`Remove selection ${id}`} onClick={() => actions.remove(id)} variant="quiet">
                     <X aria-hidden="true" size={15} />
                   </Button>
