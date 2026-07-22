@@ -38,6 +38,11 @@ type NormalizedSourceResult =
   | { status: "fulfilled"; value: unknown }
   | { status: "rejected"; reason: string };
 
+// SkillMD hydration performs bounded remote provenance checks before a page can
+// be checkpointed. Keep production pages small so an interrupted sweep resumes
+// from durable progress instead of replaying a large first batch.
+const SKILLMD_SYNC_PAGE_SIZE = 10;
+
 function isOperationalFailure(value: unknown): boolean {
   if (!value || typeof value !== "object" || !("status" in value)) return false;
   const result = value as { status?: unknown; processed?: unknown };
@@ -143,7 +148,10 @@ async function main(): Promise<void> {
     );
     const connectors: CatalogSourceConnector[] = [
       new ClawHubAdapter(),
-      new SkillMdAdapter({ githubToken: process.env.GITHUB_TOKEN }),
+      new SkillMdAdapter({
+        githubToken: process.env.GITHUB_TOKEN,
+        pageSize: SKILLMD_SYNC_PAGE_SIZE,
+      }),
       new AgentSkillsInConnector({
         enabled: explicitlyEnabled("AISLE_AGENTSKILLS_IN_ENABLED"),
         githubToken: process.env.GITHUB_TOKEN,
