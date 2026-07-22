@@ -35,7 +35,7 @@ html {
 body {
   color: #ededed;
   background: #000 !important;
-  font-family: "Manrope Variable", Arial, Helvetica, sans-serif;
+  font-family: var(--font-sans);
 }
 
 body::before {

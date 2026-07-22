@@ -1,20 +1,22 @@
 # Aisle visual system
 
-The foundation uses an original “ink and electric iris” direction. Restrained surfaces and editorial typography keep dense marketplace information legible, while the aisle-rail motif shows multiple sources converging into one stack.
+The foundation uses a graphite marketplace direction with a blue interaction accent and semantic status colors. Layered surfaces, explicit active states, and editorial typography keep dense marketplace information legible, while the aisle-rail motif shows multiple sources converging into one stack.
 
 ## Tokens
 
-Tokens live in `app/globals.css` and are the source of truth.
+Base tokens live in `app/globals.css`; the current marketplace palette and visibility overrides live in `app/visibility.css` and form the final rendered layer.
 
-- **Ink:** near-black page and raised-surface colors; never pure black-on-white dashboard chrome.
-- **Electric iris:** primary action, focus, and provenance-rail accent.
+- **Graphite:** dark blue-black page, raised-surface, and elevated-surface colors provide visible depth without relying on shadows alone.
+- **Action blue:** primary action, focus, current navigation, and selection accent.
 - **Mint:** positive status only. It is not a blanket “safe” label.
+- **Amber and coral:** warning and blocked/error states respectively.
+- **Category accents:** a restrained non-purple set used only to improve package and category scanning.
 - **Paper and muted:** primary and secondary text with AA contrast on their intended surfaces.
 - **Line:** low-contrast structure; `line-strong` is reserved for interactive hover and selected states.
 - **Radius:** small controls, medium cards, and large editorial surfaces.
 - **Motion:** short feedback transitions using the shared ease-out curve. Reduced-motion preferences collapse animation durations.
 
-Typography uses locally packaged Manrope Variable for editorial and interface copy, plus JetBrains Mono Variable for commands, metadata, and provenance labels. No build-time font network request is required.
+Typography uses the locally packaged Geist Sans variable font for editorial and interface copy, plus JetBrains Mono Variable for commands, metadata, and provenance labels. No build-time font network request is required.
 
 ## Component contract
 

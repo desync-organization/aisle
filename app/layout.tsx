@@ -1,11 +1,12 @@
 import type { Metadata, Viewport } from "next";
 import type { ReactNode } from "react";
+import { GeistSans } from "geist/font/sans";
 
 import "@fontsource-variable/jetbrains-mono";
-import "@fontsource-variable/manrope";
 import "./globals.css";
 import "./marketplace.css";
 import "./monochrome.css";
+import "./visibility.css";
 
 import { SelectionProvider } from "@/lib/selection/react";
 import { siteDescription, siteOrigin, siteSocialImage } from "@/lib/seo";
@@ -45,13 +46,13 @@ export const metadata: Metadata = {
 
 export const viewport: Viewport = {
   colorScheme: "dark",
-  themeColor: "#000000",
+  themeColor: "#0a0e14",
 };
 
 export default function RootLayout({ children }: Readonly<{ children: ReactNode }>) {
   return (
-    <html lang="en">
-      <body>
+    <html className={GeistSans.variable} lang="en">
+      <body className={GeistSans.className}>
         <SelectionProvider>{children}</SelectionProvider>
       </body>
     </html>
