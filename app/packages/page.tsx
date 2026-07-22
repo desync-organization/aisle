@@ -7,6 +7,7 @@ import { PackageGrid } from "@/components/marketplace/package-grid";
 import { SiteFooter } from "@/components/site-footer";
 import { SiteHeader } from "@/components/site-header";
 import { Badge } from "@/components/ui/badge";
+import { loadResolvedPackage } from "@/lib/marketplace/catalog";
 import { launchPackageBlueprints } from "@/lib/packages";
 import { createPageMetadata } from "@/lib/seo";
 
@@ -16,9 +17,20 @@ export const metadata: Metadata = createPageMetadata({
   path: "/packages",
 });
 
-export default function PackagesPage() {
-  const featured = launchPackageBlueprints.filter((blueprint) => blueprint.editorial.featured);
-  const totalMembers = launchPackageBlueprints.reduce((total, blueprint) => total + blueprint.members.length, 0);
+export const dynamic = "force-dynamic";
+
+export default async function PackagesPage() {
+  const packageStates = await Promise.all(
+    launchPackageBlueprints.map(async (blueprint) => ({
+      blueprint,
+      state: await loadResolvedPackage(blueprint),
+    })),
+  );
+  const publishedPackages = packageStates
+    .filter(({ state }) => state.availability === "resolved")
+    .map(({ blueprint }) => blueprint);
+  const featured = publishedPackages.filter((blueprint) => blueprint.editorial.featured);
+  const totalMembers = publishedPackages.reduce((total, blueprint) => total + blueprint.members.length, 0);
 
   return (
     <div className="site-frame">
@@ -35,7 +47,7 @@ export default function PackagesPage() {
               </p>
             </div>
             <dl className="marketplace-hero__ledger">
-              <div><dt>Curated packages</dt><dd>{launchPackageBlueprints.length}</dd></div>
+              <div><dt>Published packages</dt><dd>{publishedPackages.length}</dd></div>
               <div><dt>Featured workflows</dt><dd>{featured.length}</dd></div>
               <div><dt>Upstream references</dt><dd>{totalMembers}</dd></div>
             </dl>
@@ -56,11 +68,11 @@ export default function PackagesPage() {
             <div className="market-section__heading">
               <div>
                 <span>02 / Full collection</span>
-                <h2 id="all-packages">Eight aisles. One visible source trail.</h2>
+                <h2 id="all-packages">Every published package. Every source visible.</h2>
               </div>
               <p>Open any package to inspect every exact skill path, observed revision, license, and editorial reason for inclusion.</p>
             </div>
-            <PackageGrid packages={launchPackageBlueprints} />
+            <PackageGrid packages={publishedPackages} />
           </section>
 
           <section className="package-method">
