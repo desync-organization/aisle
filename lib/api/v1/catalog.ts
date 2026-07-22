@@ -4,11 +4,15 @@ import {
   desc,
   eq,
   inArray,
+  isNotNull,
+  isNull,
+  ne,
   sql,
   type SQL,
 } from "drizzle-orm";
 
 import {
+  individuallySelectableLicenseIds,
   isIndividuallySelectableLicense,
   publicLicenseLabel,
 } from "@/lib/catalog/license-policy";
@@ -430,11 +434,69 @@ function skillsFilterHash(query: SkillsQuery): string {
     source: query.source ?? null,
     compatibility: query.compatibility?.toLowerCase() ?? null,
     lifecycle: query.lifecycle,
+    availability: query.availability,
     trust: query.trust ?? null,
     official: query.official ?? null,
     license: query.license?.toLowerCase() ?? null,
     sort: query.sort,
   });
+}
+
+function readySkillConditions(): SQL[] {
+  const completeArtifact = sql<boolean>`
+    json_valid(coalesce(${skillRevisions.metadataJson}, '{}')) = 1
+    and json_extract(${skillRevisions.metadataJson}, '$.fileInventory.schemaVersion') = 1
+    and json_extract(${skillRevisions.metadataJson}, '$.fileInventory.complete') = 1
+    and json_extract(${skillRevisions.metadataJson}, '$.fileInventory.fileCount') > 0
+    and json_extract(${skillRevisions.metadataJson}, '$.fileInventory.aggregateSha256') = ${skillRevisions.contentHash}
+  `;
+  const verifiedLicense = sql<boolean>`
+    json_valid(coalesce(${skillRevisions.metadataJson}, '{}')) = 1
+    and json_type(${skillRevisions.metadataJson}, '$.licenseEvidence.path') = 'text'
+    and length(trim(json_extract(${skillRevisions.metadataJson}, '$.licenseEvidence.path'))) > 0
+    and json_type(${skillRevisions.metadataJson}, '$.licenseEvidence.source') = 'text'
+    and length(trim(json_extract(${skillRevisions.metadataJson}, '$.licenseEvidence.source'))) > 0
+    and json_type(${skillRevisions.metadataJson}, '$.licenseEvidence.sha256') = 'text'
+    and length(json_extract(${skillRevisions.metadataJson}, '$.licenseEvidence.sha256')) = 64
+    and lower(json_extract(${skillRevisions.metadataJson}, '$.licenseEvidence.sha256'))
+      not glob '*[^0-9a-f]*'
+  `;
+  const revisionBoundSource = sql<boolean>`
+    json_valid(coalesce(${skillRevisions.installSpecJson}, '{}')) = 1
+    and json_extract(${skillRevisions.installSpecJson}, '$.kind') = 'source'
+    and json_extract(${skillRevisions.installSpecJson}, '$.sourceUrl') = ${skills.sourceUrl}
+    and json_extract(${skillRevisions.installSpecJson}, '$.skillPath') = ${skills.skillPath}
+    and json_extract(${skillRevisions.installSpecJson}, '$.immutableRef') = ${skillRevisions.immutableRef}
+    and ${repositories.provider} = 'github'
+    and ${repositories.visibility} = 'public'
+    and ${repositories.normalizedUrl} = ${skills.sourceUrl}
+    and length(trim(coalesce(${repositories.owner}, ''))) > 0
+    and length(trim(coalesce(${repositories.name}, ''))) > 0
+  `;
+  const validContentHash = sql<boolean>`
+    length(${skillRevisions.contentHash}) = 64
+    and lower(${skillRevisions.contentHash}) not glob '*[^0-9a-f]*'
+  `;
+
+  return [
+    eq(skills.lifecycle, "current"),
+    isNotNull(skillRevisions.id),
+    ne(skillRevisions.immutableRef, ""),
+    isNotNull(skillRevisions.upstreamHash),
+    eq(skillRevisions.immutableRef, skillRevisions.upstreamHash),
+    validContentHash,
+    completeArtifact,
+    revisionBoundSource,
+    currentObservationExpression,
+    inArray(
+      sql<string>`coalesce(${skillRevisions.license}, ${skills.license})`,
+      individuallySelectableLicenseIds,
+    ),
+    verifiedLicense,
+    sql<boolean>`${trustStateExpression} in ('pass', 'warn')`,
+    sql<boolean>`not ${latestAuditFailureExpression}`,
+    isNull(skillDuplicates.duplicateOfSkillId),
+  ];
 }
 
 function skillCursorCondition(
@@ -523,6 +585,7 @@ export async function listPublicSkills(database: CatalogDatabase, query: SkillsQ
   if (query.license) {
     conditions.push(sql`lower(coalesce(${skillRevisions.license}, ${skills.license})) = ${query.license.toLowerCase()}`);
   }
+  if (query.availability === "ready") conditions.push(...readySkillConditions());
   const cursorCondition = skillCursorCondition(query, cursor);
   if (cursorCondition) conditions.push(cursorCondition);
 

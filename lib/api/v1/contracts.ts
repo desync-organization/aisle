@@ -59,6 +59,7 @@ export const skillsQuerySchema = z.strictObject({
   source: sourceIdSchema.optional(),
   compatibility: z.string().trim().min(1).max(120).optional(),
   lifecycle: skillLifecycleSchema.default("current"),
+  availability: z.enum(["ready", "all"]).default("ready"),
   trust: publicTrustStateSchema.optional(),
   official: queryBooleanSchema.optional(),
   license: z
