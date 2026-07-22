@@ -64,6 +64,7 @@ export interface SkillMdAdapterOptions {
   client?: SkillMdCatalogClient;
   fetch?: typeof fetch;
   pageSize?: number;
+  maxConcurrentHydrations?: number;
   maxTextFileBytes?: number;
   maxTextTotalBytes?: number;
   githubToken?: string;
@@ -252,6 +253,7 @@ export class SkillMdAdapter implements CatalogSourceConnector {
   private readonly client: SkillMdCatalogClient;
   private readonly fetchImplementation: typeof fetch;
   private readonly pageSize: number;
+  private readonly maxConcurrentHydrations: number;
   private readonly maxTextFileBytes: number;
   private readonly maxTextTotalBytes: number;
   private readonly githubToken?: string;
@@ -261,6 +263,10 @@ export class SkillMdAdapter implements CatalogSourceConnector {
     this.client = options.client ?? new SkillMdClient();
     this.fetchImplementation = options.fetch ?? fetch;
     this.pageSize = Math.min(Math.max(options.pageSize ?? 100, 1), 100);
+    const requestedConcurrency = options.maxConcurrentHydrations ?? 1;
+    this.maxConcurrentHydrations = Number.isSafeInteger(requestedConcurrency)
+      ? Math.min(Math.max(requestedConcurrency, 1), 4)
+      : 1;
     this.maxTextFileBytes = options.maxTextFileBytes ?? 204_800;
     this.maxTextTotalBytes = options.maxTextTotalBytes ?? 1_048_576;
     this.githubToken = options.githubToken?.trim() || undefined;
@@ -280,16 +286,34 @@ export class SkillMdAdapter implements CatalogSourceConnector {
       exclusions.push(
         "SkillMD offset pagination has no stable snapshot token; this sweep cannot retire absent records.",
       );
-      for (const item of page.items) {
-        try {
-          const detail = await this.client.detail(item.slug);
-          records.push(await this.hydrate(item, detail, exclusions));
-        } catch (error) {
-          degraded = true;
-          exclusions.push(
-            `${item.slug}: exact public source hydration failed (${error instanceof Error ? error.message : String(error)}).`,
-          );
-          records.push(this.unresolved(item, null, "exact public source hydration failed"));
+      for (let index = 0; index < page.items.length; index += this.maxConcurrentHydrations) {
+        const batch = page.items.slice(index, index + this.maxConcurrentHydrations);
+        const hydratedBatch = await Promise.all(
+          batch.map(async (item) => {
+            const itemExclusions: string[] = [];
+            try {
+              const detail = await this.client.detail(item.slug);
+              return {
+                record: await this.hydrate(item, detail, itemExclusions),
+                exclusions: itemExclusions,
+                failed: false,
+              };
+            } catch (error) {
+              itemExclusions.push(
+                `${item.slug}: exact public source hydration failed (${error instanceof Error ? error.message : String(error)}).`,
+              );
+              return {
+                record: this.unresolved(item, null, "exact public source hydration failed"),
+                exclusions: itemExclusions,
+                failed: true,
+              };
+            }
+          }),
+        );
+        for (const result of hydratedBatch) {
+          degraded ||= result.failed;
+          exclusions.push(...result.exclusions);
+          records.push(result.record);
         }
       }
       const nextCursor = page.nextOffset === null ? null : String(page.nextOffset);
