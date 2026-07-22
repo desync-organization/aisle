@@ -6,6 +6,7 @@ import { notFound } from "next/navigation";
 import { CategoryIcon } from "@/components/marketplace/category-icon";
 import { ExploreRail } from "@/components/marketplace/explore-rail";
 import { PackageSelection } from "@/components/marketplace/package-selection";
+import { SkillSelectionButton } from "@/components/marketplace/skill-selection-button";
 import { SiteFooter } from "@/components/site-footer";
 import { SiteHeader } from "@/components/site-header";
 import { Badge } from "@/components/ui/badge";
@@ -90,7 +91,7 @@ export default async function PackagePage({ params }: PackagePageProps) {
                 <span>Includes / {String(blueprint.members.length).padStart(2, "0")} skills</span>
                 <h2 id="package-members">What’s included.</h2>
               </div>
-              <p>Skill details come from the original sources. The notes explain why each one is here.</p>
+              <p>Add the whole package above, or pick only the skills you need.</p>
             </div>
             <ol className="package-member-list">
               {blueprint.members.map((member) => {
@@ -122,6 +123,14 @@ export default async function PackagePage({ params }: PackagePageProps) {
                       {resolvedMember
                         ? <span className="member-ready"><Check aria-hidden="true" size={13} /> Ready</span>
                         : <span>{resolved.availability === "binding-mismatch" ? "Needs review" : "Not ready yet"}</span>}
+                      {resolvedMember ? (
+                        <SkillSelectionButton
+                          gateReasons={[]}
+                          id={resolvedMember.skillId}
+                          name={member.locator.upstreamSkillName}
+                          selectable
+                        />
+                      ) : null}
                       <a href={snapshotUrl} rel="noreferrer" target="_blank">
                         <GitBranch aria-hidden="true" size={14} /> View source <ArrowUpRight aria-hidden="true" size={13} />
                       </a>

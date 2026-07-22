@@ -148,6 +148,7 @@ export function CollectionSkillEditor({
       try {
         const params = new URLSearchParams({
           q: normalizedQuery,
+          availability: "ready",
           sort: "name",
           limit: "8",
         });

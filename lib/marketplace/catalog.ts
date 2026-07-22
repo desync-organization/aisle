@@ -395,7 +395,7 @@ function inspectPublishedPackage(
   if (
     first.slug !== blueprint.slug ||
     first.title !== blueprint.editorial.title ||
-    first.description !== blueprint.editorial.summary
+    first.packageDescription !== blueprint.editorial.summary
   ) {
     mismatchReasons.add("editorial-mismatch");
   }

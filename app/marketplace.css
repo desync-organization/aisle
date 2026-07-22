@@ -772,6 +772,12 @@
 .package-member-list__actions > span { color: #c9c8c2; }
 .package-member-list__actions > .member-ready { color: var(--mint); }
 .package-member-list__actions > a { position: relative; z-index: 1; min-height: 38px; color: var(--iris-bright); }
+.package-member-list__actions .skill-selection-button {
+  min-width: 138px;
+  min-height: 38px;
+  padding-inline: 13px;
+  font-size: 0.57rem;
+}
 
 .catalog-contract-strip {
   display: grid;
@@ -1800,7 +1806,7 @@
   .package-detail-hero__facts { grid-column: 2; display: grid; grid-template-columns: repeat(3, 1fr); }
   .package-detail-hero__facts > div { padding-inline: 11px; border-right: 1px solid var(--line); }
   .package-member-list > li { grid-template-columns: 44px minmax(0, 1fr) 170px; }
-  .package-member-list__actions { grid-column: 2 / -1; grid-row: 2; grid-template-columns: 1fr auto; align-items: center; justify-items: start; }
+  .package-member-list__actions { grid-column: 2 / -1; grid-row: 2; grid-template-columns: 1fr auto auto; align-items: center; justify-items: start; }
   .package-method { grid-template-columns: auto minmax(0, 1fr); }
   .package-method ol { grid-column: 2; }
   .package-method > a { grid-column: 2; }
@@ -1936,6 +1942,7 @@
   .package-member-list dl,
   .package-member-list__actions { grid-column: 1; }
   .package-member-list__actions { justify-items: start; grid-template-columns: 1fr; }
+  .package-member-list__actions .skill-selection-button { width: 100%; }
   .skills-result-bar { align-items: flex-start; flex-direction: column; justify-content: center; padding-block: 10px; }
   .skill-card { min-height: 370px; }
   .selection-dock { position: static; grid-template-columns: auto 1fr; }
