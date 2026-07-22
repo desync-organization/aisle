@@ -27,7 +27,7 @@ export default async function PackagesPage() {
     })),
   );
   const publishedPackages = packageStates
-    .filter(({ state }) => state.availability === "resolved")
+    .filter(({ state }) => state.binding !== null)
     .map(({ blueprint }) => blueprint);
   const featured = publishedPackages.filter((blueprint) => blueprint.editorial.featured);
   const totalMembers = publishedPackages.reduce((total, blueprint) => total + blueprint.members.length, 0);
