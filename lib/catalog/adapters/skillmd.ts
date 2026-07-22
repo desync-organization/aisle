@@ -54,6 +54,7 @@ const treeSchema = z.object({
 type TreeEntry = z.infer<typeof treeEntrySchema>;
 
 const MAX_REPOSITORY_LICENSE_BYTES = 262_144;
+const MAX_SKILLMD_ARTIFACT_FILES = 512;
 
 interface SkillMdCatalogClient {
   listSkills(options: { limit: number; offset: number }): ReturnType<SkillMdClient["listSkills"]>;
@@ -65,6 +66,7 @@ export interface SkillMdAdapterOptions {
   fetch?: typeof fetch;
   pageSize?: number;
   maxConcurrentHydrations?: number;
+  maxArtifactFiles?: number;
   maxTextFileBytes?: number;
   maxTextTotalBytes?: number;
   githubToken?: string;
@@ -254,6 +256,7 @@ export class SkillMdAdapter implements CatalogSourceConnector {
   private readonly fetchImplementation: typeof fetch;
   private readonly pageSize: number;
   private readonly maxConcurrentHydrations: number;
+  private readonly maxArtifactFiles: number;
   private readonly maxTextFileBytes: number;
   private readonly maxTextTotalBytes: number;
   private readonly githubToken?: string;
@@ -267,6 +270,10 @@ export class SkillMdAdapter implements CatalogSourceConnector {
     this.maxConcurrentHydrations = Number.isSafeInteger(requestedConcurrency)
       ? Math.min(Math.max(requestedConcurrency, 1), 4)
       : 1;
+    const requestedArtifactFiles = options.maxArtifactFiles ?? MAX_SKILLMD_ARTIFACT_FILES;
+    this.maxArtifactFiles = Number.isSafeInteger(requestedArtifactFiles)
+      ? Math.min(Math.max(requestedArtifactFiles, 1), MAX_SKILLMD_ARTIFACT_FILES)
+      : MAX_SKILLMD_ARTIFACT_FILES;
     this.maxTextFileBytes = options.maxTextFileBytes ?? 204_800;
     this.maxTextTotalBytes = options.maxTextTotalBytes ?? 1_048_576;
     this.githubToken = options.githubToken?.trim() || undefined;
@@ -355,6 +362,12 @@ export class SkillMdAdapter implements CatalogSourceConnector {
     }
 
     const entries = relativeEntries(snapshot.tree.tree, skillPath);
+    const inventoryWithinLimit = entries.length <= this.maxArtifactFiles;
+    if (!inventoryWithinLimit) {
+      exclusions.push(
+        `${item.slug}: skill artifact contains ${entries.length} files, above the ${this.maxArtifactFiles}-file scan limit.`,
+      );
+    }
     const paths = new Set<string>();
     for (const entry of entries) {
       if (paths.has(entry.path)) throw new Error(`duplicate source path ${entry.path}`);
@@ -366,8 +379,8 @@ export class SkillMdAdapter implements CatalogSourceConnector {
       { path: string; type: string; mode: string; size: number; sha: string }
     >();
     let totalBytes = 0;
-    let complete = true;
-    for (const entry of entries) {
+    let complete = inventoryWithinLimit;
+    for (const entry of inventoryWithinLimit ? entries : []) {
       if (entry.type !== "blob") {
         complete = false;
         continue;
@@ -432,14 +445,16 @@ export class SkillMdAdapter implements CatalogSourceConnector {
         sha: sha256,
       });
     }
-    const artifactFiles = entries.map((entry) =>
-      verifiedFiles.get(entry.path) ?? {
-        path: entry.path,
-        type: entry.type,
-        mode: entry.mode,
-        size: entry.size,
-      },
-    );
+    const artifactFiles = inventoryWithinLimit
+      ? entries.map((entry) =>
+          verifiedFiles.get(entry.path) ?? {
+            path: entry.path,
+            type: entry.type,
+            mode: entry.mode,
+            size: entry.size,
+          },
+        )
+      : [];
     const manifest = textFiles.find((file) => file.path === "SKILL.md");
     if (!manifest) complete = false;
     if (!complete || !manifest) {
