@@ -67,12 +67,12 @@ describe("install command rendering", () => {
     "executes the rendered trusted npx token through cmd.exe",
     () => {
       const plan = createInstallPlan(installPlanFixture(undefined, { shell: "cmd" }));
-      const executable = plan.command.match(/^\S+/)?.[0];
+      const executable = plan.command.match(/^call\s+(\S+)/)?.[1];
 
       expect(executable).toBe("npx.cmd");
       const result = spawnSync(
         "cmd.exe",
-        ["/d", "/s", "/c", `${executable} "--version"`],
+        ["/d", "/s", "/c", `call ${executable} "--version"`],
         {
           encoding: "utf8",
           windowsHide: true,

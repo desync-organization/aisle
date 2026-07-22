@@ -37,7 +37,7 @@ const trustLabels = [
     label: "Audited / no known findings",
     icon: ScanLine,
     tone: "clear",
-    meaning: "The named scanners reported no findings for this exact revision. This is a limited review, not a safety guarantee.",
+    meaning: "The named scanners reported no findings for this exact revision. This is a limited review, not a guarantee of safety.",
     gate: "Allowed",
   },
   {

@@ -27,7 +27,7 @@ import { createPageMetadata } from "@/lib/seo";
 type SkillPageProps = Readonly<{ params: Promise<{ id: string }> }>;
 const getSkill = cache(loadMarketplaceSkill);
 
-export const dynamic = "force-dynamic";
+export const revalidate = 300;
 
 function sourceIdentity(sourceUrl: string): string {
   try {

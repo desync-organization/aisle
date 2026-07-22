@@ -25,3 +25,13 @@ export function createCatalogDatabase(
     db: drizzle(client, { schema }),
   };
 }
+
+const sharedDatabase = globalThis as typeof globalThis & {
+  __aisleCatalogDatabase?: CatalogDatabaseConnection;
+};
+
+/** Reuse the read client across warm server invocations and development HMR. */
+export function getSharedCatalogDatabase(): CatalogDatabaseConnection {
+  sharedDatabase.__aisleCatalogDatabase ??= createCatalogDatabase();
+  return sharedDatabase.__aisleCatalogDatabase;
+}

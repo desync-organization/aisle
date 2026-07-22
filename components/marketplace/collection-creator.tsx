@@ -2,12 +2,14 @@
 
 import { ArrowRight, Check, Copy, FolderPlus, Link2, LoaderCircle } from "lucide-react";
 import Link from "next/link";
-import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { useMemo, useState, useSyncExternalStore, type FormEvent } from "react";
 
 import { Button } from "@/components/ui/button";
 import {
-  readOwnedCollections,
+  decodeOwnedCollections,
+  readOwnedCollectionsSnapshot,
   saveOwnedCollection,
+  subscribeOwnedCollections,
   type OwnedCollection,
 } from "@/lib/collections/browser-ownership";
 import { COLLECTION_NAME_MAX_LENGTH } from "@/lib/collections/contracts";
@@ -27,17 +29,23 @@ export function CollectionCreator({ compact = false }: { compact?: boolean }) {
   const { state } = useSelection();
   const [name, setName] = useState("");
   const [createState, setCreateState] = useState<CreateState>({ status: "idle" });
-  const [ownedCollections, setOwnedCollections] = useState<readonly OwnedCollection[]>([]);
+  const ownedCollectionsSnapshot = useSyncExternalStore(
+    subscribeOwnedCollections,
+    readOwnedCollectionsSnapshot,
+    () => null,
+  );
+  const storedOwnedCollections = useMemo(
+    () => decodeOwnedCollections(ownedCollectionsSnapshot),
+    [ownedCollectionsSnapshot],
+  );
+  const ownedCollections = useMemo(() => {
+    if (createState.status !== "success") return storedOwnedCollections;
+    return storedOwnedCollections.some((collection) => collection.id === createState.collection.id)
+      ? storedOwnedCollections
+      : [createState.collection, ...storedOwnedCollections];
+  }, [createState, storedOwnedCollections]);
   const selectedCountLabel = `${state.count} ${state.count === 1 ? "skill" : "skills"}`;
   const canSubmit = state.hydrated && state.count > 0 && name.trim().length > 0 && createState.status !== "loading";
-
-  useEffect(() => {
-    try {
-      setOwnedCollections(readOwnedCollections());
-    } catch {
-      setOwnedCollections([]);
-    }
-  }, []);
 
   const visibleOwnedCollections = useMemo(
     () => compact ? ownedCollections.slice(0, 3) : ownedCollections,
@@ -96,13 +104,11 @@ export function CollectionCreator({ compact = false }: { compact?: boolean }) {
         ownerToken,
         createdAt: collection.createdAt,
       };
-      let nextOwned = [owned, ...ownedCollections];
       try {
-        nextOwned = saveOwnedCollection(owned);
+        saveOwnedCollection(owned);
       } catch {
         // The public collection still exists even when this browser blocks local storage.
       }
-      setOwnedCollections(nextOwned);
       setName("");
       setCreateState({ status: "success", collection: owned, copied: false });
     } catch (error) {

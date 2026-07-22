@@ -95,7 +95,7 @@ function formatLag(value: number | null): string {
   return `${Math.floor(hours / 24)}d ago`;
 }
 
-export const dynamic = "force-dynamic";
+export const revalidate = 60;
 
 export default async function CoveragePage() {
   const coverage = await loadMarketplaceCoverage();

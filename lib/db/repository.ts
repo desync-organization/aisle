@@ -46,6 +46,7 @@ import {
 import {
   PackageMemberEligibilityError,
   resolveEligiblePackageMember,
+  resolveEligiblePackageMembers,
   type EligiblePackageMember,
   type PackageMemberEligibilityBinding,
 } from "../packages/member-eligibility";
@@ -138,6 +139,22 @@ export type PublishedPackageSummary = Readonly<{
   editorial: Record<string, unknown>;
   blueprintSchemaVersion: number;
   blueprintDigest: string;
+}>;
+
+export type ResolvedPackageMember = Readonly<{
+  packageId: string;
+  slug: string;
+  title: string;
+  packageDescription: string;
+  versionId: string;
+  version: number;
+  blueprintSchemaVersion: number;
+  blueprintDigest: string;
+  editorial: PackageBlueprint["editorial"];
+  publishedAt: Date;
+} & EligiblePackageMember & {
+  position: number;
+  selectedByDefault: boolean;
 }>;
 
 export type PublishedPackagePageQuery = Readonly<{
@@ -1228,32 +1245,33 @@ export class CatalogRepository {
   }
 
   async facets() {
-    const lifecycle = await this.db
-      .select({ key: skills.lifecycle, count: sql<number>`count(*)` })
-      .from(skills)
-      .where(and(eq(skills.public, true), eq(skills.internal, false)))
-      .groupBy(skills.lifecycle)
-      .orderBy(asc(skills.lifecycle));
-
-    const category = await this.db
-      .select({
-        key: categories.slug,
-        name: categories.name,
-        count: sql<number>`count(${skills.id})`,
-      })
-      .from(categories)
-      .leftJoin(skillCategories, eq(skillCategories.categoryId, categories.id))
-      .leftJoin(
-        skills,
-        and(
-          eq(skills.id, skillCategories.skillId),
-          eq(skills.public, true),
-          eq(skills.internal, false),
-          ne(skills.lifecycle, "removed"),
-        ),
-      )
-      .groupBy(categories.id)
-      .orderBy(asc(categories.sortOrder), asc(categories.name));
+    const [lifecycle, category] = await Promise.all([
+      this.db
+        .select({ key: skills.lifecycle, count: sql<number>`count(*)` })
+        .from(skills)
+        .where(and(eq(skills.public, true), eq(skills.internal, false)))
+        .groupBy(skills.lifecycle)
+        .orderBy(asc(skills.lifecycle)),
+      this.db
+        .select({
+          key: categories.slug,
+          name: categories.name,
+          count: sql<number>`count(${skills.id})`,
+        })
+        .from(categories)
+        .leftJoin(skillCategories, eq(skillCategories.categoryId, categories.id))
+        .leftJoin(
+          skills,
+          and(
+            eq(skills.id, skillCategories.skillId),
+            eq(skills.public, true),
+            eq(skills.internal, false),
+            ne(skills.lifecycle, "removed"),
+          ),
+        )
+        .groupBy(categories.id)
+        .orderBy(asc(categories.sortOrder), asc(categories.name)),
+    ]);
 
     return { lifecycle, category };
   }
@@ -1656,14 +1674,7 @@ export class CatalogRepository {
       .orderBy(asc(packageMembers.position));
     if (storedMembers.length === 0) return null;
 
-    const members: Array<
-      EligiblePackageMember & {
-        position: number;
-        selectedByDefault: boolean;
-      }
-    > = [];
-    const skillIds = new Set<string>();
-    const contentHashes = new Set<string>();
+    const bindings: PackageMemberEligibilityBinding[] = [];
     for (const stored of storedMembers) {
       if (
         stored.publisherClass === "legacy" ||
@@ -1671,10 +1682,8 @@ export class CatalogRepository {
         !["repository-license", "skill-local-license", "skill-frontmatter"].includes(
           stored.licenseEvidenceClass,
         )
-      ) {
-        return null;
-      }
-      const binding: PackageMemberEligibilityBinding = {
+      ) return null;
+      bindings.push({
         repositoryUrl: stored.repositoryUrl,
         skillPath: stored.skillPath,
         upstreamSkillName: stored.upstreamSkillName,
@@ -1685,14 +1694,23 @@ export class CatalogRepository {
         publisherClass: stored.publisherClass as PackageMemberEligibilityBinding["publisherClass"],
         skillId: stored.skillId,
         revisionId: stored.revisionId,
-      };
-      let member: EligiblePackageMember;
-      try {
-        member = await resolveEligiblePackageMember(transaction, binding);
-      } catch (error) {
-        if (error instanceof PackageMemberEligibilityError) return null;
-        throw error;
+      });
+    }
+    const eligibility = await resolveEligiblePackageMembers(transaction, bindings);
+    if (eligibility.some((result) => !result.ok)) return null;
+
+    const members: Array<
+      EligiblePackageMember & {
+        position: number;
+        selectedByDefault: boolean;
       }
+    > = [];
+    const skillIds = new Set<string>();
+    const contentHashes = new Set<string>();
+    for (const [index, result] of eligibility.entries()) {
+      if (!result.ok) return null;
+      const stored = storedMembers[index]!;
+      const member = result.member;
       if (skillIds.has(member.skillId) || contentHashes.has(member.contentHash)) {
         return null;
       }
@@ -1935,7 +1953,161 @@ export class CatalogRepository {
     );
   }
 
-  async resolvePackage(slug: string, version?: number) {
+  /**
+   * Resolves the latest versions of several public packages with one bounded
+   * evidence read. Eligibility remains fail-closed, but shared skills and
+   * package members no longer create a network round trip per member.
+   */
+  async resolvePackages(slugs: readonly string[]): Promise<Map<string, ResolvedPackageMember[]>> {
+    const requested = [...new Set(slugs.map((slug) => slug.trim()).filter(Boolean))];
+    if (requested.length === 0) return new Map<string, ResolvedPackageMember[]>();
+
+    return this.db.transaction(async (transaction) => {
+      const versionRows = await transaction
+        .select({
+          id: packages.id,
+          slug: packages.slug,
+          title: packages.title,
+          description: packages.description,
+          versionId: packageVersions.id,
+          version: packageVersions.version,
+          blueprintSchemaVersion: packageVersions.blueprintSchemaVersion,
+          blueprintDigest: packageVersions.blueprintDigest,
+          editorial: packageVersions.editorialJson,
+          publishedAt: packageVersions.publishedAt,
+        })
+        .from(packages)
+        .innerJoin(packageVersions, eq(packageVersions.packageId, packages.id))
+        .where(
+          and(
+            inArray(packages.slug, requested),
+            eq(packages.published, true),
+            isNotNull(packageVersions.publishedAt),
+            eq(packageVersions.blueprintSchemaVersion, 1),
+            like(packageVersions.blueprintDigest, "sha256:%"),
+          ),
+        )
+        .orderBy(asc(packages.slug), desc(packageVersions.version));
+
+      const selectedBySlug = new Map<string, (typeof versionRows)[number]>();
+      for (const row of versionRows) {
+        if (!selectedBySlug.has(row.slug)) selectedBySlug.set(row.slug, row);
+      }
+      const selectedRows = [...selectedBySlug.values()];
+      const versionIds = selectedRows.map((row) => row.versionId);
+      const storedMembers = versionIds.length === 0 ? [] : await transaction
+        .select({
+          packageVersionId: packageMembers.packageVersionId,
+          skillId: packageMembers.skillId,
+          revisionId: packageMembers.revisionId,
+          position: packageMembers.position,
+          selectedByDefault: packageMembers.selectedByDefault,
+          repositoryUrl: packageMembers.upstreamRepositoryUrl,
+          skillPath: packageMembers.upstreamSkillPath,
+          upstreamSkillName: packageMembers.upstreamSkillName,
+          observedHead: packageMembers.observedHead,
+          observedLicense: packageMembers.observedLicense,
+          licenseEvidenceClass: packageMembers.licenseEvidenceClass,
+          licenseEvidencePath: packageMembers.licenseEvidencePath,
+          publisherClass: packageMembers.publisherClass,
+        })
+        .from(packageMembers)
+        .where(inArray(packageMembers.packageVersionId, versionIds))
+        .orderBy(asc(packageMembers.packageVersionId), asc(packageMembers.position));
+
+      const invalidVersions = new Set<string>();
+      const eligibleRows: Array<{
+        stored: (typeof storedMembers)[number];
+        binding: PackageMemberEligibilityBinding;
+      }> = [];
+      for (const stored of storedMembers) {
+        if (
+          stored.publisherClass === "legacy" ||
+          !["official", "community"].includes(stored.publisherClass) ||
+          !["repository-license", "skill-local-license", "skill-frontmatter"].includes(
+            stored.licenseEvidenceClass,
+          )
+        ) {
+          invalidVersions.add(stored.packageVersionId);
+          continue;
+        }
+        eligibleRows.push({
+          stored,
+          binding: {
+            repositoryUrl: stored.repositoryUrl,
+            skillPath: stored.skillPath,
+            upstreamSkillName: stored.upstreamSkillName,
+            observedHead: stored.observedHead,
+            observedLicense: stored.observedLicense,
+            licenseEvidenceClass: stored.licenseEvidenceClass as PackageMemberEligibilityBinding["licenseEvidenceClass"],
+            licenseEvidencePath: stored.licenseEvidencePath,
+            publisherClass: stored.publisherClass as PackageMemberEligibilityBinding["publisherClass"],
+            skillId: stored.skillId,
+            revisionId: stored.revisionId,
+          },
+        });
+      }
+      const eligibility = await resolveEligiblePackageMembers(
+        transaction,
+        eligibleRows.map((row) => row.binding),
+      );
+      const resolvedMembers = new Map<string, Array<EligiblePackageMember & {
+        position: number;
+        selectedByDefault: boolean;
+      }>>();
+      for (const [index, result] of eligibility.entries()) {
+        const stored = eligibleRows[index]!.stored;
+        if (!result.ok) {
+          invalidVersions.add(stored.packageVersionId);
+          continue;
+        }
+        const members = resolvedMembers.get(stored.packageVersionId) ?? [];
+        members.push({
+          ...result.member,
+          position: stored.position,
+          selectedByDefault: stored.selectedByDefault,
+        });
+        resolvedMembers.set(stored.packageVersionId, members);
+      }
+
+      const output = new Map<string, ResolvedPackageMember[]>();
+      for (const slug of requested) output.set(slug, []);
+      for (const selected of selectedRows) {
+        const editorial = packageEditorialSchema.safeParse(selected.editorial);
+        const members = resolvedMembers.get(selected.versionId) ?? [];
+        if (
+          !selected.publishedAt ||
+          !/^sha256:[a-f0-9]{64}$/.test(selected.blueprintDigest) ||
+          !editorial.success ||
+          selected.title !== editorial.data.title ||
+          selected.description !== editorial.data.summary ||
+          invalidVersions.has(selected.versionId) ||
+          members.length === 0 ||
+          new Set(members.map((member) => member.skillId)).size !== members.length ||
+          new Set(members.map((member) => member.contentHash)).size !== members.length
+        ) continue;
+        output.set(selected.slug, members.map((member) => ({
+          packageId: selected.id,
+          slug: selected.slug,
+          title: selected.title,
+          packageDescription: selected.description,
+          versionId: selected.versionId,
+          version: selected.version,
+          blueprintSchemaVersion: selected.blueprintSchemaVersion,
+          blueprintDigest: selected.blueprintDigest,
+          editorial: editorial.data,
+          publishedAt: selected.publishedAt!,
+          ...member,
+        })));
+      }
+      return output;
+    });
+  }
+
+  async resolvePackage(slug: string, version?: number): Promise<ResolvedPackageMember[]> {
+    if (version === undefined) {
+      return (await this.resolvePackages([slug])).get(slug) ?? [];
+    }
     const resolved = await this.db.transaction((transaction) =>
       this.resolvePublishedPackageVersion(transaction, { slug, version }),
     );

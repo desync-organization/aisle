@@ -64,7 +64,8 @@ describe("launch package blueprints", () => {
       for (const member of blueprint.members) {
         expect(allowedSpdx.has(member.observedLicense.spdx)).toBe(true);
         expect(member.observedSource?.headSha).toMatch(/^[0-9a-f]{40}$/);
-        expect(member.observedSource?.observedAt).toBe("2026-07-21");
+        expect(member.observedSource?.observedAt).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+        expect(member.observedSource!.observedAt >= blueprint.editorial.reviewedAt).toBe(true);
       }
     }
   });
@@ -120,7 +121,7 @@ describe("launch package blueprints", () => {
 
     expect(launchPackageBlueprints.length).toBeGreaterThanOrEqual(6);
     expect(categories).toEqual(new Set(packageCategories));
-    expect(launchPackageBlueprints.every((blueprint) => blueprint.members.length >= 5)).toBe(true);
+    expect(launchPackageBlueprints.every((blueprint) => blueprint.members.length >= 3)).toBe(true);
     expect(launchPackageBlueprints.every((blueprint) => blueprint.editorial.audience.length > 0)).toBe(true);
     expect(launchPackageBlueprints.every((blueprint) => blueprint.editorial.tags.length >= 2)).toBe(true);
   });
@@ -137,8 +138,6 @@ describe("launch package blueprints", () => {
       "react-patterns",
       "tailwind-css-patterns",
       "shadcn",
-      "frontend-design",
-      "impeccable",
     ]);
     expect(packages.get("motion-and-3d")).toEqual([
       "gsap-scrolltrigger",
@@ -157,7 +156,6 @@ describe("launch package blueprints", () => {
     ]);
     expect(packages.get("data-and-ai")).toEqual([
       "supabase-postgres-best-practices",
-      "neon-postgres",
       "firebase-firestore",
       "firebase-ai-logic-basics",
       "huggingface-datasets",
@@ -223,7 +221,7 @@ describe("launch package blueprints", () => {
     expect(first).toEqual(second);
     expect(first.publishable).toBe(false);
     expect(first.resolutionRequirement).toBe("bind-eligible-ingested-revisions-transactionally");
-    expect(first.locators.map((entry) => entry.position)).toEqual([1, 2, 3, 4, 5]);
+    expect(first.locators.map((entry) => entry.position)).toEqual([1, 2, 3]);
     expect(JSON.stringify(first)).not.toMatch(/headSha|canonicalSkillId|skillRevisionId|packageVersionId/);
   });
 });

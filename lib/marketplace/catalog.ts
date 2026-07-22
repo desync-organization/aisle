@@ -1,7 +1,8 @@
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
+import { unstable_cache } from "next/cache";
 
-import { createCatalogDatabase } from "@/lib/db/client";
+import { getSharedCatalogDatabase } from "@/lib/db/client";
 import { CatalogRepository } from "@/lib/db/repository";
 import { normalizeSkillPath, normalizeSourceUrl } from "@/lib/catalog/normalization";
 import type {
@@ -18,6 +19,22 @@ import { packageBlueprintDigest, type PackageBlueprint } from "@/lib/packages";
 const DEFAULT_CATALOG_PAGE_SIZE = 48;
 const MAX_CATALOG_PAGE_SIZE = 48;
 const MAX_CATALOG_PAGE = 2_000;
+
+function isMissingIncrementalCache(error: unknown): boolean {
+  return error instanceof Error && error.message.includes("incrementalCache missing");
+}
+
+async function withCacheFallback<T>(
+  loadCached: () => Promise<T>,
+  loadUncached: () => Promise<T>,
+): Promise<T> {
+  try {
+    return await loadCached();
+  } catch (error) {
+    if (isMissingIncrementalCache(error)) return loadUncached();
+    throw error;
+  }
+}
 
 export type MarketplaceSkillSummary = Readonly<{
   id: string;
@@ -125,7 +142,7 @@ function boundedExclusions(value: unknown): string[] {
   return [...exclusions];
 }
 
-export async function loadMarketplaceCatalog(
+async function loadMarketplaceCatalogUncached(
   options: Readonly<{
     query?: string;
     category?: string;
@@ -133,6 +150,9 @@ export async function loadMarketplaceCatalog(
     pageSize?: number;
     limit?: number;
     includeUnavailable?: boolean;
+    includeSkills?: boolean;
+    includeFacets?: boolean;
+    includeCoverage?: boolean;
   }> = {},
 ): Promise<MarketplaceCatalogSnapshot> {
   const page = boundedInteger(options.page, 1, MAX_CATALOG_PAGE);
@@ -158,21 +178,25 @@ export async function loadMarketplaceCatalog(
     };
   }
 
-  const connection = createCatalogDatabase();
+  const connection = getSharedCatalogDatabase();
   const repository = new CatalogRepository(connection.db);
 
   try {
     const [rows, facets, coverage] = await Promise.all([
-      repository.search({
-        query: options.query,
-        category: options.category,
-        includeUnselectable: options.includeUnavailable === true,
-        lifecycle: ["current", "stale"],
-        limit: pageSize + 1,
-        offset: (page - 1) * pageSize,
-      }),
-      repository.facets(),
-      repository.coverage(),
+      options.includeSkills === false
+        ? Promise.resolve([])
+        : repository.search({
+            query: options.query,
+            category: options.category,
+            includeUnselectable: options.includeUnavailable === true,
+            lifecycle: ["current", "stale"],
+            limit: pageSize + 1,
+            offset: (page - 1) * pageSize,
+          }),
+      options.includeFacets === false
+        ? Promise.resolve({ lifecycle: [], category: [] })
+        : repository.facets(),
+      options.includeCoverage === false ? Promise.resolve([]) : repository.coverage(),
     ]);
 
     const hasNext = rows.length > pageSize;
@@ -207,12 +231,25 @@ export async function loadMarketplaceCatalog(
       connectedSources: 0,
       pagination,
     };
-  } finally {
-    connection.client.close();
   }
 }
 
-export async function loadMarketplaceCoverage(): Promise<MarketplaceCoverageSnapshot> {
+const loadCachedMarketplaceCatalog = unstable_cache(
+  loadMarketplaceCatalogUncached,
+  ["marketplace-catalog-v2"],
+  { revalidate: 60, tags: ["marketplace-catalog"] },
+);
+
+export async function loadMarketplaceCatalog(
+  options: Parameters<typeof loadMarketplaceCatalogUncached>[0] = {},
+): Promise<MarketplaceCatalogSnapshot> {
+  return withCacheFallback(
+    () => loadCachedMarketplaceCatalog(options),
+    () => loadMarketplaceCatalogUncached(options),
+  );
+}
+
+async function loadMarketplaceCoverageUncached(): Promise<MarketplaceCoverageSnapshot> {
   const emptySummary = {
     sourceCount: 0,
     currentSourceCount: 0,
@@ -223,7 +260,7 @@ export async function loadMarketplaceCoverage(): Promise<MarketplaceCoverageSnap
     return { availability: "not-configured", sources: [], summary: emptySummary };
   }
 
-  const connection = createCatalogDatabase();
+  const connection = getSharedCatalogDatabase();
   const repository = new CatalogRepository(connection.db);
   try {
     const rows = await repository.coverage(new Date());
@@ -259,9 +296,17 @@ export async function loadMarketplaceCoverage(): Promise<MarketplaceCoverageSnap
     };
   } catch {
     return { availability: "unavailable", sources: [], summary: emptySummary };
-  } finally {
-    connection.client.close();
   }
+}
+
+const loadCachedMarketplaceCoverage = unstable_cache(
+  loadMarketplaceCoverageUncached,
+  ["marketplace-coverage-v2"],
+  { revalidate: 60, tags: ["marketplace-coverage"] },
+);
+
+export async function loadMarketplaceCoverage(): Promise<MarketplaceCoverageSnapshot> {
+  return withCacheFallback(loadCachedMarketplaceCoverage, loadMarketplaceCoverageUncached);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -458,63 +503,84 @@ function inspectPublishedPackage(
   };
 }
 
-export async function loadResolvedPackage(
-  blueprint: PackageBlueprint,
-): Promise<ResolvedPackageSnapshot> {
-  const expectedBlueprintDigest = packageBlueprintDigest(blueprint);
+async function loadResolvedPackagesUncached(
+  blueprints: readonly PackageBlueprint[],
+): Promise<ResolvedPackageSnapshot[]> {
   if (!hasConfiguredDatabase()) {
-    return {
+    return blueprints.map((blueprint) => ({
       availability: "not-configured",
-      expectedBlueprintDigest,
+      expectedBlueprintDigest: packageBlueprintDigest(blueprint),
       binding: null,
       mismatchReasons: [],
       members: [],
-    };
+    }));
   }
 
-  const connection = createCatalogDatabase();
+  const connection = getSharedCatalogDatabase();
   const repository = new CatalogRepository(connection.db);
 
   try {
-    const rows = await repository.resolvePackage(blueprint.slug);
-    if (rows.length === 0) {
+    const rowsBySlug = await repository.resolvePackages(blueprints.map((blueprint) => blueprint.slug));
+    return blueprints.map((blueprint) => {
+      const expectedBlueprintDigest = packageBlueprintDigest(blueprint);
+      const rows = rowsBySlug.get(blueprint.slug) ?? [];
+      if (rows.length === 0) {
+        return {
+          availability: "pending",
+          expectedBlueprintDigest,
+          binding: null,
+          mismatchReasons: [],
+          members: [],
+        };
+      }
+      const inspected = inspectPublishedPackage(rows, blueprint, expectedBlueprintDigest);
       return {
-        availability: "pending",
+        availability: inspected.exact ? "resolved" : "binding-mismatch",
         expectedBlueprintDigest,
-        binding: null,
-        mismatchReasons: [],
-        members: [],
+        binding: inspected.binding,
+        mismatchReasons: inspected.mismatchReasons,
+        members: inspected.members,
       };
-    }
-
-    const inspected = inspectPublishedPackage(rows, blueprint, expectedBlueprintDigest);
-
-    return {
-      availability: inspected.exact ? "resolved" : "binding-mismatch",
-      expectedBlueprintDigest,
-      binding: inspected.binding,
-      mismatchReasons: inspected.mismatchReasons,
-      members: inspected.members,
-    };
+    });
   } catch {
-    return {
+    return blueprints.map((blueprint) => ({
       availability: "unavailable",
-      expectedBlueprintDigest,
+      expectedBlueprintDigest: packageBlueprintDigest(blueprint),
       binding: null,
       mismatchReasons: [],
       members: [],
-    };
-  } finally {
-    connection.client.close();
+    }));
   }
 }
 
-export async function loadMarketplaceSkill(id: string): Promise<MarketplaceSkillSnapshot> {
+const loadCachedResolvedPackages = unstable_cache(
+  loadResolvedPackagesUncached,
+  ["resolved-packages-v2"],
+  { revalidate: 300, tags: ["resolved-packages"] },
+);
+
+export async function loadResolvedPackages(
+  blueprints: readonly PackageBlueprint[],
+): Promise<ResolvedPackageSnapshot[]> {
+  return withCacheFallback(
+    () => loadCachedResolvedPackages(blueprints),
+    () => loadResolvedPackagesUncached(blueprints),
+  );
+}
+
+export async function loadResolvedPackage(
+  blueprint: PackageBlueprint,
+): Promise<ResolvedPackageSnapshot> {
+  const [resolved] = await loadResolvedPackages([blueprint]);
+  return resolved!;
+}
+
+async function loadMarketplaceSkillUncached(id: string): Promise<MarketplaceSkillSnapshot> {
   if (!hasConfiguredDatabase()) {
     return { availability: "not-configured", skill: null };
   }
 
-  const connection = createCatalogDatabase();
+  const connection = getSharedCatalogDatabase();
   const repository = new CatalogRepository(connection.db);
 
   try {
@@ -550,7 +616,18 @@ export async function loadMarketplaceSkill(id: string): Promise<MarketplaceSkill
     };
   } catch {
     return { availability: "unavailable", skill: null };
-  } finally {
-    connection.client.close();
   }
+}
+
+const loadCachedMarketplaceSkill = unstable_cache(
+  loadMarketplaceSkillUncached,
+  ["marketplace-skill-v2"],
+  { revalidate: 300, tags: ["marketplace-skill"] },
+);
+
+export async function loadMarketplaceSkill(id: string): Promise<MarketplaceSkillSnapshot> {
+  return withCacheFallback(
+    () => loadCachedMarketplaceSkill(id),
+    () => loadMarketplaceSkillUncached(id),
+  );
 }

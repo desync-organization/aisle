@@ -25,7 +25,7 @@ export function PackageCard({ blueprint, priority = false }: { blueprint: Packag
       <div className="package-card__body">
         <p className="package-card__category">{editorial.category.replaceAll("-", " ")}</p>
         <h3>
-          <Link href={`/packages/${slug}`}>{editorial.title}</Link>
+          <Link href={`/packages/${slug}`} prefetch={false}>{editorial.title}</Link>
         </h3>
         <p>{editorial.summary}</p>
       </div>
@@ -41,7 +41,7 @@ export function PackageCard({ blueprint, priority = false }: { blueprint: Packag
         <span>
           <GitBranch aria-hidden="true" size={14} /> {members.length} public skills
         </span>
-        <Link aria-label={`View ${editorial.title}`} href={`/packages/${slug}`}>
+        <Link aria-label={`View ${editorial.title}`} href={`/packages/${slug}`} prefetch={false}>
           View package <ArrowUpRight aria-hidden="true" size={15} />
         </Link>
       </div>

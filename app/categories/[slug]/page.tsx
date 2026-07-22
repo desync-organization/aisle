@@ -22,7 +22,7 @@ import { createPageMetadata } from "@/lib/seo";
 
 type CategoryPageProps = Readonly<{ params: Promise<{ slug: string }> }>;
 
-export const dynamic = "force-dynamic";
+export const revalidate = 60;
 
 export async function generateMetadata({ params }: CategoryPageProps): Promise<Metadata> {
   const { slug } = await params;
@@ -43,7 +43,12 @@ export default async function CategoryPage({ params }: CategoryPageProps) {
   const blueprints = launchPackageBlueprints.filter((blueprint) =>
     packageBelongsToCatalogCategory(blueprint, category.slug));
   const curatedReferenceCount = blueprints.reduce((total, blueprint) => total + blueprint.members.length, 0);
-  const catalog = await loadMarketplaceCatalog({ category: category.slug, limit: 6 });
+  const catalog = await loadMarketplaceCatalog({
+    category: category.slug,
+    limit: 6,
+    includeFacets: false,
+    includeCoverage: false,
+  });
 
   return (
     <div className="site-frame">
