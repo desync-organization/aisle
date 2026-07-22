@@ -34,6 +34,20 @@ type RunnableSource = {
   run: () => Promise<unknown>;
 };
 
+type NormalizedSourceResult =
+  | { status: "fulfilled"; value: unknown }
+  | { status: "rejected"; reason: string };
+
+function isOperationalFailure(value: unknown): boolean {
+  if (!value || typeof value !== "object" || !("status" in value)) return false;
+  const result = value as { status?: unknown; processed?: unknown };
+  if (result.status === "credentials-required") return true;
+  // Several federated sources are deliberately non-retiring and therefore
+  // report partial coverage after a useful sweep. Treat a zero-progress
+  // partial as the operational failure; timeouts still fail in the workflow.
+  return result.status === "partial" && result.processed === 0;
+}
+
 function readOptionValue(args: readonly string[], index: number, option: string): string {
   const value = args[index + 1];
   if (!value || value.startsWith("--")) {
@@ -212,7 +226,7 @@ async function main(): Promise<void> {
         return { status: "rejected", reason };
       }
     };
-    const normalize = (result: PromiseSettledResult<unknown>) =>
+    const normalize = (result: PromiseSettledResult<unknown>): NormalizedSourceResult =>
       result.status === "fulfilled"
         ? { status: "fulfilled", value: result.value }
         : {
@@ -226,6 +240,15 @@ async function main(): Promise<void> {
     console.log(
       JSON.stringify({ results }, null, 2),
     );
+    if (
+      options.sourceId !== null &&
+      results.some((result) =>
+        result.status === "rejected" ||
+        (result.status === "fulfilled" && isOperationalFailure(result.value))
+      )
+    ) {
+      process.exitCode = 1;
+    }
   } finally {
     connection.client.close();
   }

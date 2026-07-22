@@ -16,6 +16,51 @@ export const catalogSelectionGateReasons = [
 export type CatalogSelectionGateReason = (typeof catalogSelectionGateReasons)[number];
 export type CatalogTrustState = "unreviewed" | "pass" | "warn" | "blocked";
 
+export type CatalogSelectionGateStatus = Readonly<{
+  kind: "sync-pending" | "verification-pending" | "needs-review" | "trust-blocked";
+  label: "Sync pending" | "Verification pending" | "Needs review" | "Trust blocked";
+}>;
+
+const gateStatusByReason: Readonly<Record<CatalogSelectionGateReason, CatalogSelectionGateStatus["kind"]>> = {
+  "lifecycle-not-current": "sync-pending",
+  "revision-evidence-missing": "sync-pending",
+  "install-unresolved": "sync-pending",
+  "source-verification-unavailable": "verification-pending",
+  "source-revision-changed": "needs-review",
+  "selector-scope-ambiguous": "needs-review",
+  "source-inactive": "sync-pending",
+  "license-not-eligible": "needs-review",
+  "license-evidence-missing": "verification-pending",
+  "trust-pending": "verification-pending",
+  "trust-blocked": "trust-blocked",
+  "upstream-audit-failed": "needs-review",
+};
+
+const gateStatusPriority: Readonly<Record<CatalogSelectionGateStatus["kind"], number>> = {
+  "sync-pending": 0,
+  "verification-pending": 1,
+  "needs-review": 2,
+  "trust-blocked": 3,
+};
+
+const gateStatusLabel: Readonly<Record<CatalogSelectionGateStatus["kind"], CatalogSelectionGateStatus["label"]>> = {
+  "sync-pending": "Sync pending",
+  "verification-pending": "Verification pending",
+  "needs-review": "Needs review",
+  "trust-blocked": "Trust blocked",
+};
+
+export function catalogSelectionGateStatus(
+  reasons: ReadonlyArray<CatalogSelectionGateReason>,
+): CatalogSelectionGateStatus {
+  const kind = reasons.reduce<CatalogSelectionGateStatus["kind"]>((current, reason) => {
+    const candidate = gateStatusByReason[reason];
+    return gateStatusPriority[candidate] > gateStatusPriority[current] ? candidate : current;
+  }, "sync-pending");
+
+  return { kind, label: gateStatusLabel[kind] };
+}
+
 export const catalogSelectionGateCopy: Readonly<Record<CatalogSelectionGateReason, string>> = {
   "lifecycle-not-current": "The upstream listing is stale and must be refreshed.",
   "revision-evidence-missing": "Immutable revision evidence is incomplete.",

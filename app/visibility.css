@@ -598,6 +598,21 @@ select:focus-visible {
   box-shadow: inset 0 2px 0 #d5d4ce, 0 0 0 1px rgba(201, 200, 194, 0.12);
 }
 
+.skill-card--gated {
+  border-color: #555;
+  background: #121212 !important;
+}
+
+.skill-card--gated[data-gate-status="needs-review"] {
+  border-color: rgba(233, 184, 110, 0.42);
+  background: rgba(233, 184, 110, 0.035) !important;
+}
+
+.skill-card--gated[data-gate-status="trust-blocked"] {
+  border-color: rgba(255, 143, 150, 0.44);
+  background: rgba(255, 143, 150, 0.035) !important;
+}
+
 .skill-card__identity h3 {
   color: #f1f0eb;
 }
@@ -638,11 +653,16 @@ select:focus-visible {
   background: rgba(104, 213, 173, 0.09) !important;
 }
 
-.trust-pill--warn,
-.trust-pill--unreviewed {
+.trust-pill--warn {
   border-color: rgba(233, 184, 110, 0.38) !important;
   color: #f3c984 !important;
   background: rgba(233, 184, 110, 0.09) !important;
+}
+
+.trust-pill--unreviewed {
+  border-color: #555 !important;
+  color: #c9c8c2 !important;
+  background: #181818 !important;
 }
 
 .trust-pill--blocked {

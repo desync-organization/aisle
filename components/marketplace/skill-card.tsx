@@ -1,12 +1,25 @@
 "use client";
 
-import { Check, GitBranch, LockKeyhole, Plus, ShieldCheck, TriangleAlert } from "lucide-react";
+import {
+  Check,
+  Clock3,
+  GitBranch,
+  LockKeyhole,
+  Plus,
+  RefreshCw,
+  ShieldCheck,
+  TriangleAlert,
+} from "lucide-react";
 import Link from "next/link";
-import { useState } from "react";
+import { useId, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import type { MarketplaceSkillSummary } from "@/lib/marketplace/catalog";
-import { catalogSelectionGateCopy } from "@/lib/marketplace/selection-gates";
+import {
+  catalogSelectionGateCopy,
+  catalogSelectionGateStatus,
+  type CatalogSelectionGateStatus,
+} from "@/lib/marketplace/selection-gates";
 import { useSelection } from "@/lib/selection/react";
 
 function sourceName(sourceUrl: string): string {
@@ -23,11 +36,21 @@ function formatInstalls(value: number): string {
   return new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 }).format(value);
 }
 
+function GateStatusIcon({ kind }: { kind: CatalogSelectionGateStatus["kind"] }) {
+  if (kind === "trust-blocked") return <LockKeyhole aria-hidden="true" size={15} />;
+  if (kind === "needs-review") return <TriangleAlert aria-hidden="true" size={15} />;
+  if (kind === "verification-pending") return <Clock3 aria-hidden="true" size={15} />;
+  return <RefreshCw aria-hidden="true" size={15} />;
+}
+
 export function SkillCard({ compact = false, skill }: { compact?: boolean; skill: MarketplaceSkillSummary }) {
   const { actions, meta, state } = useSelection();
+  const gateDescriptionId = useId();
   const [feedback, setFeedback] = useState("");
   const selected = state.ids.some((id) => id === skill.id);
   const source = sourceName(skill.sourceUrl);
+  const gateStatus = catalogSelectionGateStatus(skill.gateReasons);
+  const gateActive = !selected && !skill.selectable;
   const gateMessage = skill.gateReasons.length > 0
     ? skill.gateReasons.map((reason) => catalogSelectionGateCopy[reason]).join(" ")
     : "This record cannot be selected yet.";
@@ -46,7 +69,10 @@ export function SkillCard({ compact = false, skill }: { compact?: boolean; skill
   }
 
   return (
-    <article className={`skill-card${compact ? " skill-card--compact" : ""}${selected ? " skill-card--selected" : ""}${skill.selectable ? "" : " skill-card--gated"}`}>
+    <article
+      className={`skill-card${compact ? " skill-card--compact" : ""}${selected ? " skill-card--selected" : ""}${skill.selectable ? "" : " skill-card--gated"}`}
+      data-gate-status={skill.selectable ? undefined : gateStatus.kind}
+    >
       <div className="skill-card__topline">
         <span className={`trust-pill trust-pill--${skill.trustState}`}>
           {skill.trustState === "pass" ? <ShieldCheck aria-hidden="true" size={13} /> : <TriangleAlert aria-hidden="true" size={13} />}
@@ -80,22 +106,28 @@ export function SkillCard({ compact = false, skill }: { compact?: boolean; skill
           ? `Remove ${skill.name} from your stack`
           : skill.selectable
             ? `Add ${skill.name} to your stack`
-            : `${skill.name} is not currently selectable`}
+            : `${skill.name}: ${gateStatus.label}`}
+        aria-describedby={gateActive ? gateDescriptionId : undefined}
+        aria-disabled={gateActive || undefined}
         aria-pressed={selected}
         className="skill-card__select"
-        disabled={!selected && !skill.selectable}
+        data-gate-status={gateActive ? gateStatus.kind : undefined}
         onClick={toggle}
-        title={!selected && !skill.selectable ? gateMessage : undefined}
         variant={selected ? "secondary" : "primary"}
       >
         {selected
           ? <Check aria-hidden="true" size={15} />
           : skill.selectable
             ? <Plus aria-hidden="true" size={15} />
-            : <LockKeyhole aria-hidden="true" size={15} />}
-        {selected ? "Selected" : skill.selectable ? "Add to stack" : "Not selectable"}
+            : <GateStatusIcon kind={gateStatus.kind} />}
+        {selected ? "Selected" : skill.selectable ? "Add to stack" : gateStatus.label}
       </Button>
-      {!skill.selectable ? <p className="skill-card__gate">{gateMessage}</p> : null}
+      {!skill.selectable ? (
+        <>
+          <span className="sr-only" id={gateDescriptionId}>{gateStatus.label}. {gateMessage}</span>
+          <p aria-hidden="true" className="skill-card__gate">{gateMessage}</p>
+        </>
+      ) : null}
       <span aria-live="polite" className="sr-only">{feedback}</span>
     </article>
   );

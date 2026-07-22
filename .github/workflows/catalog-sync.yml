@@ -24,10 +24,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 360
     env:
-      DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
-      DATABASE_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
-      GITHUB_TOKEN: ${{ secrets.AISLE_PUBLIC_GITHUB_TOKEN }}
-      SKILLS_SH_OIDC_TOKEN: ${{ secrets.SKILLS_SH_OIDC_TOKEN }}
       AISLE_AGENTSKILLS_IN_ENABLED: "true"
       AISLE_ASKSKILL_ENABLED: "true"
       AISLE_GETSKILLARY_ENABLED: "true"
@@ -52,21 +48,37 @@ jobs:
 
       - name: Validate production database configuration
         shell: bash
+        env:
+          DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
+          DATABASE_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.AISLE_PUBLIC_GITHUB_TOKEN }}
         run: |
           if [[ -z "$DATABASE_URL" || -z "$DATABASE_AUTH_TOKEN" ]]; then
             echo "::error::TURSO_DATABASE_URL and TURSO_AUTH_TOKEN repository secrets are required."
             exit 1
           fi
+          if [[ -z "$GITHUB_TOKEN" ]]; then
+            echo "::error::AISLE_PUBLIC_GITHUB_TOKEN is required for cross-repository public catalog hydration."
+            exit 1
+          fi
 
       - name: Apply migrations and seed catalog descriptors
+        env:
+          DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
+          DATABASE_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
         run: npm run db:setup
 
       - name: Sync sources independently
         shell: bash
+        env:
+          DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
+          DATABASE_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.AISLE_PUBLIC_GITHUB_TOKEN }}
+          SKILLS_SH_OIDC_TOKEN: ${{ secrets.SKILLS_SH_OIDC_TOKEN }}
         run: |
           set -uo pipefail
 
-          if ! source_output=$(npm run --silent catalog:sync -- --list-sources --format lines); then
+          if ! source_output=$(./node_modules/.bin/tsx scripts/catalog-sync.ts --list-sources --format lines); then
             echo "::error::Could not enumerate catalog sources."
             exit 1
           fi
@@ -96,8 +108,18 @@ jobs:
           failures=0
           for source in "${sources[@]}"; do
             echo "::group::Catalog source: $source"
-            if timeout --foreground --signal=TERM --kill-after=30s 30m \
-              npm run --silent catalog:sync -- --source "$source"; then
+            source_timeout=30m
+            case "$source" in
+              skills-sh)
+                source_timeout=120m
+                ;;
+              clawhub|skillmd)
+                source_timeout=60m
+                ;;
+            esac
+            echo "Time budget: $source_timeout"
+            if timeout --signal=TERM --kill-after=30s "$source_timeout" \
+              ./node_modules/.bin/tsx scripts/catalog-sync.ts --source "$source"; then
               echo "Completed catalog source: $source"
             else
               exit_code=$?
@@ -108,8 +130,8 @@ jobs:
           done
 
           echo "::group::Publish eligible curated packages"
-          if timeout --foreground --signal=TERM --kill-after=30s 30m \
-            npm run --silent packages:publish; then
+          if timeout --signal=TERM --kill-after=30s 30m \
+            ./node_modules/.bin/tsx scripts/packages-publish.ts; then
             echo "Published eligible curated packages."
           else
             exit_code=$?

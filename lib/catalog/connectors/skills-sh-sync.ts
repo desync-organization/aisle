@@ -261,13 +261,16 @@ export class SkillsShSync {
         }
 
         sourceTotal = pagination.total;
-        const pageFailures = await mapWithConcurrency(
+        const pageResults = await mapWithConcurrency(
           response.data.data,
           this.detailConcurrency,
           async (listing) => {
             try {
-              await this.ingestListing(fence, listing);
-              return null;
+              const warning = await this.ingestListing(fence, listing);
+              return {
+                failure: null,
+                warning: warning ? `${listing.id}: ${warning}` : null,
+              };
             } catch (error) {
               if (error instanceof SkillsShAuthenticationError) {
                 throw error;
@@ -277,12 +280,21 @@ export class SkillsShSync {
                 listing.id,
                 listing.hash ?? null,
               );
-              return `${listing.id}: ${errorMessage(error)}`;
+              return {
+                failure: `${listing.id}: ${errorMessage(error)}`,
+                warning: null,
+              };
             }
           },
         );
-        failures.push(...pageFailures.filter((failure): failure is string => failure !== null));
-        if (pageFailures.some((failure) => failure !== null)) {
+        const pageFailures = pageResults.flatMap(({ failure }) =>
+          failure === null ? [] : [failure]
+        );
+        const pageWarnings = pageResults.flatMap(({ warning }) =>
+          warning === null ? [] : [warning]
+        );
+        failures.push(...pageFailures, ...pageWarnings);
+        if (pageFailures.length > 0) {
           throw new Error(
             `skills.sh page ${response.data.pagination.page} was not fully durable; the page will be replayed`,
           );
@@ -325,7 +337,11 @@ export class SkillsShSync {
         recordCount,
         partialFailures: failures,
         completeCrawl: true,
-        observationSweepComplete: failures.length === 0,
+        // Optional third-party audit outages do not invalidate the complete
+        // core listing/detail observation proved above. Keep coverage partial
+        // for operator visibility while allowing those exact observations to
+        // satisfy freshness.
+        observationSweepComplete: true,
       });
       return {
         status: failures.length ? "partial" : "current",
@@ -368,7 +384,7 @@ export class SkillsShSync {
   private async ingestListing(
     fence: CatalogMutationFence,
     listing: SkillsShSkill,
-  ): Promise<void> {
+  ): Promise<string | null> {
     const listingHash = listing.hash ?? undefined;
     const stored = await this.withRepositoryWrite(() => this.repository.upsertSourceListing({
       fence,
@@ -538,31 +554,41 @@ export class SkillsShSync {
       }
     }
 
-    const audit = await this.client.audit(listing.id);
-    if (audit.notModified) {
-      return;
+    try {
+      const audit = await this.client.audit(listing.id);
+      if (!audit.notModified) {
+        if (audit.data.id !== listing.id) {
+          throw new Error(`skills.sh audit id ${audit.data.id} did not match ${listing.id}`);
+        }
+        await this.withRepositoryWrite(() => this.repository.recordObservedAudits({
+          fence,
+          listingId: stored.id,
+          // skills.sh audits do not identify a revision. This hash is only the
+          // content observed alongside the audit request, never an exact scan scope.
+          upstreamContentHash: observedContentHash,
+          audits: audit.data.audits.map((entry) => ({
+            provider: entry.provider,
+            providerSlug: entry.slug,
+            status: entry.status,
+            summary: entry.summary,
+            riskLevel: entry.riskLevel,
+            auditedAt: entry.auditedAt,
+            raw: createPersistedAuditRaw(persistedAuditSummary(entry)),
+          })),
+        }));
+      }
+    } catch (error) {
+      if (
+        error instanceof SkillsShAuthenticationError ||
+        error instanceof CatalogSyncLeaseLostError
+      ) {
+        throw error;
+      }
+      return `optional audit observation was unavailable (${errorMessage(error)})`;
     }
-    if (audit.data.id !== listing.id) {
-      throw new Error(`skills.sh audit id ${audit.data.id} did not match ${listing.id}`);
-    }
-    await this.withRepositoryWrite(() => this.repository.recordObservedAudits({
-      fence,
-      listingId: stored.id,
-      // skills.sh audits do not identify a revision. This hash is only the
-      // content observed alongside the audit request, never an exact scan scope.
-      upstreamContentHash: observedContentHash,
-      audits: audit.data.audits.map((entry) => ({
-        provider: entry.provider,
-        providerSlug: entry.slug,
-        status: entry.status,
-        summary: entry.summary,
-        riskLevel: entry.riskLevel,
-        auditedAt: entry.auditedAt,
-        raw: createPersistedAuditRaw(persistedAuditSummary(entry)),
-      })),
-    }));
 
     // `detail.data.files` is intentionally discarded. Aisle stores only provenance
     // metadata here and never executes or permanently mirrors upstream files.
+    return null;
   }
 }

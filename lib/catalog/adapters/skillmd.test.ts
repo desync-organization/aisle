@@ -28,6 +28,7 @@ license: MIT
 # Fixture
 `;
 const REFERENCE = "Inert supporting reference.\n";
+const LICENSE = "Inert repository license fixture.\n";
 
 function gitBlobSha(contents: string): string {
   const bytes = Buffer.from(contents);
@@ -87,7 +88,7 @@ async function firstPage(adapter: SkillMdAdapter) {
   throw new Error("adapter did not yield a page");
 }
 
-function githubFetch(): ReturnType<typeof vi.fn<typeof fetch>> {
+function githubFetch(branchHead = COMMIT): ReturnType<typeof vi.fn<typeof fetch>> {
   return vi.fn<typeof fetch>(async (input) => {
     const url = new URL(String(input));
     if (url.hostname === "api.github.com" && url.pathname.endsWith("fixture-repository")) {
@@ -100,6 +101,9 @@ function githubFetch(): ReturnType<typeof vi.fn<typeof fetch>> {
         name: "fixture-repository",
         default_branch: "main",
       });
+    }
+    if (url.hostname === "api.github.com" && url.pathname.endsWith("/commits/main")) {
+      return json({ sha: branchHead });
     }
     if (url.hostname === "api.github.com" && url.pathname.includes("/git/commits/")) {
       return json({ sha: COMMIT, tree: { sha: "tree-sha" } });
@@ -123,8 +127,18 @@ function githubFetch(): ReturnType<typeof vi.fn<typeof fetch>> {
             sha: gitBlobSha(REFERENCE),
             size: Buffer.byteLength(REFERENCE),
           },
+          {
+            path: "LICENSE",
+            mode: "100644",
+            type: "blob",
+            sha: gitBlobSha(LICENSE),
+            size: Buffer.byteLength(LICENSE),
+          },
         ],
       });
+    }
+    if (url.hostname === "api.github.com" && url.pathname.endsWith("/contents/LICENSE")) {
+      return new Response(LICENSE);
     }
     if (url.hostname === "raw.githubusercontent.com") {
       return new Response(url.pathname.endsWith("SKILL.md") ? SKILL : REFERENCE);
@@ -156,6 +170,16 @@ describe("SkillMdAdapter", () => {
         sourceUrl: "https://github.com/fixture-owner/fixture-repository",
         immutableRef: COMMIT,
         skillPath: "skills/fixture-safe",
+      },
+      repository: {
+        observedBranchHead: { branch: "main", headSha: COMMIT },
+      },
+      repositoryLicenseEvidence: {
+        path: "LICENSE",
+        contents: LICENSE,
+        sha256: createHash("sha256").update(LICENSE).digest("hex"),
+        sourceUrl: "https://github.com/fixture-owner/fixture-repository",
+        immutableRef: COMMIT,
       },
       artifact: { complete: true },
     });
@@ -272,6 +296,23 @@ describe("SkillMdAdapter", () => {
       }),
     ]);
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps a nominated commit that is not the default-branch head unresolved", async () => {
+    const page = await firstPage(
+      new SkillMdAdapter({
+        client: client(),
+        fetch: githubFetch("b".repeat(40)),
+      }),
+    );
+
+    expect(page.records).toEqual([
+      expect.objectContaining({ installSpec: null, artifact: null }),
+    ]);
+    expect(page.exclusions).toEqual([
+      expect.stringContaining("no stable snapshot token"),
+      expect.stringContaining("not the current public default-branch head"),
+    ]);
   });
 
   it("degrades GitHub redirects without following their target", async () => {
