@@ -72,7 +72,7 @@ const sources = {
       evidencePath: "LICENSE.md",
     },
     observedSource: {
-      headSha: "fa4872c8ed948c111884e52ae23a649e83591b71",
+      headSha: "598a44e14dc3bd7e872647c4298263e8d77aaa07",
       observedAt: refreshedObservedAt,
     },
   },
@@ -230,28 +230,6 @@ const sources = {
       observedAt,
     },
   },
-  hyperframesAnimation: {
-    publisherClass: "official",
-    locator: {
-      kind: "public-github-skill-locator",
-      host: "github.com",
-      visibility: "public",
-      owner: "heygen-com",
-      repository: "hyperframes",
-      repositoryUrl: "https://github.com/heygen-com/hyperframes",
-      skillPath: "skills/hyperframes-animation/SKILL.md",
-      upstreamSkillName: "hyperframes-animation",
-    },
-    observedLicense: {
-      spdx: "Apache-2.0",
-      evidenceClass: "repository-license",
-      evidencePath: "LICENSE",
-    },
-    observedSource: {
-      headSha: "84e4eafacdaf96e8d137ba745af750448c5de0de",
-      observedAt: refreshedObservedAt,
-    },
-  },
   wrangler: {
     publisherClass: "official",
     locator: {
@@ -402,7 +380,7 @@ const sources = {
       evidencePath: "LICENSE",
     },
     observedSource: {
-      headSha: "538130c39402a40d9c2586ede87def5914641a33",
+      headSha: "7288f7cf2a3ba9dfdd4ddd2b40c5ec9c8f2409b1",
       observedAt: refreshedObservedAt,
     },
   },
@@ -666,7 +644,7 @@ const sources = {
       evidencePath: "LICENSE",
     },
     observedSource: {
-      headSha: "538130c39402a40d9c2586ede87def5914641a33",
+      headSha: "7288f7cf2a3ba9dfdd4ddd2b40c5ec9c8f2409b1",
       observedAt: refreshedObservedAt,
     },
   },
@@ -688,7 +666,7 @@ const sources = {
       evidencePath: "LICENSE",
     },
     observedSource: {
-      headSha: "538130c39402a40d9c2586ede87def5914641a33",
+      headSha: "7288f7cf2a3ba9dfdd4ddd2b40c5ec9c8f2409b1",
       observedAt: refreshedObservedAt,
     },
   },
@@ -1078,7 +1056,6 @@ const blueprintInputs = [
       member(3, "reactThreeFiber", "React Three Fiber patterns for component-based 3D scenes."),
       member(4, "motionFramer", "Motion guidance for transitions, gestures, and layout animation."),
       member(5, "web3dIntegrationPatterns", "Patterns for using motion and 3D tools in the same application."),
-      member(6, "hyperframesAnimation", "An Apache-licensed animation system for cinematic timelines."),
     ],
   },
   {
@@ -1233,9 +1210,9 @@ export const launchPackageRepositoryUrls: readonly string[] = Object.freeze(
   )].sort(),
 );
 
-if (launchPackageRepositoryUrls.length !== 14) {
+if (launchPackageRepositoryUrls.length !== 13) {
   throw new Error(
-    `Launch package repository inventory changed: expected 14 public origins, found ${launchPackageRepositoryUrls.length}.`,
+    `Launch package repository inventory changed: expected 13 public origins, found ${launchPackageRepositoryUrls.length}.`,
   );
 }
 
