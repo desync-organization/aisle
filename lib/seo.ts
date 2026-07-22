@@ -47,6 +47,7 @@ export const sitemapRoutes = [
   "/",
   "/skills",
   "/packages",
+  "/collections",
   "/categories",
   "/docs",
   "/docs/public-catalog-policy",

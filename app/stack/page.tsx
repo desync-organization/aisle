@@ -2,6 +2,7 @@ import { GitBranch, Layers3, LockKeyhole, ShieldCheck } from "lucide-react";
 import type { Metadata } from "next";
 
 import { StackBuilder } from "@/components/marketplace/stack-builder";
+import { CollectionCreator } from "@/components/marketplace/collection-creator";
 import { SiteFooter } from "@/components/site-footer";
 import { SiteHeader } from "@/components/site-header";
 import { Badge } from "@/components/ui/badge";
@@ -35,6 +36,7 @@ export default function StackPage() {
           </div>
         </header>
         <StackBuilder />
+        <CollectionCreator compact />
       </main>
       <SiteFooter />
     </div>
