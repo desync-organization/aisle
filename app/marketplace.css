@@ -980,9 +980,23 @@
 }
 
 .skill-card--gated {
-  border-color: rgba(242, 203, 131, 0.15);
+  border-color: rgba(201, 200, 194, 0.22);
   background:
-    radial-gradient(circle at 100% 0%, rgba(242, 203, 131, 0.055), transparent 15rem),
+    radial-gradient(circle at 100% 0%, rgba(201, 200, 194, 0.06), transparent 15rem),
+    rgba(255, 255, 255, 0.012);
+}
+
+.skill-card--gated[data-gate-status="needs-review"] {
+  border-color: rgba(242, 203, 131, 0.2);
+  background:
+    radial-gradient(circle at 100% 0%, rgba(242, 203, 131, 0.06), transparent 15rem),
+    rgba(255, 255, 255, 0.012);
+}
+
+.skill-card--gated[data-gate-status="trust-blocked"] {
+  border-color: rgba(255, 141, 141, 0.24);
+  background:
+    radial-gradient(circle at 100% 0%, rgba(255, 141, 141, 0.065), transparent 15rem),
     rgba(255, 255, 255, 0.012);
 }
 
@@ -1098,9 +1112,33 @@
   font-size: 0.65rem;
 }
 
-.skill-card__select:disabled {
+.skill-card__select[aria-disabled="true"],
+.skill-selection-button[aria-disabled="true"] {
   cursor: not-allowed;
-  opacity: 0.62;
+  transform: none;
+}
+
+.skill-card__select[aria-disabled="true"][data-gate-status="sync-pending"],
+.skill-card__select[aria-disabled="true"][data-gate-status="verification-pending"],
+.skill-selection-button[aria-disabled="true"][data-gate-status="sync-pending"],
+.skill-selection-button[aria-disabled="true"][data-gate-status="verification-pending"] {
+  border-color: #555 !important;
+  color: #c9c8c2 !important;
+  background: #181818 !important;
+}
+
+.skill-card__select[aria-disabled="true"][data-gate-status="needs-review"],
+.skill-selection-button[aria-disabled="true"][data-gate-status="needs-review"] {
+  border-color: rgba(242, 203, 131, 0.42) !important;
+  color: #f3c984 !important;
+  background: rgba(242, 203, 131, 0.08) !important;
+}
+
+.skill-card__select[aria-disabled="true"][data-gate-status="trust-blocked"],
+.skill-selection-button[aria-disabled="true"][data-gate-status="trust-blocked"] {
+  border-color: rgba(255, 141, 141, 0.44) !important;
+  color: #ffadb2 !important;
+  background: rgba(255, 141, 141, 0.09) !important;
 }
 
 .skill-card__gate {
