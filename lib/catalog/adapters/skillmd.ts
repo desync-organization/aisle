@@ -410,7 +410,7 @@ export class SkillMdAdapter implements CatalogSourceConnector {
       if (totalBytes > this.maxTextTotalBytes) {
         complete = false;
         exclusions.push(`${item.slug}: textual artifact set exceeded the aggregate scan limit.`);
-        continue;
+        break;
       }
       const sha256 = createHash("sha256").update(bytes).digest("hex");
       let type = entry.mode === "120000" ? "symlink" : "file";
