@@ -1,7 +1,7 @@
 @import "tailwindcss";
 
 @theme inline {
-  --font-sans: "Manrope Variable", sans-serif;
+  --font-sans: var(--font-geist-sans), sans-serif;
   --font-mono: "JetBrains Mono Variable", monospace;
   --color-ink: var(--ink);
   --color-iris: var(--iris);
@@ -51,7 +51,7 @@ body {
   background:
     radial-gradient(circle at 72% 5%, rgba(116, 74, 255, 0.14), transparent 29rem),
     linear-gradient(180deg, #0c0a12 0%, var(--ink) 28rem);
-  font-family: "Manrope Variable", sans-serif;
+  font-family: var(--font-sans);
   text-rendering: optimizeLegibility;
 }
 
