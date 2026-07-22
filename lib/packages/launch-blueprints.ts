@@ -248,8 +248,8 @@ const sources = {
       evidencePath: "LICENSE",
     },
     observedSource: {
-      headSha: "32c41ea7dca14cfa6aa781335ccdd7870e52ceb4",
-      observedAt,
+      headSha: "84e4eafacdaf96e8d137ba745af750448c5de0de",
+      observedAt: refreshedObservedAt,
     },
   },
   wrangler: {
