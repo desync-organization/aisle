@@ -575,7 +575,7 @@ select:focus-visible {
 .home-skill-grid .skill-card--compact {
   display: grid;
   min-height: 88px;
-  grid-template-columns: minmax(180px, 0.75fr) minmax(260px, 1.45fr) minmax(210px, 0.8fr) auto;
+  grid-template-columns: minmax(180px, 0.75fr) minmax(300px, 1.7fr) minmax(90px, 0.34fr) auto;
   align-items: center;
   gap: 18px;
   padding: 13px 0;
@@ -632,8 +632,7 @@ select:focus-visible {
 
 .home-skill-grid .skill-card__facts {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 10px;
+  grid-template-columns: 1fr;
   margin: 0;
 }
 
