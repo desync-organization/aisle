@@ -43,6 +43,7 @@ type NormalizedSourceResult =
 // from durable progress instead of replaying a large first batch.
 const SKILLMD_SYNC_PAGE_SIZE = 10;
 const SKILLMD_SYNC_CONCURRENCY = 3;
+const SKILLMD_MAX_ARTIFACT_FILES = 128;
 
 function isOperationalFailure(value: unknown): boolean {
   if (!value || typeof value !== "object" || !("status" in value)) return false;
@@ -153,6 +154,7 @@ async function main(): Promise<void> {
         githubToken: process.env.GITHUB_TOKEN,
         pageSize: SKILLMD_SYNC_PAGE_SIZE,
         maxConcurrentHydrations: SKILLMD_SYNC_CONCURRENCY,
+        maxArtifactFiles: SKILLMD_MAX_ARTIFACT_FILES,
       }),
       new AgentSkillsInConnector({
         enabled: explicitlyEnabled("AISLE_AGENTSKILLS_IN_ENABLED"),
