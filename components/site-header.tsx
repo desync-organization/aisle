@@ -1,7 +1,7 @@
 "use client";
 
 import * as Dialog from "@radix-ui/react-dialog";
-import { ArrowUpRight, Menu, Search, X } from "lucide-react";
+import { ArrowUpRight, Menu, Search, UserRound, X } from "lucide-react";
 import Link from "next/link";
 
 import { SearchDialog } from "@/components/search-dialog";
@@ -12,7 +12,6 @@ const navigation = [
   { href: "/packages", label: "Packages" },
   { href: "/skills", label: "Skills" },
   { href: "/categories", label: "Categories" },
-  { href: "/profile", label: "Profile" },
   { href: "/docs", label: "Docs" },
 ] as const;
 
@@ -100,6 +99,9 @@ export function SiteHeader() {
               </Dialog.Content>
             </Dialog.Portal>
           </Dialog.Root>
+          <Link aria-label="Open profile" className="profile-link" href="/profile" title="Profile">
+            <UserRound aria-hidden="true" size={18} strokeWidth={1.8} />
+          </Link>
         </div>
       </div>
     </header>

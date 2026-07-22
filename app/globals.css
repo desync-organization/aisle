@@ -221,6 +221,25 @@ input:focus-visible {
   gap: 8px;
 }
 
+.profile-link {
+  display: inline-grid;
+  width: 40px;
+  height: 40px;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  color: var(--muted-strong);
+  background: rgba(255, 255, 255, 0.035);
+  transition: border-color 180ms ease, color 180ms ease, background 180ms ease;
+}
+
+.profile-link:hover {
+  border-color: var(--line-strong);
+  color: var(--paper);
+  background: rgba(255, 255, 255, 0.065);
+}
+
 .button,
 .stack-link {
   display: inline-flex;
@@ -2716,6 +2735,11 @@ input:focus-visible {
   .stack-link {
     width: 44px;
     padding: 0;
+  }
+
+  .profile-link {
+    width: 44px;
+    height: 44px;
   }
 
   .stack-link strong {

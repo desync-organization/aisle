@@ -141,6 +141,18 @@ select:focus-visible {
   background: #181818;
 }
 
+.profile-link {
+  border-color: #484848;
+  color: #c9c8c2;
+  background: #181818;
+}
+
+.profile-link:hover {
+  border-color: #858580;
+  color: #fff;
+  background: #222;
+}
+
 .search-dialog,
 .mobile-sheet {
   border-color: #484848;
