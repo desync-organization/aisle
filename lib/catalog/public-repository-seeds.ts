@@ -14,6 +14,26 @@ export type PublicGitHubRepositoryUrl =
  */
 export const defaultPublicGitHubRepositorySeeds = [
   {
+    owner: "google",
+    repository: "skills",
+    repositoryUrl: "https://github.com/google/skills",
+  },
+  {
+    owner: "addyosmani",
+    repository: "agent-skills",
+    repositoryUrl: "https://github.com/addyosmani/agent-skills",
+  },
+  {
+    owner: "BuilderIO",
+    repository: "skills",
+    repositoryUrl: "https://github.com/BuilderIO/skills",
+  },
+  {
+    owner: "antfu",
+    repository: "skills",
+    repositoryUrl: "https://github.com/antfu/skills",
+  },
+  {
     owner: "openai",
     repository: "skills",
     repositoryUrl: "https://github.com/openai/skills",
@@ -52,3 +72,16 @@ export const defaultPublicGitHubRepositorySeeds = [
 
 export const defaultPublicGitHubRepositoryUrls: readonly PublicGitHubRepositoryUrl[] =
   defaultPublicGitHubRepositorySeeds.map(({ repositoryUrl }) => repositoryUrl);
+
+/**
+ * Very large repositories are hydrated only for manifest paths already
+ * nominated by a public registry. This avoids rejecting the entire repository
+ * while keeping every remote request bounded and useful.
+ */
+export const targetedPublicGitHubRepositorySeeds = [
+  {
+    owner: "alirezarezvani",
+    repository: "claude-skills",
+    repositoryUrl: "https://github.com/alirezarezvani/claude-skills",
+  },
+] as const satisfies readonly PublicGitHubRepositoryDiscoverySeed[];

@@ -14,7 +14,10 @@ import { CatalogIngestionService } from "../lib/catalog/ingestion";
 import { isVerifiedOfficialPublisher } from "../lib/catalog/official-publishers";
 import { normalizeSourceUrl } from "../lib/catalog/normalization";
 import { CatalogSyncOrchestrator } from "../lib/catalog/orchestrator";
-import { defaultPublicGitHubRepositoryUrls } from "../lib/catalog/public-repository-seeds";
+import {
+  defaultPublicGitHubRepositoryUrls,
+  targetedPublicGitHubRepositorySeeds,
+} from "../lib/catalog/public-repository-seeds";
 import { createAgentSkillValidator } from "../lib/catalog/security";
 import type { CatalogSourceConnector } from "../lib/catalog/source-contract";
 import { createCatalogDatabase } from "../lib/db/client";
@@ -44,6 +47,7 @@ type NormalizedSourceResult =
 const SKILLMD_SYNC_PAGE_SIZE = 10;
 const SKILLMD_SYNC_CONCURRENCY = 3;
 const SKILLMD_MAX_ARTIFACT_FILES = 128;
+const TARGETED_GITHUB_MANIFEST_LIMIT = 256;
 
 function isOperationalFailure(value: unknown): boolean {
   if (!value || typeof value !== "object" || !("status" in value)) return false;
@@ -116,6 +120,11 @@ function configuredValues(name: string): string[] {
 }
 
 function configuredGithubRepositories(): string[] {
+  const targetedRepositories = new Set(
+    targetedPublicGitHubRepositorySeeds.map(({ repositoryUrl }) =>
+      normalizeSourceUrl(repositoryUrl)
+    ),
+  );
   const repositories = [
     ...launchPackageRepositoryUrls,
     ...defaultPublicGitHubRepositoryUrls,
@@ -126,7 +135,48 @@ function configuredGithubRepositories(): string[] {
       const normalized = normalizeSourceUrl(repositoryUrl);
       return [normalized, normalized] as const;
     }),
-  ).values()];
+  ).values()].filter((repositoryUrl) => !targetedRepositories.has(repositoryUrl));
+}
+
+function manifestPathForSkillPath(skillPath: string): string {
+  const normalized = skillPath.trim().replace(/\\/gu, "/").replace(/^\/+|\/+$/gu, "");
+  return !normalized || normalized === "." ? "SKILL.md" : `${normalized}/SKILL.md`;
+}
+
+async function targetedGithubAdapters(
+  repository: CatalogRepository,
+  listOnly: boolean,
+): Promise<GitHubPublicRepositoryAdapter[]> {
+  const adapters: GitHubPublicRepositoryAdapter[] = [];
+  for (const seed of targetedPublicGitHubRepositorySeeds) {
+    const manifestPaths = new Set<string>();
+    if (!listOnly) {
+      for (let offset = 0; offset < TARGETED_GITHUB_MANIFEST_LIMIT; offset += 100) {
+        const rows = await repository.search({
+          query: normalizeSourceUrl(seed.repositoryUrl),
+          includeUnselectable: true,
+          lifecycle: ["current", "stale"],
+          limit: Math.min(100, TARGETED_GITHUB_MANIFEST_LIMIT - offset),
+          offset,
+        });
+        for (const row of rows) manifestPaths.add(manifestPathForSkillPath(row.skillPath));
+        if (rows.length < 100 || manifestPaths.size >= TARGETED_GITHUB_MANIFEST_LIMIT) break;
+      }
+    }
+    const requestedManifestPaths = [...manifestPaths].slice(0, TARGETED_GITHUB_MANIFEST_LIMIT);
+    adapters.push(
+      new GitHubPublicRepositoryAdapter({
+        repositoryUrl: seed.repositoryUrl,
+        token: process.env.GITHUB_TOKEN,
+        // Keep the source enumerable before its first registry nomination. The
+        // root placeholder is fail-closed when the repository has no root skill.
+        manifestFilePaths: requestedManifestPaths.length > 0
+          ? requestedManifestPaths
+          : ["SKILL.md"],
+      }),
+    );
+  }
+  return adapters;
 }
 
 function explicitlyEnabled(name: string): boolean {
@@ -142,6 +192,10 @@ async function main(): Promise<void> {
   const connection = createCatalogDatabase();
   try {
     const repository = new CatalogRepository(connection.db);
+    if (!options.listSources) {
+      await migrateCatalogDatabase(connection.client);
+      await seedCatalog(repository);
+    }
     const validator = createAgentSkillValidator();
     const ingestion = new CatalogIngestionService(
       repository,
@@ -186,6 +240,7 @@ async function main(): Promise<void> {
             token: process.env.GITHUB_TOKEN,
           }),
       ),
+      ...await targetedGithubAdapters(repository, options.listSources),
     ];
 
     const orchestrator = new CatalogSyncOrchestrator(repository, {
@@ -225,9 +280,6 @@ async function main(): Promise<void> {
         `Unknown catalog source ${JSON.stringify(options.sourceId)}. Available sources: ${sourceIds.join(", ")}`,
       );
     }
-
-    await migrateCatalogDatabase(connection.client);
-    await seedCatalog(repository);
 
     const settle = async (
       operation: () => Promise<unknown>,
