@@ -1129,3 +1129,95 @@ select:focus-visible {
     padding: 25px;
   }
 }
+
+/* Keep shell choice explicit: Windows Terminal is only a host, while the
+   generated syntax belongs to cmd.exe, powershell.exe, pwsh, or POSIX. */
+.stack-shell-fieldset label {
+  min-height: 62px;
+  justify-content: flex-start;
+  padding: 10px 12px;
+  text-align: left;
+}
+
+.stack-shell-fieldset label > span,
+.stack-shell-fieldset label strong,
+.stack-shell-fieldset label small {
+  display: block;
+}
+
+.stack-shell-fieldset label strong {
+  color: #f5f5f5;
+  font-size: 0.62rem;
+}
+
+.stack-shell-fieldset label small {
+  margin-top: 4px;
+  color: #777;
+  font-family: "JetBrains Mono Variable", monospace;
+  font-size: 0.5rem;
+}
+
+.stack-shell-help {
+  margin: 12px 0 0;
+  padding: 11px 12px;
+  border: 1px solid #2b2b2b;
+  border-radius: 7px;
+  color: #999;
+  font-size: 0.58rem;
+  line-height: 1.55;
+  text-align: left;
+}
+
+.stack-shell-help strong {
+  color: #fff;
+}
+
+.stack-command-result__shell {
+  display: grid;
+  grid-template-columns: minmax(220px, 0.55fr) minmax(0, 1fr);
+  gap: 24px;
+  align-items: center;
+  margin-top: 24px;
+  padding: 14px 16px;
+  border: 1px solid #323232;
+  border-radius: 8px;
+  background: #0b0b0b;
+}
+
+.stack-command-result__shell > div {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 7px;
+}
+
+.stack-command-result__shell span {
+  color: #737373;
+  font-size: 0.55rem;
+  text-transform: uppercase;
+}
+
+.stack-command-result__shell strong {
+  color: #fff;
+  font-size: 0.72rem;
+}
+
+.stack-command-result__shell code {
+  color: #a3a3a3;
+  font-family: "JetBrains Mono Variable", monospace;
+  font-size: 0.56rem;
+}
+
+.stack-command-result__shell p {
+  margin: 0;
+  color: #8a8a8a;
+  font-size: 0.58rem;
+  line-height: 1.55;
+}
+
+@media (max-width: 760px) {
+  .stack-command-result__shell {
+    grid-template-columns: 1fr;
+    gap: 9px;
+  }
+}
