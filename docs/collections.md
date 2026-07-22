@@ -9,8 +9,10 @@ Collections are user-curated, public sets of existing catalog skills. The device
 - A random public slug identifies the share page. It is safe to disclose.
 - A separate random owner token is returned once to the creating browser. Only its SHA-256 hash is stored in the database.
 - The browser keeps the owner token and a local index of every collection created on that device. The database remains the authoritative collection store.
+- A browser with that owner token can add another verified public skill through `POST /api/v1/collections/[slug]/members`. The token is sent as a bearer credential and is never placed in the share URL.
+- The anonymous owner token is a long-lived browser credential. Until account ownership replaces it, Aisle avoids third-party browser scripts and treats same-origin script access as part of the anonymous-ownership risk.
 
-The first release creates immutable public collections. Keeping the owner credential now prevents a future rename, visibility, or deletion endpoint from needing insecure URL-based ownership.
+Collection IDs, slugs, and share URLs stay stable when an owner adds a skill. Each change rechecks ownership, catalog availability, the 64-skill limit, and the latest collection version inside the database transaction. Visitors with the public link can view the updated collection but cannot edit it.
 
 ## Account migration later
 

@@ -1,13 +1,17 @@
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 
-import { and, asc, eq, inArray } from "drizzle-orm";
+import { and, asc, desc, eq, inArray } from "drizzle-orm";
 
 import { ApiError } from "@/lib/api/errors";
 import type { CatalogDatabase } from "@/lib/db/client";
 import { collectionMembers, collections, skills } from "@/lib/db/schema";
-import type { CatalogSkillId } from "@/lib/selection/contracts";
+import { MAX_SELECTED_SKILLS, type CatalogSkillId } from "@/lib/selection/contracts";
 
-import type { CreateCollectionInput, PublicCollection } from "./contracts";
+import type {
+  AddCollectionMemberInput,
+  CreateCollectionInput,
+  PublicCollection,
+} from "./contracts";
 
 function collectionId(): string {
   return `collection_${randomBytes(12).toString("hex")}`;
@@ -19,6 +23,12 @@ function ownerToken(): string {
 
 function tokenHash(token: string): string {
   return `sha256:${createHash("sha256").update(token, "utf8").digest("hex")}`;
+}
+
+function ownerTokenMatches(expectedHash: string, token: string): boolean {
+  const actual = Buffer.from(tokenHash(token), "utf8");
+  const expected = Buffer.from(expectedHash, "utf8");
+  return actual.length === expected.length && timingSafeEqual(actual, expected);
 }
 
 function slugBase(name: string): string {
@@ -111,6 +121,127 @@ export async function createAnonymousCollection(
       }),
     },
   };
+}
+
+export async function addSkillToAnonymousCollection(
+  db: CatalogDatabase,
+  slug: string,
+  token: string,
+  input: AddCollectionMemberInput,
+): Promise<Readonly<{ collection: PublicCollection; added: boolean }>> {
+  let added = false;
+
+  try {
+    await db.transaction(async (transaction) => {
+      const [header] = await transaction
+        .select({
+          id: collections.id,
+          ownerKind: collections.ownerKind,
+          ownerTokenHash: collections.ownerTokenHash,
+          updatedAt: collections.updatedAt,
+        })
+        .from(collections)
+        .where(and(eq(collections.slug, slug), eq(collections.public, true)))
+        .limit(1);
+
+      if (!header) {
+        throw new ApiError(404, "COLLECTION_NOT_FOUND", "This collection could not be found.");
+      }
+      if (
+        header.ownerKind !== "anonymous" ||
+        !header.ownerTokenHash ||
+        !ownerTokenMatches(header.ownerTokenHash, token)
+      ) {
+        throw new ApiError(403, "COLLECTION_OWNER_REQUIRED", "This browser cannot edit this collection.");
+      }
+
+      const [existingMember] = await transaction
+        .select({ skillId: collectionMembers.skillId })
+        .from(collectionMembers)
+        .where(and(
+          eq(collectionMembers.collectionId, header.id),
+          eq(collectionMembers.skillId, input.skillId),
+        ))
+        .limit(1);
+      if (existingMember) return;
+
+      const nextUpdatedAt = new Date(Math.max(Date.now(), header.updatedAt.getTime() + 1));
+      const claim = await transaction
+        .update(collections)
+        .set({ updatedAt: nextUpdatedAt })
+        .where(and(
+          eq(collections.id, header.id),
+          eq(collections.updatedAt, header.updatedAt),
+        ));
+      if (claim.rowsAffected !== 1) {
+        throw new ApiError(
+          409,
+          "COLLECTION_CHANGED",
+          "This collection changed in another tab. Refresh it and try again.",
+        );
+      }
+
+      const members = await transaction
+        .select({ position: collectionMembers.position })
+        .from(collectionMembers)
+        .where(eq(collectionMembers.collectionId, header.id))
+        .orderBy(desc(collectionMembers.position));
+      if (members.length >= MAX_SELECTED_SKILLS) {
+        throw new ApiError(
+          409,
+          "COLLECTION_FULL",
+          `A collection can contain up to ${MAX_SELECTED_SKILLS} skills.`,
+        );
+      }
+
+      const [availableSkill] = await transaction
+        .select({ id: skills.id })
+        .from(skills)
+        .where(and(
+          eq(skills.id, input.skillId),
+          eq(skills.public, true),
+          eq(skills.internal, false),
+          inArray(skills.lifecycle, ["current", "stale"]),
+        ))
+        .limit(1);
+      if (!availableSkill) {
+        throw new ApiError(
+          409,
+          "COLLECTION_SKILL_UNAVAILABLE",
+          "This skill is no longer available in the public catalog.",
+          [{ path: "skillId", message: `${input.skillId} is unavailable.` }],
+        );
+      }
+
+      await transaction.insert(collectionMembers).values({
+        collectionId: header.id,
+        skillId: input.skillId,
+        position: (members[0]?.position ?? 0) + 1,
+        addedAt: nextUpdatedAt,
+      });
+      added = true;
+    });
+  } catch (error) {
+    if (!(error instanceof ApiError && error.code === "COLLECTION_CHANGED")) throw error;
+
+    const [racedMember] = await db
+      .select({ skillId: collectionMembers.skillId })
+      .from(collectionMembers)
+      .innerJoin(collections, eq(collections.id, collectionMembers.collectionId))
+      .where(and(
+        eq(collections.slug, slug),
+        eq(collections.public, true),
+        eq(collectionMembers.skillId, input.skillId),
+      ))
+      .limit(1);
+    if (!racedMember) throw error;
+  }
+
+  const collection = await findPublicCollection(db, slug);
+  if (!collection) {
+    throw new ApiError(500, "COLLECTION_READ_FAILED", "The updated collection could not be loaded.");
+  }
+  return { collection, added };
 }
 
 export async function findPublicCollection(

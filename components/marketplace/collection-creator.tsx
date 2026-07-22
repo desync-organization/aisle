@@ -5,69 +5,19 @@ import Link from "next/link";
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 
 import { Button } from "@/components/ui/button";
+import {
+  readOwnedCollections,
+  saveOwnedCollection,
+  type OwnedCollection,
+} from "@/lib/collections/browser-ownership";
 import { COLLECTION_NAME_MAX_LENGTH } from "@/lib/collections/contracts";
 import { useSelection } from "@/lib/selection/react";
-
-const COLLECTION_OWNERS_STORAGE_KEY = "aisle.collection-owners.v1";
-
-type OwnedCollection = Readonly<{
-  id: string;
-  name: string;
-  sharePath: string;
-  skillCount: number;
-  ownerToken: string;
-  createdAt: string;
-}>;
 
 type CreateState =
   | Readonly<{ status: "idle" }>
   | Readonly<{ status: "loading" }>
   | Readonly<{ status: "success"; collection: OwnedCollection; copied: boolean }>
   | Readonly<{ status: "error"; message: string }>;
-
-function decodeOwnedCollections(raw: string | null): OwnedCollection[] {
-  if (!raw) return [];
-  try {
-    const value: unknown = JSON.parse(raw);
-    if (!Array.isArray(value)) return [];
-    return value.flatMap((candidate) => {
-      if (
-        typeof candidate !== "object" ||
-        candidate === null ||
-        !("id" in candidate) ||
-        !("name" in candidate) ||
-        !("sharePath" in candidate) ||
-        !("skillCount" in candidate) ||
-        !("ownerToken" in candidate) ||
-        !("createdAt" in candidate) ||
-        typeof candidate.id !== "string" ||
-        typeof candidate.name !== "string" ||
-        typeof candidate.sharePath !== "string" ||
-        !candidate.sharePath.startsWith("/collections/") ||
-        typeof candidate.skillCount !== "number" ||
-        typeof candidate.ownerToken !== "string" ||
-        typeof candidate.createdAt !== "string"
-      ) return [];
-      return [{
-        id: candidate.id,
-        name: candidate.name,
-        sharePath: candidate.sharePath,
-        skillCount: candidate.skillCount,
-        ownerToken: candidate.ownerToken,
-        createdAt: candidate.createdAt,
-      }];
-    });
-  } catch {
-    return [];
-  }
-}
-
-function saveOwnedCollection(collection: OwnedCollection): OwnedCollection[] {
-  const current = decodeOwnedCollections(window.localStorage.getItem(COLLECTION_OWNERS_STORAGE_KEY));
-  const next = [collection, ...current.filter((item) => item.id !== collection.id)];
-  window.localStorage.setItem(COLLECTION_OWNERS_STORAGE_KEY, JSON.stringify(next));
-  return next;
-}
 
 function shareUrl(path: string): string {
   return new URL(path, window.location.origin).toString();
@@ -83,7 +33,7 @@ export function CollectionCreator({ compact = false }: { compact?: boolean }) {
 
   useEffect(() => {
     try {
-      setOwnedCollections(decodeOwnedCollections(window.localStorage.getItem(COLLECTION_OWNERS_STORAGE_KEY)));
+      setOwnedCollections(readOwnedCollections());
     } catch {
       setOwnedCollections([]);
     }

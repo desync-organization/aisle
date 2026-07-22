@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import {
+  catalogSkillIdSchema,
   catalogSkillIdListSchema,
   MAX_SELECTED_SKILLS,
   type CatalogSkillId,
@@ -23,6 +24,10 @@ export const collectionSlugSchema = z
   .max(96)
   .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/u);
 
+export const collectionSlugParamsSchema = z.strictObject({
+  slug: collectionSlugSchema,
+});
+
 export const createCollectionBodySchema = z.strictObject({
   name: collectionNameSchema,
   skillIds: catalogSkillIdListSchema
@@ -43,9 +48,17 @@ export const createCollectionBodySchema = z.strictObject({
     }),
 });
 
+export const addCollectionMemberBodySchema = z.strictObject({
+  skillId: catalogSkillIdSchema,
+});
+
 export type CreateCollectionInput = Readonly<{
   name: string;
   skillIds: readonly CatalogSkillId[];
+}>;
+
+export type AddCollectionMemberInput = Readonly<{
+  skillId: CatalogSkillId;
 }>;
 
 export type CollectionSkill = Readonly<{

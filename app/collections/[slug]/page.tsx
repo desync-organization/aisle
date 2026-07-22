@@ -4,6 +4,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 
 import { CollectionActions } from "@/components/marketplace/collection-actions";
+import { CollectionSkillEditor } from "@/components/marketplace/collection-skill-editor";
 import { SiteFooter } from "@/components/site-footer";
 import { SiteHeader } from "@/components/site-header";
 import { Badge } from "@/components/ui/badge";
@@ -62,8 +63,13 @@ export default async function CollectionPage({ params }: CollectionPageProps) {
               <span>Collection / {String(collection.skills.length).padStart(2, "0")}</span>
               <h2 id="collection-skills-heading">Included skills</h2>
             </div>
-            <p>Review the list, then add everything to your stack.</p>
+            <p>Add another skill below, or move the whole collection to your stack.</p>
           </div>
+          <CollectionSkillEditor
+            collectionId={collection.id}
+            collectionSlug={collection.slug}
+            initialSkillIds={collection.skills.map((skill) => skill.id)}
+          />
           <ol>
             {collection.skills.map((skill) => (
               <li key={skill.id}>
