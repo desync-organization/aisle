@@ -21,7 +21,7 @@ import { createPageMetadata } from "@/lib/seo";
 
 export const metadata: Metadata = createPageMetadata({
   title: "Catalog coverage",
-  description: "Aisle’s source-by-source coverage contract, discovery modes, exclusions, and current sync state.",
+  description: "How Aisle discovers and reports public skills across configured sources.",
   path: "/coverage",
 });
 
@@ -29,22 +29,22 @@ const coverageModes = [
   {
     icon: DatabaseZap,
     mode: "Full",
-    body: "Enumerates entries inside the source's declared, count-consistent snapshot boundary.",
+    body: "Lists every entry in the source’s declared, count-consistent snapshot.",
   },
   {
     icon: ListRestart,
     mode: "Incremental",
-    body: "Applies changes since a checkpoint. Aisle must still show the last complete baseline and current lag.",
+    body: "Applies changes since the last checkpoint and shows the last complete baseline and current lag.",
   },
   {
     icon: Radar,
     mode: "Federated",
-    body: "Queries another public index at request time. Results are labeled and are not silently mixed into stored totals.",
+    body: "Queries another public index when requested. These results are labeled instead of being mixed into stored totals without explanation.",
   },
   {
     icon: SearchCode,
     mode: "On-demand",
-    body: "Validates a specific public source requested by a user. One validated URL is not evidence of broader source coverage.",
+    body: "Checks a specific public source requested by a user. One checked URL does not imply wider coverage.",
   },
 ] as const;
 
@@ -61,11 +61,11 @@ const sourceFields = [
 const exclusions = [
   {
     title: "Not publicly reachable",
-    body: "Private, internal, withdrawn, or credential-gated content is outside Aisle’s public-only catalog boundary.",
+    body: "Aisle does not index private, internal, withdrawn, or credential-gated content.",
   },
   {
     title: "Not a valid supported skill",
-    body: "A source without a supported SKILL.md shape can be recorded for diagnosis but cannot become installable.",
+    body: "A source without a supported SKILL.md format may be logged for diagnosis, but it cannot be installed.",
   },
   {
     title: "Not immutable",
@@ -114,14 +114,14 @@ export default async function CoveragePage() {
       <main className="editorial-page shell">
         <header className="editorial-hero">
           <div className="editorial-hero__copy">
-            <Badge tone="iris">Coverage · Source by source</Badge>
-            <h1>Coverage you can audit, not a total you have to trust.</h1>
+            <Badge tone="iris">Coverage · Public sources</Badge>
+            <h1>What Aisle currently covers</h1>
             <p>
               There is no universal registry of every public Agent Skill. Aisle reports what each configured source made discoverable, when it was last checked, and where the gaps are.
             </p>
             <div className="editorial-hero__actions">
               <ButtonLink href="#contract">
-                Read the contract <ArrowRight aria-hidden="true" size={16} />
+                How coverage works <ArrowRight aria-hidden="true" size={16} />
               </ButtonLink>
               <ButtonLink href="/docs/public-catalog-policy" variant="secondary">
                 Public catalog policy
@@ -135,7 +135,7 @@ export default async function CoveragePage() {
             </div>
             <dl>
               <div>
-                <dt>Published source rows</dt>
+                <dt>Published sources</dt>
                 <dd>{hasRows ? coverage.summary.sourceCount : "Not available"}</dd>
               </div>
               <div>
@@ -149,8 +149,8 @@ export default async function CoveragePage() {
             </dl>
             <p>
               {hasRows
-                ? "Counts are source-relative observations and can overlap. Open each ledger row for its mode, state, lag, and exclusions."
-                : "No measured source snapshot is being substituted with zeroes or sample data in this environment."}
+                ? "Counts come from individual sources and may overlap. Each source shows its mode, status, lag, and exclusions."
+                : "No measured source data is available in this environment, so Aisle does not show zeroes or sample values."}
             </p>
           </aside>
         </header>
@@ -158,10 +158,10 @@ export default async function CoveragePage() {
         <section className="coverage-contract" id="contract">
           <Activity aria-hidden="true" size={22} />
           <div>
-            <span className="eyebrow">The coverage promise</span>
-            <h2>All observed entries inside each configured source’s displayed coverage boundary at its last successful sync.</h2>
+            <span className="eyebrow">How totals are counted</span>
+            <h2>Aisle reports entries found in each configured source at its last successful sync.</h2>
             <p>
-              Federated and on-demand results are added only with their mode clearly labeled. Aisle will not shorten this promise to “every skill on the internet.”
+              Federated and on-demand results are labeled separately. These totals are not a count of every public skill on the internet.
             </p>
           </div>
         </section>
@@ -170,7 +170,7 @@ export default async function CoveragePage() {
           <div className="docs-section__heading">
             <span>01 / MODES</span>
             <div>
-              <h2>Four discovery modes, four different claims.</h2>
+              <h2>How Aisle discovers skills</h2>
               <p>
                 The mode determines what a result says about completeness. Search-time discovery cannot be presented as a completed full crawl.
               </p>
@@ -191,9 +191,9 @@ export default async function CoveragePage() {
           <div className="docs-section__heading">
             <span>02 / REPORTING</span>
             <div>
-              <h2>Every source earns its own ledger row.</h2>
+              <h2>What Aisle shows for each source</h2>
               <p>
-                Once synchronization is connected, each source must expose the facts below. Stale or failed sources stay visible; old counts cannot masquerade as current ones.
+                Each connected source shows the facts below. Stale or failed sources remain visible, and old counts are marked as stale.
               </p>
             </div>
           </div>
@@ -205,7 +205,7 @@ export default async function CoveragePage() {
                 {sourceFields.map((field) => <li key={field}>{field}</li>)}
               </ul>
             </article>
-            <div className="coverage-ledger-list" aria-label="Current source ledger">
+            <div className="coverage-ledger-list" aria-label="Current sources">
               {hasRows ? coverage.sources.map((source) => (
                 <article className="coverage-ledger" data-degraded={source.degraded ? "true" : "false"} key={source.id}>
                   <div className="coverage-ledger__topline">
@@ -235,14 +235,14 @@ export default async function CoveragePage() {
               )) : (
                 <article className="coverage-ledger">
                   <div className="coverage-ledger__topline">
-                    <span>CURRENT LEDGER</span>
-                    <strong>NO SNAPSHOT</strong>
+                    <span>CURRENT SOURCE DATA</span>
+                    <strong>NOT AVAILABLE</strong>
                   </div>
                   <div><span>Source</span><strong>Not published</strong></div>
                   <div><span>Mode</span><strong>Not available</strong></div>
                   <div><span>Last success</span><strong>Not available</strong></div>
                   <div><span>Records</span><strong>Not available</strong></div>
-                  <p>No zeroes are shown because zero would be a measured count. No measurement has been published.</p>
+                  <p>No measurement has been published, so a record count is not available.</p>
                 </article>
               )}
             </div>
@@ -253,9 +253,9 @@ export default async function CoveragePage() {
           <div className="docs-section__heading">
             <span>03 / EXCLUSIONS</span>
             <div>
-              <h2>Absent, ineligible, and blocked are not the same.</h2>
+              <h2>Why a skill may be missing or unavailable</h2>
               <p>
-                Coverage explains discovery. Eligibility controls installation. Trust controls risk gates. Aisle reports these dimensions separately.
+                A skill can be undiscovered, ineligible for installation, or blocked for safety. Aisle reports each state separately.
               </p>
             </div>
           </div>
@@ -271,9 +271,9 @@ export default async function CoveragePage() {
           <aside className="coverage-failure-note">
             <TriangleAlert aria-hidden="true" size={20} />
             <div>
-              <strong>Failures stay part of the report.</strong>
+              <strong>Source failures remain visible.</strong>
               <p>
-                A transient source failure does not erase provenance or silently delete records. The source remains visible with its last successful timestamp, stale state, and failure detail while new installation eligibility fails closed where required.
+                A temporary failure does not remove the source or silently delete its records. Aisle shows the last successful sync, stale status, and failure details, and blocks new installations when required.
               </p>
             </div>
           </aside>
@@ -282,10 +282,10 @@ export default async function CoveragePage() {
         <section className="coverage-close">
           <CloudCog aria-hidden="true" size={22} />
           <div>
-            <span className="eyebrow">Why “all public skills” needs a definition</span>
-            <h2>The public ecosystem changes faster than any single index.</h2>
+            <span className="eyebrow">Limits of catalog coverage</span>
+            <h2>No single index contains every public skill.</h2>
             <p>
-              Repositories appear, move, become private, and expose inconsistent metadata. Aisle’s goal is exhaustive reporting within named sources—not an unverifiable global claim.
+              Repositories appear, move, and become private. Aisle reports what it finds in each named source instead of claiming to cover the entire internet.
             </p>
           </div>
           <ButtonLink href="/docs" variant="secondary">Documentation</ButtonLink>

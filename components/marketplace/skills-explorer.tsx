@@ -20,20 +20,20 @@ type SortMode = "popular" | "name" | "trust";
 
 const availabilityCopy: Record<CatalogAvailability, { title: string; body: string }> = {
   ready: {
-    title: "No skills match these filters",
-    body: "Clear a filter or search for another upstream name, description, or source.",
+    title: "No skills found",
+    body: "Try another search or clear a filter.",
   },
   empty: {
-    title: "No public skills in this view yet",
-    body: "Aisle never inserts sample listings. Public upstream metadata will appear here after source discovery, even while selection checks are pending.",
+    title: "No skills here yet",
+    body: "Skills will appear after the next source sync.",
   },
   "not-configured": {
-    title: "The catalog has not been provisioned here",
-    body: "No sample listings are standing in for missing data. Once a source sync is connected, public skill metadata will appear here with explicit selection gates.",
+    title: "The catalog isn’t connected",
+    body: "Connect a source to show public skills here.",
   },
   unavailable: {
-    title: "The catalog could not be read",
-    body: "The marketplace shell is available, but skill records are temporarily unavailable. Nothing synthetic has been substituted.",
+    title: "Skills aren’t loading right now",
+    body: "Try again in a moment.",
   },
 };
 
@@ -161,7 +161,7 @@ export function SkillsExplorer({
 
       <div className="skills-result-bar">
         <span><SlidersHorizontal aria-hidden="true" size={14} /> {visibleSkills.length} shown on this page</span>
-        <span>{skills.length} public records loaded · page {pagination.page}</span>
+        <span>{skills.length} skills loaded · page {pagination.page}</span>
       </div>
 
       {visibleSkills.length > 0 ? (
@@ -172,7 +172,7 @@ export function SkillsExplorer({
         <div className="market-empty-state">
           <span><CircleDashed aria-hidden="true" size={24} /></span>
           <div>
-            <p className="eyebrow">Truthful empty state</p>
+            <p className="eyebrow">No results</p>
             <h2>{emptyCopy.title}</h2>
             <p>{emptyCopy.body}</p>
           </div>
@@ -203,11 +203,11 @@ export function SkillsExplorer({
       <aside className="selection-dock" id="selected-stack">
         <span className="selection-dock__icon"><Sparkles aria-hidden="true" size={18} /></span>
         <div>
-          <strong>{state.count === 0 ? "Your stack is ready for a first skill" : `${state.count} skill${state.count === 1 ? "" : "s"} in your stack`}</strong>
+          <strong>{state.count === 0 ? "Start your stack" : `${state.count} skill${state.count === 1 ? "" : "s"} in your stack`}</strong>
           <p>
             {state.count === 0
-              ? "Select from any catalog view. Your choices stay on this device."
-              : `You can select up to ${meta.maxSelections}. Install planning revalidates every chosen ID.`}
+              ? "Choose any skill to add it here."
+              : `You can add up to ${meta.maxSelections} skills. We check each one before install.`}
           </p>
         </div>
         <span className="selection-dock__meter">{state.count}/{meta.maxSelections}</span>

@@ -13,7 +13,7 @@ import { createPageMetadata } from "@/lib/seo";
 
 export const metadata: Metadata = createPageMetadata({
   title: "Skills",
-  description: "Search and compare public Agent Skill metadata, with explicit provenance and selection eligibility gates.",
+  description: "Browse public Agent Skills and add any combination to your stack.",
   path: "/skills",
 });
 
@@ -55,10 +55,10 @@ export default async function SkillsPage({ searchParams }: SkillsPageProps) {
         <div className="marketplace-main">
           <header className="marketplace-hero marketplace-hero--skills">
             <div>
-              <Badge tone="success"><CircleCheck aria-hidden="true" size={12} /> Public metadata · gated selection</Badge>
+              <Badge tone="success"><CircleCheck aria-hidden="true" size={12} /> Public skill catalog</Badge>
               <h1>Choose the exact skills you want.</h1>
               <p>
-                Search public upstream records, compare trust and provenance, and keep a multi-skill stack without turning URLs into executable instructions.
+                Search by name, category, or publisher. Add any combination to your stack.
               </p>
             </div>
             <dl className="marketplace-hero__ledger">
@@ -69,9 +69,9 @@ export default async function SkillsPage({ searchParams }: SkillsPageProps) {
           </header>
 
           <div className="catalog-contract-strip">
-            <span><GitBranch aria-hidden="true" size={15} /> Public source required</span>
-            <span><DatabaseZap aria-hidden="true" size={15} /> Canonical ID selected</span>
-            <span><Layers3 aria-hidden="true" size={15} /> Revalidated before install</span>
+            <span><GitBranch aria-hidden="true" size={15} /> Public source</span>
+            <span><DatabaseZap aria-hidden="true" size={15} /> Checked before install</span>
+            <span><Layers3 aria-hidden="true" size={15} /> Up to 64 skills</span>
           </div>
 
           <nav aria-label="Filter skills by category" className="category-filter-rail">

@@ -16,7 +16,7 @@ describe("coverage transparency", () => {
 
     expect(screen.getByText(/not configured/i)).toBeInTheDocument();
     expect(screen.getAllByText(/not available/i).length).toBeGreaterThanOrEqual(3);
-    expect(screen.getByText(/no zeroes are shown/i)).toBeInTheDocument();
+    expect(screen.getByText(/does not show zeroes or sample values/i)).toBeInTheDocument();
     expect(screen.getByText(/no universal registry/i)).toBeInTheDocument();
   });
 
@@ -37,7 +37,7 @@ describe("privacy transparency", () => {
     expect(screen.getByText("Public source metadata")).toBeInTheDocument();
     expect(screen.getByText("Routine request data")).toBeInTheDocument();
     expect(screen.getByText("External destinations")).toBeInTheDocument();
-    expect(screen.getByText(/no accounts, ads, or payment collection/i)).toBeInTheDocument();
+    expect(screen.getByText(/no sign-in, ads, or payments/i)).toBeInTheDocument();
   });
 
   it(

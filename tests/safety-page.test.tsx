@@ -34,7 +34,7 @@ describe("safety and trust guidance", () => {
 
     expect(officialRow).toHaveTextContent(/not sufficient on its own/i);
     expect(unreviewedRow).toHaveTextContent(/blocked until baseline validation passes/i);
-    expect(unreviewedRow).toHaveTextContent(/discoverable and provenance-visible/i);
+    expect(unreviewedRow).toHaveTextContent(/skill stays visible/i);
     expect(warningRow).toHaveTextContent(/requires acknowledgement/i);
     expect(
       screen.getByRole("region", { name: /trust label table, horizontally scrollable/i }),

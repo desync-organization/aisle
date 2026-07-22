@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { metadata as categoriesMetadata } from "@/app/categories/page";
 import { metadata as docsMetadata } from "@/app/docs/page";
+import { metadata as profileMetadata } from "@/app/profile/page";
 import robots from "@/app/robots";
 import sitemap from "@/app/sitemap";
 import { metadata as skillsMetadata } from "@/app/skills/page";
@@ -11,6 +12,7 @@ describe("static discovery metadata", () => {
     expect(skillsMetadata.alternates).toMatchObject({ canonical: "/skills" });
     expect(categoriesMetadata.alternates).toMatchObject({ canonical: "/categories" });
     expect(docsMetadata.alternates).toMatchObject({ canonical: "/docs" });
+    expect(profileMetadata.alternates).toMatchObject({ canonical: "/profile" });
   });
 
   it("exposes a public robots policy and sitemap", () => {
@@ -25,6 +27,8 @@ describe("static discovery metadata", () => {
 
     expect(urls).toContain("http://localhost:3000/docs");
     expect(urls).toContain("http://localhost:3000/coverage");
+    expect(urls).toContain("http://localhost:3000/profile");
+    expect(urls).not.toContain("http://localhost:3000/collections");
     expect(urls.some((url) => /\/skills\/[^/]+$/.test(url))).toBe(false);
     expect(urls.some((url) => /\/packages\/[^/]+$/.test(url))).toBe(false);
     expect(urls.some((url) => url.endsWith("/stack"))).toBe(false);

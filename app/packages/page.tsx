@@ -13,7 +13,7 @@ import { createPageMetadata } from "@/lib/seo";
 
 export const metadata: Metadata = createPageMetadata({
   title: "Packages",
-  description: "Curated workflows composed from real public Agent Skills, with every upstream source kept visible.",
+  description: "Browse ready-made sets of public Agent Skills and add a complete set to your stack.",
   path: "/packages",
 });
 
@@ -40,10 +40,10 @@ export default async function PackagesPage() {
         <div className="marketplace-main">
           <header className="marketplace-hero marketplace-hero--packages">
             <div>
-              <Badge tone="iris"><Sparkles aria-hidden="true" size={12} /> Editorial collections</Badge>
-              <h1>Start with a complete workflow.</h1>
+              <Badge tone="iris"><Sparkles aria-hidden="true" size={12} /> Ready-made sets</Badge>
+              <h1>Start with a package.</h1>
               <p>
-                Packages group complementary public upstream skills around an outcome. Aisle adds the curation layer—not replacement content or hidden forks.
+                Each package groups public skills for one kind of work. Review the list, then add everything to your stack.
               </p>
             </div>
             <dl className="marketplace-hero__ledger">
@@ -57,9 +57,9 @@ export default async function PackagesPage() {
             <div className="market-section__heading">
               <div>
                 <span>01 / Featured</span>
-                <h2 id="featured-packages">Built to get a real job done.</h2>
+                <h2 id="featured-packages">Popular packages</h2>
               </div>
-              <p>Each manifest is reviewed as a whole so the tools reinforce one another instead of becoming a random bookmark folder.</p>
+              <p>Pick a set and adjust it later.</p>
             </div>
             <PackageGrid packages={featured} priorityCount={2} />
           </section>
@@ -68,9 +68,9 @@ export default async function PackagesPage() {
             <div className="market-section__heading">
               <div>
                 <span>02 / Full collection</span>
-                <h2 id="all-packages">Every published package. Every source visible.</h2>
+                <h2 id="all-packages">All packages</h2>
               </div>
-              <p>Open any package to inspect every exact skill path, observed revision, license, and editorial reason for inclusion.</p>
+              <p>Open any package to see every included skill and its original source.</p>
             </div>
             <PackageGrid packages={publishedPackages} />
           </section>
@@ -78,13 +78,13 @@ export default async function PackagesPage() {
           <section className="package-method">
             <div className="package-method__icon"><Boxes aria-hidden="true" size={21} /></div>
             <div>
-              <span>How package publishing works</span>
-              <h2>Curation can propose. The catalog still has to prove.</h2>
+              <span>How packages work</span>
+              <h2>Choose a set, check the skills, and add them together.</h2>
             </div>
             <ol>
-              <li><GitBranch aria-hidden="true" size={16} /><span><strong>Reference</strong>Real public upstream paths are recorded.</span></li>
-              <li><Layers3 aria-hidden="true" size={16} /><span><strong>Resolve</strong>Every member binds to an eligible catalog revision.</span></li>
-              <li><Sparkles aria-hidden="true" size={16} /><span><strong>Select</strong>The complete resolved set can join your stack.</span></li>
+              <li><GitBranch aria-hidden="true" size={16} /><span><strong>Source</strong>We link to the original public skills.</span></li>
+              <li><Layers3 aria-hidden="true" size={16} /><span><strong>Check</strong>We confirm each skill is still available.</span></li>
+              <li><Sparkles aria-hidden="true" size={16} /><span><strong>Add</strong>Add the full set to your stack.</span></li>
             </ol>
             <Link href="/docs/public-catalog-policy">Read the catalog policy <ArrowRight aria-hidden="true" size={15} /></Link>
           </section>

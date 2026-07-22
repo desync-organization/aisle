@@ -21,7 +21,7 @@ import { createPageMetadata } from "@/lib/seo";
 
 export const metadata: Metadata = createPageMetadata({
   title: "Safety and trust",
-  description: "How Aisle presents Agent Skill risk, revision-scoped findings, and install gates.",
+  description: "How Aisle reviews skill revisions and decides whether they can be installed.",
   path: "/safety",
 });
 
@@ -37,7 +37,7 @@ const trustLabels = [
     label: "Audited / no known findings",
     icon: ScanLine,
     tone: "clear",
-    meaning: "Named scanners reported no findings for this exact revision. It is evidence from a bounded review, not a guarantee of safety.",
+    meaning: "The named scanners reported no findings for this exact revision. This is a limited review, not a safety guarantee.",
     gate: "Allowed",
   },
   {
@@ -51,14 +51,14 @@ const trustLabels = [
     label: "Unreviewed",
     icon: CircleHelp,
     tone: "neutral",
-    meaning: "No current Aisle assessment is available for this exact revision. It remains discoverable and provenance-visible, but an older result does not carry forward.",
+    meaning: "Aisle has no current assessment for this exact revision. The skill stays visible, but results from older revisions do not apply.",
     gate: "Blocked until baseline validation passes",
   },
   {
     label: "Failed",
     icon: CircleSlash2,
     tone: "blocked",
-    meaning: "A scanner or review reported a high-confidence dangerous condition for the revision.",
+    meaning: "A scanner or review found a high-confidence dangerous condition in this revision.",
     gate: "Blocked",
   },
   {
@@ -95,10 +95,10 @@ export default function SafetyPage() {
       <main className="editorial-page shell">
         <header className="editorial-hero">
           <div className="editorial-hero__copy">
-            <Badge tone="iris">Safety · Revision-scoped</Badge>
-            <h1>Trust labels that report evidence, not certainty.</h1>
+            <Badge tone="iris">Safety · Before you install</Badge>
+            <h1>Check every skill before you install it</h1>
             <p>
-              Skills can change how an agent reasons, what files it reads, and which code it runs. Aisle keeps identity, review findings, and install eligibility separate so one reassuring badge cannot hide another risk.
+              Skills can change how an agent behaves, what files it reads, and which code it runs. Aisle shows publisher identity, review results, and installation status separately. Check all three.
             </p>
             <div className="editorial-hero__actions">
               <ButtonLink href="#labels">
@@ -110,7 +110,7 @@ export default function SafetyPage() {
             </div>
           </div>
           <aside className="editorial-hero__note editorial-hero__note--danger" aria-label="Core safety rule">
-            <span>CORE RULE</span>
+            <span>IMPORTANT</span>
             <strong>Public does not mean safe.</strong>
             <p>
               “Official” confirms identity. “No known findings” reports a review result. Neither is permission to skip your own inspection.
@@ -122,7 +122,7 @@ export default function SafetyPage() {
           <ShieldAlert aria-hidden="true" size={25} />
           <div>
             <span className="eyebrow">Treat skills as code and instructions</span>
-            <h2 id="risk-heading">A folder can shape agent behavior and carry executable resources.</h2>
+            <h2 id="risk-heading">Skills can include instructions and executable files.</h2>
             <p>
               A malicious or careless skill can request secrets, modify files, contact networks, install dependencies, or steer an agent toward unsafe actions. Read the entire upstream folder, not only its description.
             </p>
@@ -133,7 +133,7 @@ export default function SafetyPage() {
           <div className="docs-section__heading">
             <span>01 / LABELS</span>
             <div>
-              <h2>Six states with deliberately narrow meanings.</h2>
+              <h2>What each trust label means</h2>
               <p>
                 Every review result belongs to an immutable revision. When upstream content changes, the new revision returns to Unreviewed until it is assessed.
               </p>
@@ -175,16 +175,16 @@ export default function SafetyPage() {
           <div className="docs-section__heading">
             <span>02 / EVIDENCE</span>
             <div>
-              <h2>The label is a summary. The evidence is the decision surface.</h2>
+              <h2>Check the source behind the label</h2>
               <p>
-                A useful skill detail page should make the source and revision easy to inspect before the install action, with unknown information left visibly unknown.
+                The skill page shows the public source and exact revision before installation. Missing information stays marked as unknown.
               </p>
             </div>
           </div>
           <div className="safety-split">
             <article className="inspection-card">
               <FileSearch aria-hidden="true" size={20} />
-              <span>INSPECTABLE SIGNALS</span>
+              <span>WHAT TO CHECK</span>
               <ul>
                 {inspectItems.map((item) => (
                   <li key={item}><Check aria-hidden="true" size={14} /> {item}</li>
@@ -193,9 +193,9 @@ export default function SafetyPage() {
             </article>
             <article className="revision-card">
               <GitCommitHorizontal aria-hidden="true" size={21} />
-              <span>REVISION LIFECYCLE</span>
+              <span>REVIEW HISTORY</span>
               <ol>
-                <li><strong>Source observed</strong><small>Canonical public origin and immutable revision resolved</small></li>
+                <li><strong>Source found</strong><small>Public source and immutable revision confirmed</small></li>
                 <li><strong>Unreviewed</strong><small>No current revision-scoped result yet</small></li>
                 <li><strong>Review recorded</strong><small>Named checks and findings remain attached to this revision</small></li>
                 <li><strong>Upstream changes</strong><small>A new revision starts again as Unreviewed</small></li>
@@ -208,9 +208,9 @@ export default function SafetyPage() {
           <div className="docs-section__heading">
             <span>03 / BEFORE RUN</span>
             <div>
-              <h2>Your six-point install check.</h2>
+              <h2>Before you run the command</h2>
               <p>
-                Marketplace review reduces uncertainty; it cannot know your repository, credentials, machine, or acceptable risk better than you do.
+                Aisle’s review helps, but only you know what access is appropriate for your repository, credentials, and machine.
               </p>
             </div>
           </div>

@@ -12,14 +12,14 @@ export const packageBindingIssues = [
 export type PackageBindingIssue = (typeof packageBindingIssues)[number];
 
 export const packageBindingIssueCopy: Readonly<Record<PackageBindingIssue, string>> = {
-  "publication-metadata-missing": "The published version is missing its immutable blueprint receipt.",
-  "schema-version-mismatch": "The published schema version differs from the displayed blueprint.",
-  "blueprint-digest-mismatch": "The published digest does not match the displayed blueprint.",
-  "editorial-mismatch": "The published editorial payload differs from the page being shown.",
-  "member-count-mismatch": "The published member set is incomplete or contains extra rows.",
-  "member-locator-mismatch": "A published upstream name, repository, or skill path does not match.",
-  "member-revision-mismatch": "A published member is not bound to the displayed observed revision.",
-  "member-license-mismatch": "A published member license differs from the displayed evidence.",
+  "publication-metadata-missing": "The saved package information is incomplete.",
+  "schema-version-mismatch": "The saved package uses a different format.",
+  "blueprint-digest-mismatch": "The saved package does not match this page.",
+  "editorial-mismatch": "The saved package details do not match this page.",
+  "member-count-mismatch": "The saved package has missing or extra skills.",
+  "member-locator-mismatch": "A skill name, repository, or path does not match.",
+  "member-revision-mismatch": "A skill version does not match.",
+  "member-license-mismatch": "A skill license does not match.",
 };
 
 export type PublishedPackageBinding = Readonly<{

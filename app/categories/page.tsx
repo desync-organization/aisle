@@ -17,7 +17,7 @@ import { createPageMetadata } from "@/lib/seo";
 
 export const metadata: Metadata = createPageMetadata({
   title: "Categories",
-  description: "Explore public Agent Skills by the work they help accomplish.",
+  description: "Browse public Agent Skills by category.",
   path: "/categories",
 });
 
@@ -35,26 +35,26 @@ export default async function CategoriesPage() {
         <div className="marketplace-main">
           <header className="marketplace-hero marketplace-hero--categories">
             <div>
-              <Badge tone="iris"><Grid2X2 aria-hidden="true" size={12} /> Outcome-led discovery</Badge>
-              <h1>Start with the work, not the tool.</h1>
+              <Badge tone="iris"><Grid2X2 aria-hidden="true" size={12} /> {catalogCategories.length} categories</Badge>
+              <h1>Browse by category.</h1>
               <p>
-                Ten seeded catalog categories cut across publishers and registries. Package labels remain a separate editorial layer with explicit mappings.
+                Find skills for frontend, backend, deployment, security, testing, and more.
               </p>
             </div>
             <dl className="marketplace-hero__ledger">
               <div><dt>Categories</dt><dd>{catalogCategories.length}</dd></div>
-              <div><dt>Curated workflows</dt><dd>{launchPackageBlueprints.length}</dd></div>
-              <div><dt>Taxonomy</dt><dd>v1</dd></div>
+              <div><dt>Packages</dt><dd>{launchPackageBlueprints.length}</dd></div>
+              <div><dt>Catalog</dt><dd>Public skills</dd></div>
             </dl>
           </header>
 
           <section aria-labelledby="category-grid-title" className="market-section category-index">
             <div className="market-section__heading">
               <div>
-                <span>Browse / Outcome map</span>
-                <h2 id="category-grid-title">Find your aisle.</h2>
+                <span>Browse</span>
+                <h2 id="category-grid-title">Choose a category.</h2>
               </div>
-              <p>Catalog counts appear only when this environment has a provisioned source sync. Package member counts come from reviewed public-upstream manifests.</p>
+              <p>Counts update as public sources are indexed.</p>
             </div>
             <div className="category-grid">
               {catalogCategories.map((category, index) => {
@@ -71,11 +71,11 @@ export default async function CategoriesPage() {
                     <h2><Link href={`/categories/${category.slug}`}>{category.name}</Link></h2>
                     <p>{category.description}</p>
                     <dl>
-                      <div><dt>Catalog records</dt><dd>{liveCount ?? "—"}</dd></div>
-                      <div><dt>Curated refs</dt><dd>{curatedReferences || "—"}</dd></div>
+                      <div><dt>Skills</dt><dd>{liveCount ?? "—"}</dd></div>
+                      <div><dt>Package skills</dt><dd>{curatedReferences || "—"}</dd></div>
                     </dl>
                     <Link className="category-card__link" href={`/categories/${category.slug}`}>
-                      Explore category <ArrowUpRight aria-hidden="true" size={15} />
+                      View category <ArrowUpRight aria-hidden="true" size={15} />
                     </Link>
                   </article>
                 );
@@ -86,8 +86,8 @@ export default async function CategoriesPage() {
           <div className="category-index__note">
             <Layers3 aria-hidden="true" size={18} />
             <div>
-              <strong>One skill can support more than one job.</strong>
-              <p>Categories are discovery context. The upstream name, source, and revision remain the skill’s identity.</p>
+              <strong>A skill can appear in more than one category.</strong>
+              <p>Its name and original source never change.</p>
             </div>
             <Link href="/docs/public-catalog-policy">Read the policy <ArrowUpRight aria-hidden="true" size={15} /></Link>
           </div>

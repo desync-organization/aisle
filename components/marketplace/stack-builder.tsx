@@ -88,10 +88,10 @@ const shellOptions: ReadonlyArray<Readonly<{
 ];
 
 const fixedWarnings = [
-  "Installation is best-effort and non-atomic. A successful earlier process is not rolled back if a later process fails.",
-  "The pinned installer can report process success after an individual agent fails or after only part of a requested scope matches.",
-  "The command enforces a reviewed repository path scope, but the current installer does not enforce the observed commit SHA.",
-  "A public source branch can move between backend preflight and the moment the installer clones it.",
+  "Install steps are not rolled back. If a later step fails, earlier changes remain.",
+  "The installer may report success even when an agent or requested destination fails. Check its output.",
+  "Aisle checks repository paths, but the current installer does not pin the exact reviewed commit.",
+  "A public source can change between review and installation.",
 ] as const;
 
 function subscribeToPlatform(): () => void {
@@ -210,7 +210,7 @@ export function StackBuilder() {
           status: "error",
           selectionKey,
           code: "PREFLIGHT_FAILED",
-          message: "The selected stack could not be reviewed.",
+          message: "We couldn’t check the selected skills.",
           fieldIssues: [],
         });
       });
@@ -294,7 +294,7 @@ export function StackBuilder() {
         status: "error",
         requestKey,
         code: "RESOLVE_FAILED",
-        message: "The selected stack could not be resolved.",
+        message: "We couldn’t build a command for these skills.",
         fieldIssues: [],
       });
     }
@@ -316,8 +316,8 @@ export function StackBuilder() {
         <span><Layers3 aria-hidden="true" size={27} /></span>
         <div>
           <p className="eyebrow">Your stack is empty</p>
-          <h2>Select public skills before generating a command.</h2>
-          <p>The resolver accepts only canonical catalog IDs from your device-local selection. It does not accept pasted source URLs or arbitrary command fragments.</p>
+          <h2>Pick at least one skill.</h2>
+          <p>Then come back here to review it and generate an install command.</p>
         </div>
         <Link className="button button--primary" href="/skills">Browse public skills</Link>
       </section>
@@ -336,12 +336,12 @@ export function StackBuilder() {
             <span>{state.count}/{meta.maxSelections}</span>
           </div>
           <p className="stack-review-card__note">
-            Aisle rechecks every selected skill before configuration. This view stays intentionally minimal; source and revision validation still happen on the server.
+            We check every skill again before generating your command.
           </p>
           {preflight.status === "loading" || preflight.status === "idle" ? (
             <div className="stack-preflight-status">
               <LoaderCircle aria-hidden="true" className="stack-spinner" size={17} />
-              <div><strong>Reviewing selected revisions</strong><span>No command can be requested until every row returns.</span></div>
+              <div><strong>Checking selected skills</strong><span>This usually takes a moment.</span></div>
             </div>
           ) : null}
           {preflight.status === "error" ? (
@@ -390,7 +390,7 @@ export function StackBuilder() {
               {state.ids.map((id, index) => (
                 <li key={id}>
                   <span>{String(index + 1).padStart(2, "0")}</span>
-                  <strong>Reviewing selected skill</strong>
+                  <strong>Checking selected skill</strong>
                   <span aria-hidden="true" className="stack-selection-list__spacer" />
                   <Button aria-label={`Remove selection ${id}`} onClick={() => actions.remove(id)} variant="quiet">
                     <X aria-hidden="true" size={15} />
@@ -448,14 +448,14 @@ export function StackBuilder() {
             <strong>Match the name on your terminal tab.</strong> Windows Terminal is the app; Command Prompt and PowerShell use different command syntax.
           </p>
 
-          <p className="stack-options-card__boundary">These are destinations supported by the pinned installer. They do not prove that every selected skill works with that client.</p>
+          <p className="stack-options-card__boundary">These are the apps supported by the installer. Individual skills may have their own requirements.</p>
           {agents.length === 0 ? <p className="stack-options-card__error">Choose at least one installer destination.</p> : null}
-          {preflight.status === "error" ? <p className="stack-options-card__error">Revision review must succeed before a command can be requested.</p> : null}
+          {preflight.status === "error" ? <p className="stack-options-card__error">We need to check every skill before generating a command.</p> : null}
           {preflight.status === "success" && hasUnselectableRows ? (
             <p className="stack-options-card__error">Remove every blocked selection before continuing.</p>
           ) : null}
           {preflight.status === "success" && !hasUnselectableRows && !allWarningsAcknowledged ? (
-            <p className="stack-options-card__error">Acknowledge each revision-bound warning in the review panel.</p>
+            <p className="stack-options-card__error">Review and acknowledge each skill warning.</p>
           ) : null}
           <Button
             className="stack-resolve-button"
@@ -466,22 +466,21 @@ export function StackBuilder() {
               ? <LoaderCircle aria-hidden="true" className="stack-spinner" size={17} />
               : resolution.status === "success"
                 ? <Check aria-hidden="true" size={17} />
-              : <LockKeyhole aria-hidden="true" size={17} />}
+                : <LockKeyhole aria-hidden="true" size={17} />}
             {resolution.status === "loading"
-              ? "Resolving every skill…"
+              ? "Building your command…"
               : resolution.status === "success"
-                ? "Command generated below"
+                ? "Command ready below"
               : preflight.status === "loading" || preflight.status === "idle"
-                ? "Reviewing selected revisions…"
+                ? "Checking selected skills…"
                 : hasUnselectableRows
                   ? "Remove blocked skills"
                   : !allWarningsAcknowledged
-                    ? "Acknowledge revision warnings"
+                    ? "Review skill warnings"
                     : preflight.status === "error"
-                      ? "Revision review unavailable"
-                      : "Generate reviewed command"}
+                      ? "Skill check unavailable"
+                      : "Generate command"}
           </Button>
-          <p className="stack-options-card__boundary">No command is assembled in the browser. Resolve receives only the reviewed IDs plus acknowledgements bound to the returned revision and warning fingerprint.</p>
         </form>
       </div>
 
@@ -489,7 +488,7 @@ export function StackBuilder() {
         <div>
           <ShieldAlert aria-hidden="true" size={22} />
           <span>Read before running</span>
-          <h2 id="stack-warning-heading">One command is convenient. It is not a transaction.</h2>
+          <h2 id="stack-warning-heading">Read the command before you run it.</h2>
         </div>
         <ul>
           {fixedWarnings.map((warning) => <li key={warning}><AlertTriangle aria-hidden="true" size={14} /> {warning}</li>)}
@@ -502,8 +501,8 @@ export function StackBuilder() {
             <span><Code2 aria-hidden="true" size={22} /></span>
             <div>
               <p className="eyebrow">03 / Command</p>
-              <h2>No command generated yet.</h2>
-              <p>Complete revision review and any warning acknowledgements, then ask the server to revalidate the exact stack.</p>
+              <h2>No command yet.</h2>
+              <p>Review your skills, then generate a command.</p>
             </div>
           </>
         ) : null}
@@ -512,8 +511,8 @@ export function StackBuilder() {
             <span><LoaderCircle aria-hidden="true" className="stack-spinner" size={22} /></span>
             <div>
               <p className="eyebrow">03 / Resolving</p>
-              <h2>Checking the complete stack.</h2>
-              <p>Public state, revision evidence, license, trust, selector scope, and command length are being evaluated while the upstream compatibility advisory is surfaced separately.</p>
+              <h2>Building your command.</h2>
+              <p>We’re checking each selected skill one more time.</p>
             </div>
           </>
         ) : null}
@@ -535,7 +534,7 @@ export function StackBuilder() {
             <div className="stack-command-result__meta">
               <div>
                 <p className="eyebrow">03 / Reviewed command</p>
-                <h2>{resolution.plan.selectionCount} skills across {resolution.plan.sourceCount} source {resolution.plan.sourceCount === 1 ? "scope" : "scopes"}</h2>
+                <h2>{resolution.plan.selectionCount} skills from {resolution.plan.sourceCount} {resolution.plan.sourceCount === 1 ? "source" : "sources"}</h2>
               </div>
               <span>{resolution.plan.runtime.package} · Node {resolution.plan.runtime.minimumNodeVersion}</span>
             </div>
