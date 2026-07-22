@@ -26,7 +26,10 @@ jobs:
     env:
       DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
       DATABASE_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
-      GITHUB_TOKEN: ${{ secrets.AISLE_PUBLIC_GITHUB_TOKEN }}
+      # Prefer the higher-rate catalog token when configured, but never run the
+      # public GitHub connectors anonymously. The job token has read-only
+      # contents access and is sufficient for public repository hydration.
+      GITHUB_TOKEN: ${{ secrets.AISLE_PUBLIC_GITHUB_TOKEN || github.token }}
       SKILLS_SH_OIDC_TOKEN: ${{ secrets.SKILLS_SH_OIDC_TOKEN }}
       AISLE_AGENTSKILLS_IN_ENABLED: "true"
       AISLE_ASKSKILL_ENABLED: "true"
