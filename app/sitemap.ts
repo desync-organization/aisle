@@ -6,7 +6,7 @@ const routePriority: Partial<Record<(typeof sitemapRoutes)[number], number>> = {
   "/": 1,
   "/skills": 0.9,
   "/packages": 0.8,
-  "/collections": 0.8,
+  "/profile": 0.8,
   "/docs": 0.8,
   "/safety": 0.7,
   "/coverage": 0.7,

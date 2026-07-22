@@ -17,7 +17,7 @@ export function PackageCard({ blueprint, priority = false }: { blueprint: Packag
         <span className="package-card__icon">
           <CategoryIcon size={19} token={editorial.visual.iconToken} />
         </span>
-        <span>{editorial.featured ? "Featured package" : "Curated package"}</span>
+        <span>{editorial.featured ? "Featured" : "Package"}</span>
         <span className="package-card__count">
           <Layers3 aria-hidden="true" size={14} /> {members.length}
         </span>
@@ -39,10 +39,10 @@ export function PackageCard({ blueprint, priority = false }: { blueprint: Packag
       </div>
       <div className="package-card__footer">
         <span>
-          <GitBranch aria-hidden="true" size={14} /> Public upstream references
+          <GitBranch aria-hidden="true" size={14} /> {members.length} public skills
         </span>
         <Link aria-label={`View ${editorial.title}`} href={`/packages/${slug}`}>
-          Inspect package <ArrowUpRight aria-hidden="true" size={15} />
+          View package <ArrowUpRight aria-hidden="true" size={15} />
         </Link>
       </div>
     </article>

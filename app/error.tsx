@@ -15,10 +15,10 @@ export default function GlobalError({ error, reset }: { error: Error & { digest?
     <div className="site-frame">
       <SiteHeader />
       <main className="route-page shell">
-        <span className="eyebrow">Aisle interrupted</span>
-        <h1>That route slipped off the rail.</h1>
+        <span className="eyebrow">Something went wrong</span>
+        <h1>We couldn’t load this page.</h1>
         <p className="route-page__lede">
-          Nothing was installed or changed. Try the request again.
+          Your selection hasn’t changed. Try again.
         </p>
         <Button onClick={reset}>
           <RotateCcw aria-hidden="true" size={16} /> Try again

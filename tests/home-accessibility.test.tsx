@@ -14,12 +14,11 @@ describe("Aisle home", () => {
     render(<SelectionProvider>{await HomePage()}</SelectionProvider>);
 
     expect(
-      screen.getByRole("heading", { level: 1, name: /build your agent stack/i }),
+      screen.getByRole("heading", { level: 1, name: /marketplace/i }),
     ).toBeInTheDocument();
     expect(screen.getByRole("navigation", { name: /primary/i })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /your stack, 0 selected/i })).toBeInTheDocument();
-    expect(screen.getByText(/no aisle-authored skills/i)).toBeInTheDocument();
-    expect(screen.getByText("Zero").closest("p")).toHaveTextContent("Zero house-made skills");
+    expect(screen.getByText("Skills made by Aisle").closest("div")).toHaveTextContent("0");
   });
 
   it("has no automated accessibility violations in its initial state", async () => {

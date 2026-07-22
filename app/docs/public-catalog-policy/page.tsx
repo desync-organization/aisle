@@ -9,29 +9,29 @@ import { createPageMetadata } from "@/lib/seo";
 
 export const metadata: Metadata = createPageMetadata({
   title: "Public catalog policy",
-  description: "Aisle’s public-source, provenance, licensing, lifecycle, and trust commitments.",
+  description: "The rules Aisle follows when it lists and installs public skills.",
   path: "/docs/public-catalog-policy",
 });
 
 const decisions = [
   {
-    title: "Public upstream only",
-    body: "Every installable record must resolve to an existing public Agent Skill and immutable upstream revision.",
+    title: "A public source is required",
+    body: "Every installable skill must link to an existing public Agent Skill at an immutable revision.",
   },
   {
-    title: "References, never rewrites",
-    body: "Aisle packages are ordered references. Aisle does not generate, synthesize, translate, or improve skill contents.",
+    title: "Aisle does not rewrite skills",
+    body: "Packages contain ordered links to public skills. Aisle does not generate, synthesize, translate, copy, or change their contents.",
   },
   {
-    title: "Truthful coverage",
-    body: "Coverage is reported per configured source and last successful sync, including gaps, lag, and discovery mode.",
+    title: "Coverage is reported by source",
+    body: "Each configured source shows its last successful sync, gaps, lag, and discovery mode.",
   },
   {
-    title: "Public is not safe",
+    title: "Public does not mean safe",
     body: "Trust findings belong to an exact revision. Unreviewed stays visible but not selectable; Warning requires acknowledgement; Failed and Quarantined remain blocked.",
   },
   {
-    title: "Licenses stay attached",
+    title: "The original license stays attached",
     body: "Public availability does not grant redistribution rights, so installation resolves from the original source.",
   },
 ] as const;
@@ -42,10 +42,10 @@ export default function PublicCatalogPolicyPage() {
       <SiteHeader />
       <main className="policy-page shell">
         <div className="policy-page__intro">
-          <Badge tone="iris">Architecture decision · Accepted</Badge>
+          <Badge tone="iris">Policy · Public catalog</Badge>
           <h1>Public catalog policy</h1>
           <p>
-            The short version of the invariant that governs discovery, curation, and installation across Aisle.
+            The rules Aisle follows when it finds, lists, and installs public skills.
           </p>
         </div>
         <div className="policy-list">
@@ -61,36 +61,36 @@ export default function PublicCatalogPolicyPage() {
           ))}
         </div>
         <aside className="policy-page__coverage">
-          <strong>A precise coverage promise</strong>
+          <strong>Coverage limits</strong>
           <p>
-            Aisle reports every observed entry inside each configured source’s displayed coverage boundary, then distinguishes unresolved, blocked, and install-eligible records. Federated and on-demand results stay clearly labeled. It will never claim to contain every skill on the internet.
+            Aisle reports entries found in each configured source and separates unresolved, blocked, and installable records. Federated and on-demand results are labeled separately. Aisle does not claim to contain every skill on the internet.
           </p>
         </aside>
         <section aria-labelledby="attribution-heading" className="policy-attribution">
           <div>
             <span className="eyebrow">Source attribution</span>
-            <h2 id="attribution-heading">Three kinds of context, never blended.</h2>
+            <h2 id="attribution-heading">Where catalog information comes from</h2>
           </div>
           <div className="policy-attribution__grid">
             <article>
-              <span>UPSTREAM</span>
+              <span>FROM THE PUBLISHER</span>
               <h3>Publisher material</h3>
               <p>Name, description, files, revision, and license stay linked to the original public source.</p>
             </article>
             <article>
-              <span>AISLE / EDITORIAL</span>
+              <span>FROM AISLE</span>
               <h3>Marketplace structure</h3>
               <p>Categories, package copy, ordering, and duplicate relationships are labeled as Aisle context.</p>
             </article>
             <article>
-              <span>AISLE / FINDING</span>
+              <span>FROM AISLE REVIEW</span>
               <h3>Revision review</h3>
               <p>Trust labels and scanner findings identify who produced them and the exact revision reviewed.</p>
             </article>
           </div>
         </section>
         <aside className="policy-license-note">
-          <strong>Unknown means unknown.</strong>
+          <strong>A missing license stays unknown.</strong>
           <p>
             A missing license is displayed as unknown, never inferred to be permissive. Public access alone does not grant redistribution rights or permission to modify upstream work.
           </p>
@@ -100,7 +100,7 @@ export default function PublicCatalogPolicyPage() {
             <ArrowLeft aria-hidden="true" size={16} /> Back to documentation
           </ButtonLink>
           <ButtonLink href="/coverage">
-            See the coverage contract <ArrowRight aria-hidden="true" size={16} />
+            See coverage details <ArrowRight aria-hidden="true" size={16} />
           </ButtonLink>
         </div>
       </main>

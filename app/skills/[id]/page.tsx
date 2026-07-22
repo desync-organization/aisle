@@ -44,13 +44,13 @@ export async function generateMetadata({ params }: SkillPageProps): Promise<Meta
   const snapshot = await getSkill(id);
   if (!snapshot.skill) return createPageMetadata({
     title: "Skill detail",
-    description: "Inspect public Agent Skill provenance, revision, license, and trust metadata.",
+    description: "See the source, version, license, and trust details for a public Agent Skill.",
     path: `/skills/${encodeURIComponent(id)}`,
   });
 
   return createPageMetadata({
     title: snapshot.skill.name,
-    description: snapshot.skill.description || `Provenance and trust metadata for ${snapshot.skill.name}.`,
+    description: snapshot.skill.description || `Source and trust details for ${snapshot.skill.name}.`,
     path: `/skills/${encodeURIComponent(id)}`,
   });
 }
@@ -74,8 +74,8 @@ export default async function SkillPage({ params }: SkillPageProps) {
               <span><FileLock2 aria-hidden="true" size={24} /></span>
               <div>
                 <p className="eyebrow">Catalog state</p>
-                <h1>{snapshot.availability === "not-configured" ? "The catalog is not provisioned here." : "This skill cannot be read right now."}</h1>
-                <p>No instruction body or substitute metadata has been rendered. Return to the explorer when the catalog is available.</p>
+                <h1>{snapshot.availability === "not-configured" ? "The catalog isn’t connected." : "This skill isn’t loading right now."}</h1>
+                <p>Return to the skills page and try again later.</p>
               </div>
             </div>
           </div>
@@ -124,7 +124,7 @@ export default async function SkillPage({ params }: SkillPageProps) {
               </div>
               {!skill.selectable ? (
                 <div className="skill-detail-gates" role="note">
-                  <strong>Selection is paused for this record.</strong>
+                  <strong>You can’t add this skill yet.</strong>
                   <ul>
                     {skill.gateReasons.map((reason) => (
                       <li key={reason}>{catalogSelectionGateCopy[reason]}</li>
@@ -134,7 +134,7 @@ export default async function SkillPage({ params }: SkillPageProps) {
               ) : null}
             </div>
             <div className="skill-detail-hero__source">
-              <span>Upstream identity</span>
+              <span>Source</span>
               <strong>{source}</strong>
               <code>{skill.skillPath}</code>
             </div>
@@ -143,10 +143,10 @@ export default async function SkillPage({ params }: SkillPageProps) {
           <section aria-labelledby="skill-provenance" className="skill-detail-section">
             <div className="market-section__heading">
               <div>
-                <span>01 / Provenance ledger</span>
-                <h2 id="skill-provenance">The receipt stays attached.</h2>
+                <span>01 / Source details</span>
+                <h2 id="skill-provenance">See exactly where this skill came from.</h2>
               </div>
-              <p>This page exposes bounded metadata used to evaluate the selected revision. It never mirrors or previews the skill’s instruction body.</p>
+              <p>Aisle keeps the details needed to check this version before install. The instructions stay in the original repository.</p>
             </div>
             <dl className="skill-metadata-grid">
               <div><dt><GitBranch aria-hidden="true" size={15} /> Source</dt><dd>{source}</dd><small>{skill.sourceUrl}</small></div>
@@ -160,9 +160,9 @@ export default async function SkillPage({ params }: SkillPageProps) {
 
           <section className="skill-integrity-panel">
             <div>
-              <span>Revision binding</span>
-              <h2>Metadata only. No hidden copy.</h2>
-              <p>Aisle stores hashes and source coordinates so the backend can revalidate this choice. The public SKILL.md instructions remain upstream.</p>
+              <span>Version details</span>
+              <h2>The original skill stays upstream.</h2>
+              <p>Aisle stores the source and version details needed to check this skill before install.</p>
             </div>
             <dl>
               <div><dt>Catalog skill ID</dt><dd>{skill.id}</dd></div>

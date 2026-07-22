@@ -10,9 +10,9 @@ import { Button } from "@/components/ui/button";
 
 const navigation = [
   { href: "/packages", label: "Packages" },
-  { href: "/collections", label: "Collections" },
   { href: "/skills", label: "Skills" },
   { href: "/categories", label: "Categories" },
+  { href: "/profile", label: "Profile" },
   { href: "/docs", label: "Docs" },
 ] as const;
 
@@ -76,7 +76,7 @@ export function SiteHeader() {
                   </Dialog.Close>
                 </div>
                 <Dialog.Description>
-                  Browse packages, shared collections, individual public skills, categories, and documentation.
+                  Browse skills, packages, categories, and your saved collections.
                 </Dialog.Description>
                 <nav aria-label="Mobile navigation" className="mobile-nav">
                   {navigation.map((item, index) => (

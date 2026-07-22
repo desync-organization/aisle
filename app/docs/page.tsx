@@ -23,7 +23,7 @@ import { createPageMetadata } from "@/lib/seo";
 
 export const metadata: Metadata = createPageMetadata({
   title: "Documentation",
-  description: "A practical guide to the open Agent Skills format and Aisle’s public-only boundary.",
+  description: "How Agent Skills work, what Aisle indexes, and what to check before installing.",
   path: "/docs",
 });
 
@@ -31,17 +31,17 @@ const formatParts = [
   {
     icon: FileCode2,
     title: "SKILL.md is required",
-    body: "YAML frontmatter requires a 1–64 character lowercase name and a non-empty description of at most 1,024 characters. Markdown below carries the activation-time instructions.",
+    body: "Every SKILL.md starts with YAML frontmatter: a lowercase name (1–64 characters) and a description (up to 1,024 characters). The instructions follow in Markdown.",
   },
   {
     icon: FolderOpen,
     title: "Resources are optional",
-    body: "A skill can include scripts, references, assets, and other files. Those additions can increase both usefulness and risk.",
+    body: "A skill can also include scripts, references, assets, and other files. Review them before installation.",
   },
   {
     icon: Braces,
     title: "Clients decide support",
-    body: "License, metadata, a compatibility note of at most 500 characters, and experimental allowed-tools may appear in frontmatter. Client behavior can differ.",
+    body: "Frontmatter can also include a license, metadata, a compatibility note (up to 500 characters), and the experimental allowed-tools field. Support varies by client.",
   },
 ] as const;
 
@@ -66,23 +66,23 @@ const lifecycle = [
 const aisleSteps = [
   {
     icon: GitBranch,
-    title: "Keep the origin attached",
-    body: "A catalog record must point to a public canonical source, skill path, and immutable revision before it can become installable.",
+    title: "Link to the source",
+    body: "Every installable record includes a public source, skill path, and immutable revision.",
   },
   {
     icon: ShieldCheck,
-    title: "Add context, not replacement content",
-    body: "Aisle may add categories, duplicate relationships, compatibility notes, and revision-scoped findings. Upstream content stays upstream.",
+    title: "Label Aisle’s additions",
+    body: "Aisle adds categories, duplicate relationships, compatibility notes, and revision-specific findings. It does not replace the publisher’s content.",
   },
   {
     icon: Boxes,
-    title: "Compose references",
-    body: "A package is an ordered set of public skill references. It is not a new skill and does not contain copied instructions.",
+    title: "Group skills without copying them",
+    body: "A package is an ordered list of public skill references. It is not a new skill and does not copy the instructions.",
   },
   {
     icon: PackageCheck,
-    title: "Resolve again before install",
-    body: "The eventual installer must recheck every selected revision and fail closed if a source is missing, changed, or blocked.",
+    title: "Check again before installation",
+    body: "The installer must recheck each selected revision and stop if a source is missing, changed, or blocked.",
   },
 ] as const;
 
@@ -111,10 +111,10 @@ export default function DocsPage() {
       <main className="editorial-page shell">
         <header className="editorial-hero">
           <div className="editorial-hero__copy">
-            <Badge tone="iris">Documentation · Open format</Badge>
-            <h1>A clear map of what a skill is—and what Aisle adds.</h1>
+            <Badge tone="iris">Docs · Agent Skills</Badge>
+            <h1>How Agent Skills work</h1>
             <p>
-              Agent Skills are portable instruction folders. Aisle helps you find and compose public ones while keeping ownership, revision, license, and review state visible.
+              Learn what a skill contains, how clients load it, what Aisle adds, and what to check before you install.
             </p>
             <div className="editorial-hero__actions">
               <ButtonLink href="#format">
@@ -125,11 +125,11 @@ export default function DocsPage() {
               </ButtonLink>
             </div>
           </div>
-          <aside className="editorial-hero__note" aria-label="Aisle authorship boundary">
-            <span>THE BOUNDARY</span>
-            <strong>Aisle does not make skills.</strong>
+          <aside className="editorial-hero__note" aria-label="What Aisle does">
+            <span>WHAT AISLE DOES</span>
+            <strong>Aisle indexes public skills.</strong>
             <p>
-              It indexes existing public work, adds separately labeled marketplace context, and builds reference-only selections.
+              It does not write or copy them. Categories, packages, and review findings are clearly marked as Aisle’s work.
             </p>
           </aside>
         </header>
@@ -153,9 +153,9 @@ export default function DocsPage() {
               <div className="docs-section__heading">
                 <span>01 / FORMAT</span>
                 <div>
-                  <h2>A folder an agent can load progressively.</h2>
+                  <h2>What a skill contains</h2>
                   <p>
-                    The open specification requires one file and permits supporting resources. Aisle validates that shape; it does not rewrite the instructions inside it.
+                    The open specification requires a SKILL.md file and allows supporting resources. Aisle checks the format but does not rewrite the instructions.
                   </p>
                 </div>
               </div>
@@ -188,9 +188,9 @@ export default function DocsPage() {
               <div className="docs-section__heading">
                 <span>02 / LOADING</span>
                 <div>
-                  <h2>Small at discovery, detailed when needed.</h2>
+                  <h2>How clients load a skill</h2>
                   <p>
-                    The format is designed for progressive disclosure. Exact behavior still belongs to the agent client, so compatibility must be checked rather than assumed.
+                    Clients usually start with the name and description, then load the full instructions when needed. Exact behavior varies by client.
                   </p>
                 </div>
               </div>
@@ -211,9 +211,9 @@ export default function DocsPage() {
               <div className="docs-section__heading">
                 <span>03 / AISLE</span>
                 <div>
-                  <h2>Marketplace context with the receipts intact.</h2>
+                  <h2>What Aisle adds</h2>
                   <p>
-                    Aisle’s work begins around the skill: discovery, attribution, qualification, grouping, and install-time resolution.
+                    Aisle handles discovery, attribution, review details, grouping, and installation checks around the original skill.
                   </p>
                 </div>
               </div>
@@ -229,9 +229,9 @@ export default function DocsPage() {
               <div className="docs-callout">
                 <CheckCircle2 aria-hidden="true" size={21} />
                 <div>
-                  <strong>Attribution has three lanes.</strong>
+                  <strong>Who supplied the information</strong>
                   <p>
-                    Publisher-supplied fields remain upstream metadata; categories and packages are Aisle editorial context; audits and trust labels are Aisle findings tied to one revision.
+                    Names, files, and licenses come from the publisher. Categories and packages come from Aisle. Review findings are tied to one exact revision.
                   </p>
                 </div>
               </div>
@@ -243,40 +243,40 @@ export default function DocsPage() {
                 <div>
                   <h2>Read the command before you run it.</h2>
                   <p>
-                    Installation writes files into an agent’s skill directory and can expose executable resources to that agent. The command is part of the security boundary.
+                    Installation writes files into an agent’s skill directory and may make executable resources available to that agent. Review the generated command before running it.
                   </p>
                 </div>
               </div>
               <div className="install-status">
                 <TerminalSquare aria-hidden="true" size={21} />
                 <div>
-                  <strong>Commands are issued only after current server-side revalidation.</strong>
-                  <p>The stack builder resolves the selected catalog IDs again, blocks stale or ineligible revisions, and requires an exact acknowledgement for each warning-tier revision before returning one command.</p>
+                  <strong>Aisle checks the selection before generating a command.</strong>
+                  <p>The stack builder resolves every selected catalog ID again, blocks stale or ineligible revisions, and requires an exact acknowledgement for each warning-tier revision.</p>
                 </div>
               </div>
               <div className="install-reference">
-                <span>PINNED UPSTREAM CLI SHAPE</span>
+                <span>PINNED CLI EXAMPLE</span>
                 <code>npx skills add &lt;public-source&gt; --skill &lt;name&gt; --agent &lt;client&gt;</code>
               </div>
               <ul className="caveat-list">
                 <li>
-                  <strong>Scope changes reach.</strong>
+                  <strong>Choose project or global scope.</strong>
                   <span>The Vercel CLI defaults to project installation; global installs apply across projects for the selected agent.</span>
                 </li>
                 <li>
-                  <strong>Link and copy behave differently.</strong>
+                  <strong>Choose link or copy.</strong>
                   <span>Interactive installs can use a shared symlink or independent copies. Confirm which update model you want.</span>
                 </li>
                 <li>
-                  <strong>Confirmation is useful.</strong>
+                  <strong>Keep confirmation prompts when possible.</strong>
                   <span>Flags such as <code>--yes</code> remove prompts. Use non-interactive mode only after inspecting source, revision, destination, and files.</span>
                 </li>
                 <li>
-                  <strong>Package runners execute code.</strong>
+                  <strong><code>npx</code> runs downloaded code.</strong>
                   <span><code>npx</code> fetches and runs a package. Pin or verify the tool version according to your own supply-chain policy.</span>
                 </li>
                 <li>
-                  <strong>Third-party telemetry has its own controls.</strong>
+                  <strong>The CLI controls its own telemetry.</strong>
                   <span>The Vercel CLI documents anonymous telemetry and the <code>DISABLE_TELEMETRY=1</code> opt-out. Its policy is separate from Aisle’s.</span>
                 </li>
               </ul>
@@ -294,9 +294,9 @@ export default function DocsPage() {
               <div className="docs-section__heading">
                 <span>05 / SOURCES</span>
                 <div>
-                  <h2>Primary references, not marketplace folklore.</h2>
+                  <h2>Source documentation</h2>
                   <p>
-                    These pages informed this guide. Product behavior can change, so the upstream specification and CLI repository remain the source of truth.
+                    These are the primary references for the format and CLI. Check them for the latest behavior.
                   </p>
                 </div>
               </div>

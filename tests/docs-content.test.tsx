@@ -14,10 +14,10 @@ describe("Aisle documentation", () => {
     render(<SelectionProvider><DocsPage /></SelectionProvider>);
 
     expect(
-      screen.getByRole("heading", { level: 1, name: /a clear map of what a skill is/i }),
+      screen.getByRole("heading", { level: 1, name: /how agent skills work/i }),
     ).toBeInTheDocument();
     expect(screen.getByText(/SKILL\.md is required/i)).toBeInTheDocument();
-    expect(screen.getByText(/does not make skills/i)).toBeInTheDocument();
+    expect(screen.getByText(/does not write or copy them/i)).toBeInTheDocument();
     expect(screen.queryByText(/foundation ready/i)).not.toBeInTheDocument();
   });
 
@@ -32,14 +32,14 @@ describe("Aisle documentation", () => {
       "href",
       "https://github.com/vercel-labs/skills",
     );
-    expect(screen.getByText(/commands are issued only after current server-side revalidation/i)).toBeInTheDocument();
+    expect(screen.getByText(/checks the selection before generating a command/i)).toBeInTheDocument();
   });
 
   it("keeps upstream, editorial, and findings attribution separate", () => {
     render(<SelectionProvider><PublicCatalogPolicyPage /></SelectionProvider>);
 
-    expect(screen.getByRole("heading", { name: /three kinds of context/i })).toBeInTheDocument();
-    expect(screen.getByText(/missing license is displayed as unknown/i)).toBeInTheDocument();
-    expect(screen.getByText("AISLE / EDITORIAL")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /where catalog information comes from/i })).toBeInTheDocument();
+    expect(screen.getByText(/missing license stays unknown/i)).toBeInTheDocument();
+    expect(screen.getByText("FROM AISLE")).toBeInTheDocument();
   });
 });

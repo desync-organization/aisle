@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 
 export const siteDescription =
-  "Discover public Agent Skills, inspect their provenance and trust signals, and compose an installable stack.";
+  "Browse public Agent Skills, add the ones you want, and install them with one command.";
 
 function nonEmptyEnvironmentValue(value: string | undefined): string | null {
   const candidate = value?.trim();
@@ -47,7 +47,7 @@ export const sitemapRoutes = [
   "/",
   "/skills",
   "/packages",
-  "/collections",
+  "/profile",
   "/categories",
   "/docs",
   "/docs/public-catalog-policy",

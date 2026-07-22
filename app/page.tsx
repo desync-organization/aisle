@@ -41,8 +41,7 @@ export default async function HomePage() {
             </div>
             <div className="directory-hero__intro">
               <p>
-                Discover public Agent Skills, combine exactly what you need,
-                and install the complete stack with one reviewed command.
+                Pick the skills you want. Install them with one command.
               </p>
               <div>
                 <Link href="/skills">Browse skills <ArrowRight aria-hidden="true" size={15} /></Link>
@@ -53,16 +52,16 @@ export default async function HomePage() {
 
           <div className="directory-hero__utility">
             <div className="install-demo">
-              <span>TRY IT NOW</span>
+              <span>BUILD A STACK</span>
               <Link href="/stack">
                 <code><b>$</b> npx skills add &lt;owner/repo&gt; --skill &lt;name&gt;</code>
                 <ArrowRight aria-hidden="true" size={15} />
               </Link>
             </div>
             <dl className="directory-stats">
-              <div><dt>Connected sources</dt><dd>{catalog.connectedSources || "—"}</dd></div>
-              <div><dt>Published packages</dt><dd>{publishedPackages.length}</dd></div>
-              <div><dt>Aisle-authored skills</dt><dd>0</dd></div>
+              <div><dt>Sources</dt><dd>{catalog.connectedSources || "—"}</dd></div>
+              <div><dt>Packages</dt><dd>{publishedPackages.length}</dd></div>
+              <div><dt>Skills made by Aisle</dt><dd>0</dd></div>
             </dl>
           </div>
         </section>
@@ -74,7 +73,7 @@ export default async function HomePage() {
               <nav aria-label="Marketplace views">
                 <Link aria-current="page" href="/">Featured</Link>
                 <Link href="/packages">Packages</Link>
-                <Link href="/collections">Collections</Link>
+                <Link href="/profile">Profile</Link>
                 <Link href="/skills">All skills</Link>
               </nav>
             </header>
@@ -85,7 +84,7 @@ export default async function HomePage() {
                   <span>Browse</span>
                   <Link aria-current="page" href="/"><Check aria-hidden="true" size={14} /> Featured</Link>
                   <Link href="/packages">Packages</Link>
-                  <Link href="/collections">Collections</Link>
+                  <Link href="/profile">Profile</Link>
                   <Link href="/skills">All skills</Link>
                   <Link href="/coverage">Source coverage</Link>
                 </div>
@@ -112,7 +111,7 @@ export default async function HomePage() {
                   <div className="directory-section__heading">
                     <div>
                       <h2 id="featured-packages-home">Featured packages</h2>
-                      <p>Curated groups of compatible public skills.</p>
+                      <p>Useful sets of public skills, ready to add.</p>
                     </div>
                     <Link href="/packages">View all <ArrowRight aria-hidden="true" size={14} /></Link>
                   </div>
@@ -123,7 +122,7 @@ export default async function HomePage() {
                   <div className="directory-section__heading">
                     <div>
                       <h2 id="popular-skills-home">Skills index</h2>
-                      <p>Public records ordered by observed installs.</p>
+                      <p>Popular skills from across the public catalog.</p>
                     </div>
                     <Link href="/skills">Open explorer <ArrowRight aria-hidden="true" size={14} /></Link>
                   </div>

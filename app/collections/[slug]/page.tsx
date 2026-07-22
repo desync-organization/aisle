@@ -43,12 +43,12 @@ export default async function CollectionPage({ params }: CollectionPageProps) {
     <div className="site-frame">
       <SiteHeader />
       <main className="shared-collection-page shell">
-        <Link className="market-back-link" href="/collections"><ArrowLeft aria-hidden="true" size={15} /> Collections</Link>
+        <Link className="market-back-link" href="/profile"><ArrowLeft aria-hidden="true" size={15} /> Back to profile</Link>
         <header className="shared-collection-hero">
           <div>
             <Badge tone="iris"><FolderHeart aria-hidden="true" size={12} /> Shared collection</Badge>
             <h1>{collection.name}</h1>
-            <p>{collection.skills.length} public {collection.skills.length === 1 ? "skill" : "skills"}, collected into one reusable stack.</p>
+            <p>{collection.skills.length} {collection.skills.length === 1 ? "skill" : "skills"} in this shared collection.</p>
           </div>
           <CollectionActions
             collectionName={collection.name}
@@ -62,7 +62,7 @@ export default async function CollectionPage({ params }: CollectionPageProps) {
               <span>Collection / {String(collection.skills.length).padStart(2, "0")}</span>
               <h2 id="collection-skills-heading">Included skills</h2>
             </div>
-            <p>Each skill remains connected to its public upstream source and is reviewed again when someone generates an install command.</p>
+            <p>Review the list, then add everything to your stack.</p>
           </div>
           <ol>
             {collection.skills.map((skill) => (
@@ -82,7 +82,7 @@ export default async function CollectionPage({ params }: CollectionPageProps) {
 
         <footer className="shared-collection-footer">
           <Link2 aria-hidden="true" size={18} />
-          <p>Share this page as-is. The link never contains private ownership credentials.</p>
+          <p>Anyone with this link can view this collection.</p>
         </footer>
       </main>
       <SiteFooter />

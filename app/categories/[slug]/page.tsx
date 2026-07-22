@@ -56,21 +56,20 @@ export default async function CategoryPage({ params }: CategoryPageProps) {
             <div className="category-detail-hero__index">{String(catalogCategories.findIndex((item) => item.slug === category.slug) + 1).padStart(2, "0")}</div>
             <div className="category-detail-hero__icon"><CategoryIcon size={31} token={category.iconToken} /></div>
             <div>
-              <Badge tone="iris">Marketplace category</Badge>
+              <Badge tone="iris">Category</Badge>
               <h1>{category.name}</h1>
               <p>{category.description}</p>
             </div>
-            <blockquote>{category.prompt}</blockquote>
           </header>
 
           <section aria-labelledby="category-live-skills" className="market-section category-live-section">
             <div className="market-section__heading">
               <div>
-                <span>01 / Catalog observations</span>
-                <h2 id="category-live-skills">Public skills observed in this aisle.</h2>
+                <span>01 / Skills</span>
+                <h2 id="category-live-skills">Skills in this category.</h2>
               </div>
               <div className="category-live-section__action">
-                <p>Current and retained public records appear here; each card explains when selection is blocked.</p>
+                <p>Some skills may be unavailable until their source is checked.</p>
                 <ButtonLink href={`/skills?category=${category.slug}`} variant="secondary">
                   Open full explorer <ArrowRight aria-hidden="true" size={15} />
                 </ButtonLink>
@@ -83,17 +82,17 @@ export default async function CategoryPage({ params }: CategoryPageProps) {
             <section aria-labelledby="category-package" className="market-section market-section--rule">
               <div className="market-section__heading">
                 <div>
-                  <span>02 / Curated workflow</span>
-                  <h2 id="category-package">Take the complete route.</h2>
+                  <span>02 / Packages</span>
+                  <h2 id="category-package">Start with a package.</h2>
                 </div>
-                <p>These editorial manifests reference {curatedReferenceCount} public upstream skills. Their labels map into this seeded catalog category.</p>
+                <p>These packages combine {curatedReferenceCount} public skills from this category.</p>
               </div>
               <div className="category-package-feature">
                 <PackageGrid packages={blueprints} priorityCount={1} />
                 <div className="category-package-feature__notes">
-                  <span><Box aria-hidden="true" size={16} /> {curatedReferenceCount} upstream references</span>
-                  <span><CircleCheck aria-hidden="true" size={16} /> {blueprints.length} editorial {blueprints.length === 1 ? "package" : "packages"}</span>
-                  <span><Layers3 aria-hidden="true" size={16} /> Explicit taxonomy mapping</span>
+                  <span><Box aria-hidden="true" size={16} /> {curatedReferenceCount} public skills</span>
+                  <span><CircleCheck aria-hidden="true" size={16} /> {blueprints.length} {blueprints.length === 1 ? "package" : "packages"}</span>
+                  <span><Layers3 aria-hidden="true" size={16} /> Ready to add</span>
                 </div>
               </div>
             </section>

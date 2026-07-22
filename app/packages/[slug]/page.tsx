@@ -53,7 +53,7 @@ export default async function PackagePage({ params }: PackagePageProps) {
               <CategoryIcon size={30} token={blueprint.editorial.visual.iconToken} />
             </div>
             <div className="package-detail-hero__copy">
-              <Badge tone="iris">Editorial package manifest</Badge>
+              <Badge tone="iris">Skill package</Badge>
               <h1>{blueprint.editorial.title}</h1>
               <p>{blueprint.editorial.summary}</p>
               <div className="package-detail-hero__tags">
@@ -63,7 +63,7 @@ export default async function PackagePage({ params }: PackagePageProps) {
             <dl className="package-detail-hero__facts">
               <div><dt><Users aria-hidden="true" size={14} /> Built for</dt><dd>{blueprint.editorial.audience.join(" · ")}</dd></div>
               <div><dt><CalendarDays aria-hidden="true" size={14} /> Reviewed</dt><dd>{blueprint.editorial.reviewedAt}</dd></div>
-              <div><dt><ShieldCheck aria-hidden="true" size={14} /> Boundary</dt><dd>Public upstream only</dd></div>
+              <div><dt><ShieldCheck aria-hidden="true" size={14} /> Source</dt><dd>Public skills only</dd></div>
             </dl>
           </header>
 
@@ -79,7 +79,7 @@ export default async function PackagePage({ params }: PackagePageProps) {
           />
 
           <section aria-labelledby="package-outcome" className="package-outcome">
-            <span>Designed outcome</span>
+            <span>What this helps with</span>
             <h2 id="package-outcome">{blueprint.editorial.outcome}</h2>
             <Link href={`/categories/${category.slug}`}>Explore {category.shortName} <ArrowUpRight aria-hidden="true" size={15} /></Link>
           </section>
@@ -87,10 +87,10 @@ export default async function PackagePage({ params }: PackagePageProps) {
           <section aria-labelledby="package-members" className="package-members-section">
             <div className="market-section__heading">
               <div>
-                <span>Manifest / {String(blueprint.members.length).padStart(2, "0")} skills</span>
-                <h2 id="package-members">Every inclusion has a reason.</h2>
+                <span>Includes / {String(blueprint.members.length).padStart(2, "0")} skills</span>
+                <h2 id="package-members">What’s included.</h2>
               </div>
-              <p>Names, paths, licenses, and revisions below are preserved from their public upstream sources. The rationale is Aisle editorial context.</p>
+              <p>Skill details come from the original sources. The notes explain why each one is here.</p>
             </div>
             <ol className="package-member-list">
               {blueprint.members.map((member) => {
@@ -120,8 +120,8 @@ export default async function PackagePage({ params }: PackagePageProps) {
                     </dl>
                     <div className="package-member-list__actions">
                       {resolvedMember
-                        ? <span className="member-ready"><Check aria-hidden="true" size={13} /> Exact binding</span>
-                        : <span>{resolved.availability === "binding-mismatch" ? "Binding mismatch" : "Resolution pending"}</span>}
+                        ? <span className="member-ready"><Check aria-hidden="true" size={13} /> Ready</span>
+                        : <span>{resolved.availability === "binding-mismatch" ? "Needs review" : "Not ready yet"}</span>}
                       <a href={snapshotUrl} rel="noreferrer" target="_blank">
                         <GitBranch aria-hidden="true" size={14} /> View source <ArrowUpRight aria-hidden="true" size={13} />
                       </a>

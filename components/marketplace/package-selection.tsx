@@ -72,16 +72,14 @@ export function PackageSelection({
 
     if (allSelected) {
       actions.removePackage(packageSlug);
-      setFeedback(
-        "Package receipt removed; independently selected or shared skills were kept.",
-      );
+      setFeedback("Package removed. Skills added another way stay in your stack.");
       return;
     }
 
     const result = actions.addPackage(assertion);
     setFeedback(
       result.ok
-        ? `${memberCount} package skills and their immutable package receipt were added to your stack.`
+        ? `${memberCount} skills were added to your stack.`
         : `This package would exceed the ${meta.maxSelections}-skill stack limit. Remove a few skills and try again.`,
     );
   }
@@ -91,15 +89,11 @@ export function PackageSelection({
       <div className="package-resolution package-resolution--mismatch">
         <LockKeyhole aria-hidden="true" size={18} />
         <div>
-          <strong>Displayed blueprint does not match the published receipt</strong>
-          <p>Add all is locked until the stored version, editorial payload, members, and revisions reproduce this exact digest.</p>
+          <strong>This package isn’t ready to add yet.</strong>
+          <p>We couldn’t verify that every skill matches the package shown here.</p>
           <ul className="package-resolution__issues">
             {mismatchReasons.map((reason) => <li key={reason}>{packageBindingIssueCopy[reason]}</li>)}
           </ul>
-          <dl className="package-resolution__receipt">
-            <div><dt>Expected</dt><dd>{expectedBlueprintDigest}</dd></div>
-            <div><dt>Published</dt><dd>{binding?.blueprintDigest || "Missing"}</dd></div>
-          </dl>
         </div>
         <Button aria-disabled="true" disabled variant="secondary">Add package</Button>
       </div>
@@ -108,15 +102,15 @@ export function PackageSelection({
 
   if (!isComplete || !binding) {
     const pendingCopy = availability === "not-configured"
-      ? "The catalog is not provisioned in this environment, so no package IDs are available."
+      ? "The catalog isn’t connected here yet."
       : availability === "unavailable"
-        ? "The published package receipt could not be read. No selection IDs were substituted."
-        : "The editorial package has not resolved to one complete, published, revision-bound version yet.";
+        ? "The package couldn’t be checked right now."
+        : "We haven’t verified every skill in this package yet.";
     return (
       <div className="package-resolution package-resolution--pending">
         <LockKeyhole aria-hidden="true" size={18} />
         <div>
-          <strong>Selection unlocks after catalog resolution</strong>
+          <strong>This package isn’t ready to add yet.</strong>
           <p>{pendingCopy}</p>
         </div>
         <Button aria-disabled="true" disabled variant="secondary">
@@ -130,8 +124,8 @@ export function PackageSelection({
     <div className="package-resolution package-resolution--ready">
       <Check aria-hidden="true" size={18} />
       <div>
-        <strong>{memberCount} exact skills · package v{binding.version}</strong>
-        <p>Digest {binding.blueprintDigest} binds this editorial payload and every member locator to the displayed revision.</p>
+        <strong>{memberCount} skills, checked and ready to add.</strong>
+        <p>Review the list below or add the full package now.</p>
       </div>
       <Button aria-pressed={allSelected} onClick={togglePackage} variant={allSelected ? "secondary" : "primary"}>
         {allSelected ? <Check aria-hidden="true" size={16} /> : <Plus aria-hidden="true" size={16} />}

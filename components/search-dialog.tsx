@@ -81,7 +81,7 @@ export function SearchDialog({ children }: SearchDialogProps) {
           </form>
           <div className="search-dialog__note">
             <span className="status-dot" />
-            Search will only return records traced to a public upstream source.
+            Search only shows skills with a public source.
           </div>
         </Dialog.Content>
       </Dialog.Portal>
