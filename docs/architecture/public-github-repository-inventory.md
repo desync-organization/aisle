@@ -9,7 +9,7 @@ each GitHub URL, and removes duplicates before creating repository connectors:
    `lib/catalog/public-repository-seeds.ts`; and
 3. administrator additions from `AISLE_GITHUB_REPOSITORIES`.
 
-The first two groups form the default inventory. At this revision they contain 24
+The first two groups form the default inventory. At this revision they contain 23
 distinct repository candidates.
 
 ## Launch package origins
@@ -21,7 +21,6 @@ distinct repository candidates.
 - `https://github.com/firebase/agent-skills`
 - `https://github.com/freshtechbro/claudedesignskills`
 - `https://github.com/giuseppe-trisciuoglio/developer-kit`
-- `https://github.com/heygen-com/hyperframes`
 - `https://github.com/huggingface/skills`
 - `https://github.com/microsoft/azure-skills`
 - `https://github.com/microsoft/playwright-cli`
