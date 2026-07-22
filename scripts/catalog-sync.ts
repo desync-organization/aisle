@@ -42,6 +42,7 @@ type NormalizedSourceResult =
 // be checkpointed. Keep production pages small so an interrupted sweep resumes
 // from durable progress instead of replaying a large first batch.
 const SKILLMD_SYNC_PAGE_SIZE = 10;
+const SKILLMD_SYNC_CONCURRENCY = 3;
 
 function isOperationalFailure(value: unknown): boolean {
   if (!value || typeof value !== "object" || !("status" in value)) return false;
@@ -151,6 +152,7 @@ async function main(): Promise<void> {
       new SkillMdAdapter({
         githubToken: process.env.GITHUB_TOKEN,
         pageSize: SKILLMD_SYNC_PAGE_SIZE,
+        maxConcurrentHydrations: SKILLMD_SYNC_CONCURRENCY,
       }),
       new AgentSkillsInConnector({
         enabled: explicitlyEnabled("AISLE_AGENTSKILLS_IN_ENABLED"),
