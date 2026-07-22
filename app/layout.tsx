@@ -5,6 +5,7 @@ import "@fontsource-variable/jetbrains-mono";
 import "@fontsource-variable/manrope";
 import "./globals.css";
 import "./marketplace.css";
+import "./monochrome.css";
 
 import { SelectionProvider } from "@/lib/selection/react";
 import { siteDescription, siteOrigin, siteSocialImage } from "@/lib/seo";
@@ -44,7 +45,7 @@ export const metadata: Metadata = {
 
 export const viewport: Viewport = {
   colorScheme: "dark",
-  themeColor: "#0a0910",
+  themeColor: "#000000",
 };
 
 export default function RootLayout({ children }: Readonly<{ children: ReactNode }>) {

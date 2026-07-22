@@ -23,7 +23,7 @@ function Brand() {
         <i />
         <i />
       </span>
-      <span className="brand__word">aisle</span>
+      <span className="brand__word">Aisle</span>
     </Link>
   );
 }
@@ -41,7 +41,7 @@ export function SiteHeader() {
           ))}
           <a
             className="desktop-nav__external"
-            href="https://github.com/Krishang-Zinzuwadia/aisle"
+            href="https://github.com/desync-organization/aisle"
             rel="noreferrer"
             target="_blank"
           >
@@ -90,7 +90,7 @@ export function SiteHeader() {
                 </nav>
                 <a
                   className="mobile-sheet__github"
-                  href="https://github.com/Krishang-Zinzuwadia/aisle"
+                  href="https://github.com/desync-organization/aisle"
                   rel="noreferrer"
                   target="_blank"
                 >

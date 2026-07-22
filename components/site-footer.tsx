@@ -7,7 +7,7 @@ export function SiteFooter() {
       <div className="shell site-footer__inner">
         <div>
           <Link className="site-footer__brand" href="/">
-            aisle<span>®</span>
+            Aisle<span>®</span>
           </Link>
           <p>Public skills. Clear provenance. One composed stack.</p>
         </div>
