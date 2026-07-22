@@ -146,7 +146,6 @@ describe("launch package blueprints", () => {
       "react-three-fiber",
       "motion-framer",
       "web3d-integration-patterns",
-      "hyperframes-animation",
     ]);
     expect(packages.get("mobile")).toEqual([
       "expo-project-structure",
