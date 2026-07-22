@@ -23,7 +23,7 @@ export default async function HomePage() {
     ),
   ]);
   const publishedPackages = packageStates
-    .filter(({ state }) => state.availability === "resolved")
+    .filter(({ state }) => state.binding !== null)
     .map(({ blueprint }) => blueprint);
   const featuredPackages = publishedPackages
     .filter((blueprint) => blueprint.editorial.featured)
