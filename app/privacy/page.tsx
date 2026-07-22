@@ -31,7 +31,7 @@ const privacyAreas = [
   {
     icon: KeyRound,
     title: "Public collections",
-    body: "When you explicitly create a collection, Aisle stores its name and referenced public skill IDs so the shared page remains available. The public link never includes the private owner token.",
+    body: "When you create or update a collection, Aisle stores its name and referenced public skill IDs so the shared page stays current. The public link never includes the private owner token.",
   },
   {
     icon: GitFork,
@@ -86,7 +86,7 @@ export default function PrivacyPage() {
             <span className="eyebrow">Current behavior</span>
             <h2>Selections stay local unless you explicitly publish a collection.</h2>
             <p>
-              Building a command sends the selected skill IDs and install choices to Aisle for a final check. Creating a collection saves its name and skill list in Aisle’s database, while ownership stays in this browser. Aisle does not save install history, and this release has no accounts, analytics, ads, or payments.
+              Building a command sends the selected skill IDs and install choices to Aisle for a final check. Creating or editing a collection saves its name and current skill list in Aisle’s database, while ownership stays in this browser. Aisle does not save install history, and this release has no accounts, analytics, ads, or payments.
             </p>
           </div>
           <time dateTime="2026-07-22">Reviewed 22 Jul 2026</time>
