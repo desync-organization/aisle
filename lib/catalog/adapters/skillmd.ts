@@ -14,7 +14,9 @@ import type {
 } from "../source-contract";
 import {
   SkillMdClient,
+  SkillMdHttpError,
   type SkillMdListItem,
+  type SkillMdListPage,
   type SkillMdSkillMetadata,
 } from "./skillmd-client";
 
@@ -286,7 +288,31 @@ export class SkillMdAdapter implements CatalogSourceConnector {
     }
     let offset = parsedOffset;
     do {
-      const page = await this.client.listSkills({ limit: this.pageSize, offset });
+      let page: SkillMdListPage;
+      try {
+        page = await this.client.listSkills({ limit: this.pageSize, offset });
+      } catch (error) {
+        if (
+          offset > 0 &&
+          error instanceof SkillMdHttpError &&
+          error.status === 400 &&
+          error.message === "offset_too_deep"
+        ) {
+          yield {
+            records: [],
+            nextCursor: null,
+            hasMore: false,
+            reportedTotal: null,
+            completeSnapshot: false,
+            degraded: true,
+            exclusions: [
+              `SkillMD ended its exposed public offset window before offset ${offset}; retained observations remain partial and non-retiring.`,
+            ],
+          };
+          break;
+        }
+        throw error;
+      }
       const records: DiscoveredSkillRecord[] = [];
       const exclusions: string[] = [];
       let degraded = true;
