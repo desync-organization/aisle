@@ -1361,7 +1361,7 @@
 
 .market-route-loading {
   display: grid;
-  min-height: 720px;
+  min-height: calc(100svh - 64px);
   grid-template-columns: 210px minmax(0, 1fr);
   gap: 54px;
   padding-block: 52px;

@@ -986,22 +986,6 @@ select:focus-visible {
   border-color: #242424;
 }
 
-.loading-state__brand,
-.loading-state__line,
-.loading-state__rail {
-  border-radius: 5px;
-  background: #111;
-}
-
-.loading-state__line::after,
-.loading-state__brand::after {
-  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.08), transparent);
-}
-
-.loading-state__rail span {
-  background: #555;
-}
-
 @media (max-width: 1080px) {
   .directory-content .package-grid,
   .package-grid {
