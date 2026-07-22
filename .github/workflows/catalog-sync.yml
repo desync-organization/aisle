@@ -116,6 +116,9 @@ jobs:
               clawhub|skillmd)
                 source_timeout=60m
                 ;;
+              github:alirezarezvani/claude-skills)
+                source_timeout=90m
+                ;;
             esac
             echo "Time budget: $source_timeout"
             if timeout --signal=TERM --kill-after=30s "$source_timeout" \

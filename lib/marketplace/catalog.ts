@@ -132,6 +132,7 @@ export async function loadMarketplaceCatalog(
     page?: number;
     pageSize?: number;
     limit?: number;
+    includeUnavailable?: boolean;
   }> = {},
 ): Promise<MarketplaceCatalogSnapshot> {
   const page = boundedInteger(options.page, 1, MAX_CATALOG_PAGE);
@@ -165,7 +166,7 @@ export async function loadMarketplaceCatalog(
       repository.search({
         query: options.query,
         category: options.category,
-        includeUnselectable: true,
+        includeUnselectable: options.includeUnavailable === true,
         lifecycle: ["current", "stale"],
         limit: pageSize + 1,
         offset: (page - 1) * pageSize,
