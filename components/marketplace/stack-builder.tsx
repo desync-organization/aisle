@@ -16,7 +16,7 @@ import {
   X,
 } from "lucide-react";
 import Link from "next/link";
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore, type FormEvent } from "react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -96,12 +96,30 @@ const fixedWarnings = [
   "A public source branch can move between backend preflight and the moment the installer clones it.",
 ] as const;
 
+function subscribeToPlatform(): () => void {
+  return () => undefined;
+}
+
+function browserDefaultShell(): StackShell {
+  return /Windows/i.test(navigator.userAgent) ? "cmd" : "posix";
+}
+
+function serverDefaultShell(): StackShell {
+  return "cmd";
+}
+
 export function StackBuilder() {
   const { actions, meta, state } = useSelection();
   const [agents, setAgents] = useState<ReadonlyArray<StackAgent>>(["codex"]);
   const [scope, setScope] = useState<StackScope>("project");
   const [mode, setMode] = useState<StackMode>("copy");
-  const [shell, setShell] = useState<StackShell>("posix");
+  const detectedShell = useSyncExternalStore(
+    subscribeToPlatform,
+    browserDefaultShell,
+    serverDefaultShell,
+  );
+  const [shellOverride, setShellOverride] = useState<StackShell | null>(null);
+  const shell = shellOverride ?? detectedShell;
   const [preflightState, setPreflight] = useState<PreflightState>({ status: "idle" });
   const [preflightAttempt, setPreflightAttempt] = useState(0);
   const [acknowledgedWarningsState, setAcknowledgedWarnings] = useState<AcknowledgedWarningsState>(() => ({
@@ -113,10 +131,6 @@ export function StackBuilder() {
   const preflightControllerRef = useRef<AbortController | null>(null);
   const resolveControllerRef = useRef<AbortController | null>(null);
   const commandResultRef = useRef<HTMLElement | null>(null);
-
-  useEffect(() => {
-    setShell(/Windows/i.test(navigator.userAgent) ? "cmd" : "posix");
-  }, []);
 
   const selectionKey = JSON.stringify({
     ids: state.ids,
@@ -454,7 +468,7 @@ export function StackBuilder() {
             <div>
               {shellOptions.map((option) => (
                 <label data-checked={shell === option.id ? "true" : "false"} key={option.id}>
-                  <input checked={shell === option.id} name="shell" onChange={() => setShell(option.id)} type="radio" />
+                  <input checked={shell === option.id} name="shell" onChange={() => setShellOverride(option.id)} type="radio" />
                   <span><strong>{option.label}</strong><small>{option.executable}</small></span>
                 </label>
               ))}
