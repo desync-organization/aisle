@@ -65,10 +65,11 @@ function renderPowerShellStep(step: InstallExecutionStep): string {
 }
 
 function renderCmdStep(step: InstallExecutionStep): string {
-  // `"npx"` makes cmd.exe resolve the extensionless Unix shim before
-  // npx.cmd on standard Node.js for Windows installations. The executable is
-  // a fixed planner token; only argv values pass through the cmd quoter.
-  return [CMD_NPX_EXECUTABLE, ...step.args.map(quoteCmdArgument)].join(" ");
+  // Use the Windows batch shim explicitly instead of the extensionless Unix
+  // shim. The executable is fixed; only argv values pass through the quoter.
+  // `call` keeps the chain working both when pasted interactively and when a
+  // user saves the generated command inside a .cmd/.bat file.
+  return ["call", CMD_NPX_EXECUTABLE, ...step.args.map(quoteCmdArgument)].join(" ");
 }
 
 function renderPowerShell51(steps: readonly InstallExecutionStep[]): string {

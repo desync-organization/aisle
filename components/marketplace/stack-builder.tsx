@@ -77,11 +77,16 @@ const modeOptions: ReadonlyArray<Readonly<{ id: StackMode; label: string; note: 
   { id: "symlink", label: "Symlink", note: "Shared source where supported" },
 ];
 
-const shellOptions: ReadonlyArray<Readonly<{ id: StackShell; label: string }>> = [
-  { id: "powershell7", label: "PowerShell 7" },
-  { id: "powershell51", label: "Windows PowerShell" },
-  { id: "cmd", label: "Command Prompt" },
-  { id: "posix", label: "macOS / Linux" },
+const shellOptions: ReadonlyArray<Readonly<{
+  id: StackShell;
+  label: string;
+  executable: string;
+  note: string;
+}>> = [
+  { id: "powershell7", label: "PowerShell 7", executable: "pwsh.exe", note: "Not Command Prompt" },
+  { id: "powershell51", label: "Windows PowerShell", executable: "powershell.exe", note: "Not Command Prompt" },
+  { id: "cmd", label: "Command Prompt", executable: "cmd.exe", note: "Windows CMD syntax" },
+  { id: "posix", label: "macOS / Linux", executable: "bash / zsh", note: "POSIX shell syntax" },
 ];
 
 const fixedWarnings = [
@@ -96,7 +101,7 @@ export function StackBuilder() {
   const [agents, setAgents] = useState<ReadonlyArray<StackAgent>>(["codex"]);
   const [scope, setScope] = useState<StackScope>("project");
   const [mode, setMode] = useState<StackMode>("copy");
-  const [shell, setShell] = useState<StackShell>("powershell7");
+  const [shell, setShell] = useState<StackShell>("posix");
   const [preflightState, setPreflight] = useState<PreflightState>({ status: "idle" });
   const [preflightAttempt, setPreflightAttempt] = useState(0);
   const [acknowledgedWarningsState, setAcknowledgedWarnings] = useState<AcknowledgedWarningsState>(() => ({
@@ -107,6 +112,11 @@ export function StackBuilder() {
   const [copyState, setCopyState] = useState<CopyState>({ requestKey: "", status: "idle" });
   const preflightControllerRef = useRef<AbortController | null>(null);
   const resolveControllerRef = useRef<AbortController | null>(null);
+  const commandResultRef = useRef<HTMLElement | null>(null);
+
+  useEffect(() => {
+    setShell(/Windows/i.test(navigator.userAgent) ? "cmd" : "posix");
+  }, []);
 
   const selectionKey = JSON.stringify({
     ids: state.ids,
@@ -137,6 +147,13 @@ export function StackBuilder() {
     ? ({ status: "idle" } as const)
     : resolutionState;
   const copyStatus = copyState.requestKey === requestKey ? copyState.status : "idle";
+  const selectedShell = shellOptions.find((option) => option.id === shell) ?? shellOptions[0]!;
+
+  useEffect(() => {
+    if (resolution.status === "success" || resolution.status === "error") {
+      commandResultRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  }, [resolution.status]);
 
   useEffect(() => {
     preflightControllerRef.current?.abort();
@@ -438,11 +455,15 @@ export function StackBuilder() {
               {shellOptions.map((option) => (
                 <label data-checked={shell === option.id ? "true" : "false"} key={option.id}>
                   <input checked={shell === option.id} name="shell" onChange={() => setShell(option.id)} type="radio" />
-                  {option.label}
+                  <span><strong>{option.label}</strong><small>{option.executable}</small></span>
                 </label>
               ))}
             </div>
           </fieldset>
+
+          <p className="stack-shell-help">
+            <strong>Match the name on your terminal tab.</strong> Windows Terminal is the app; Command Prompt and PowerShell use different command syntax.
+          </p>
 
           <p className="stack-options-card__boundary">These are destinations supported by the pinned installer. They do not prove that every selected skill works with that client.</p>
           {agents.length === 0 ? <p className="stack-options-card__error">Choose at least one installer destination.</p> : null}
@@ -460,9 +481,13 @@ export function StackBuilder() {
           >
             {resolution.status === "loading" || preflight.status === "loading"
               ? <LoaderCircle aria-hidden="true" className="stack-spinner" size={17} />
+              : resolution.status === "success"
+                ? <Check aria-hidden="true" size={17} />
               : <LockKeyhole aria-hidden="true" size={17} />}
             {resolution.status === "loading"
               ? "Resolving every skill…"
+              : resolution.status === "success"
+                ? "Command generated below"
               : preflight.status === "loading" || preflight.status === "idle"
                 ? "Reviewing selected revisions…"
                 : hasUnselectableRows
@@ -488,7 +513,7 @@ export function StackBuilder() {
         </ul>
       </section>
 
-      <section aria-live="polite" className={`stack-command-state stack-command-state--${resolution.status}`}>
+      <section aria-live="polite" className={`stack-command-state stack-command-state--${resolution.status}`} ref={commandResultRef}>
         {resolution.status === "idle" ? (
           <>
             <span><Code2 aria-hidden="true" size={22} /></span>
@@ -531,11 +556,19 @@ export function StackBuilder() {
               </div>
               <span>{resolution.plan.runtime.package} · Node {resolution.plan.runtime.minimumNodeVersion}</span>
             </div>
+            <div className="stack-command-result__shell" data-shell={shell}>
+              <div>
+                <span>Run with</span>
+                <strong>{selectedShell.label}</strong>
+                <code>{selectedShell.executable}</code>
+              </div>
+              <p>{selectedShell.note}. If your terminal tab says something else, select that shell above and generate again.</p>
+            </div>
             <div className="stack-command-result__command">
               <code>{resolution.plan.command}</code>
               <Button onClick={copyCommand} variant="secondary">
                 {copyStatus === "copied" ? <Check aria-hidden="true" size={15} /> : <Clipboard aria-hidden="true" size={15} />}
-                {copyStatus === "copied" ? "Copied" : copyStatus === "failed" ? "Copy failed" : "Copy"}
+                {copyStatus === "copied" ? "Copied" : copyStatus === "failed" ? "Copy failed" : `Copy for ${selectedShell.label}`}
               </Button>
             </div>
             <ul className="stack-command-result__warnings">
