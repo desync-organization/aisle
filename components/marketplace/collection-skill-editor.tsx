@@ -7,13 +7,16 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
   type FormEvent,
 } from "react";
 
 import { Button } from "@/components/ui/button";
 import {
-  findOwnedCollection,
+  decodeOwnedCollections,
+  readOwnedCollectionsSnapshot,
   saveOwnedCollection,
+  subscribeOwnedCollections,
   type OwnedCollection,
 } from "@/lib/collections/browser-ownership";
 import { MAX_SELECTED_SKILLS } from "@/lib/selection/contracts";
@@ -27,9 +30,11 @@ type CatalogSearchSkill = Readonly<{
 
 type SearchState =
   | Readonly<{ status: "idle" }>
-  | Readonly<{ status: "loading" }>
-  | Readonly<{ status: "ready"; skills: readonly CatalogSearchSkill[] }>
-  | Readonly<{ status: "error"; message: string }>;
+  | Readonly<{ status: "loading"; query: string }>
+  | Readonly<{ status: "ready"; query: string; skills: readonly CatalogSearchSkill[] }>
+  | Readonly<{ status: "error"; query: string; message: string }>;
+
+const IDLE_SEARCH_STATE: SearchState = { status: "idle" };
 
 type Feedback = Readonly<{
   tone: "success" | "error";
@@ -101,41 +106,45 @@ export function CollectionSkillEditor({
 }>) {
   const router = useRouter();
   const searchInputRef = useRef<HTMLInputElement>(null);
-  const [owner, setOwner] = useState<OwnedCollection | null>();
+  const ownedCollectionsSnapshot = useSyncExternalStore(
+    subscribeOwnedCollections,
+    readOwnedCollectionsSnapshot,
+    () => null,
+  );
   const [query, setQuery] = useState("");
   const [searchAttempt, setSearchAttempt] = useState(0);
   const [searchState, setSearchState] = useState<SearchState>({ status: "idle" });
   const [savingId, setSavingId] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<Feedback | null>(null);
-  const [memberIds, setMemberIds] = useState<ReadonlySet<string>>(
-    () => new Set(initialSkillIds),
-  );
   const sharePath = `/collections/${collectionSlug}`;
-
-  useEffect(() => {
-    try {
-      setOwner(findOwnedCollection(collectionId, sharePath));
-    } catch {
-      setOwner(null);
-    }
-  }, [collectionId, sharePath]);
-
-  useEffect(() => {
-    setMemberIds(new Set(initialSkillIds));
-  }, [initialSkillIds]);
+  const owner = useMemo<OwnedCollection | null>(() =>
+    decodeOwnedCollections(ownedCollectionsSnapshot).find(
+      (collection) => collection.id === collectionId && collection.sharePath === sharePath,
+    ) ?? null, [collectionId, ownedCollectionsSnapshot, sharePath]);
+  const memberSource = initialSkillIds.join("\0");
+  const initialMemberIds = useMemo<ReadonlySet<string>>(
+    () => new Set(initialSkillIds),
+    [initialSkillIds],
+  );
+  const [memberState, setMemberState] = useState<Readonly<{
+    source: string;
+    ids: ReadonlySet<string>;
+  }>>(() => ({ source: memberSource, ids: initialMemberIds }));
+  const memberIds = memberState.source === memberSource ? memberState.ids : initialMemberIds;
 
   const normalizedQuery = query.trim();
   const collectionIsFull = memberIds.size >= MAX_SELECTED_SKILLS;
+  const visibleSearchState = !owner || normalizedQuery.length < 2 || collectionIsFull ||
+    searchState.status === "idle" || searchState.query !== normalizedQuery
+    ? IDLE_SEARCH_STATE
+    : searchState;
 
   useEffect(() => {
-    if (!owner || normalizedQuery.length < 2 || collectionIsFull) {
-      setSearchState({ status: "idle" });
-      return;
-    }
+    if (!owner || normalizedQuery.length < 2 || collectionIsFull) return;
 
     const controller = new AbortController();
-    setSearchState({ status: "loading" });
     const timeout = window.setTimeout(async () => {
+      setSearchState({ status: "loading", query: normalizedQuery });
       try {
         const params = new URLSearchParams({
           q: normalizedQuery,
@@ -149,11 +158,12 @@ export function CollectionSkillEditor({
         if (!response.ok) {
           throw new Error(apiErrorFrom(payload, "Search is unavailable right now.").message);
         }
-        setSearchState({ status: "ready", skills: searchSkillsFrom(payload) });
+        setSearchState({ status: "ready", query: normalizedQuery, skills: searchSkillsFrom(payload) });
       } catch (error) {
         if (controller.signal.aborted) return;
         setSearchState({
           status: "error",
+          query: normalizedQuery,
           message: error instanceof Error ? error.message : "Search is unavailable right now.",
         });
       }
@@ -169,14 +179,14 @@ export function CollectionSkillEditor({
     if (collectionIsFull) return `This collection has reached its ${MAX_SELECTED_SKILLS}-skill limit.`;
     if (normalizedQuery.length === 0) return "Search the catalog and add a skill here.";
     if (normalizedQuery.length < 2) return "Type one more character to search.";
-    if (searchState.status === "loading") return "Searching…";
-    if (searchState.status === "error") return searchState.message;
-    if (searchState.status === "ready") {
-      if (searchState.skills.length === 0) return "No skills match that search.";
-      return `${searchState.skills.length} ${searchState.skills.length === 1 ? "result" : "results"}`;
+    if (visibleSearchState.status === "loading") return "Searching…";
+    if (visibleSearchState.status === "error") return visibleSearchState.message;
+    if (visibleSearchState.status === "ready") {
+      if (visibleSearchState.skills.length === 0) return "No skills match that search.";
+      return `${visibleSearchState.skills.length} ${visibleSearchState.skills.length === 1 ? "result" : "results"}`;
     }
     return "";
-  }, [collectionIsFull, normalizedQuery.length, searchState]);
+  }, [collectionIsFull, normalizedQuery.length, visibleSearchState]);
 
   function submitSearch(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -212,7 +222,7 @@ export function CollectionSkillEditor({
         throw new Error("The collection was updated, but its new list could not be loaded.");
       }
       const nextIds = new Set(updated.skillIds);
-      setMemberIds(nextIds);
+      setMemberState({ source: memberSource, ids: nextIds });
 
       let savedLocally = true;
       try {
@@ -239,7 +249,7 @@ export function CollectionSkillEditor({
     }
   }
 
-  if (owner === undefined || owner === null) return null;
+  if (owner === null) return null;
 
   return (
     <div className="collection-skill-editor">
@@ -271,7 +281,7 @@ export function CollectionSkillEditor({
           type="search"
           value={query}
         />
-        {searchState.status === "loading" ? (
+        {visibleSearchState.status === "loading" ? (
           <LoaderCircle aria-hidden="true" className="stack-spinner" size={17} />
         ) : query ? (
           <button
@@ -290,7 +300,7 @@ export function CollectionSkillEditor({
 
       <div className="collection-skill-editor__status">
         <p aria-live="polite">{statusText}</p>
-        {searchState.status === "error" ? (
+        {visibleSearchState.status === "error" ? (
           <button onClick={() => setSearchAttempt((attempt) => attempt + 1)} type="button">
             Retry
           </button>
@@ -306,9 +316,9 @@ export function CollectionSkillEditor({
         </p>
       ) : null}
 
-      {searchState.status === "ready" && searchState.skills.length > 0 ? (
+      {visibleSearchState.status === "ready" && visibleSearchState.skills.length > 0 ? (
         <ul className="collection-skill-results" id={`collection-skill-results-${collectionId}`}>
-          {searchState.skills.map((skill) => {
+          {visibleSearchState.skills.map((skill) => {
             const included = memberIds.has(skill.id);
             const saving = savingId === skill.id;
             return (

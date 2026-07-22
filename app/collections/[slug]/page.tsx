@@ -2,6 +2,7 @@ import { ArrowLeft, FolderHeart, GitBranch, Link2 } from "lucide-react";
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { cache } from "react";
 
 import { CollectionActions } from "@/components/marketplace/collection-actions";
 import { CollectionSkillEditor } from "@/components/marketplace/collection-skill-editor";
@@ -14,6 +15,7 @@ import { createPageMetadata, siteRelativePath } from "@/lib/seo";
 type CollectionPageProps = Readonly<{ params: Promise<{ slug: string }> }>;
 
 export const dynamic = "force-dynamic";
+const getPublicCollection = cache(loadPublicCollection);
 
 function sourceName(sourceUrl: string): string {
   try {
@@ -26,7 +28,7 @@ function sourceName(sourceUrl: string): string {
 
 export async function generateMetadata({ params }: CollectionPageProps): Promise<Metadata> {
   const { slug } = await params;
-  const collection = await loadPublicCollection(slug);
+  const collection = await getPublicCollection(slug);
   if (!collection) return {};
   return createPageMetadata({
     title: collection.name,
@@ -37,7 +39,7 @@ export async function generateMetadata({ params }: CollectionPageProps): Promise
 
 export default async function CollectionPage({ params }: CollectionPageProps) {
   const { slug } = await params;
-  const collection = await loadPublicCollection(slug);
+  const collection = await getPublicCollection(slug);
   if (!collection) notFound();
 
   return (

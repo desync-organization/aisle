@@ -421,7 +421,7 @@ license: MIT
       }),
       { perPage: 1, ingestion },
     ).run();
-    const selected = await repository.search();
+    const selected = await repository.search({ includeUnselectable: true });
     const [storedListing] = await connection.db.select().from(sourceListings);
 
     expect(result.status).toBe("current");

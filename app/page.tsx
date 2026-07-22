@@ -7,21 +7,20 @@ import { SkillShelf } from "@/components/marketplace/skill-shelf";
 import { SiteFooter } from "@/components/site-footer";
 import { SiteHeader } from "@/components/site-header";
 import { catalogCategories } from "@/lib/marketplace/categories";
-import { loadMarketplaceCatalog, loadResolvedPackage } from "@/lib/marketplace/catalog";
+import { loadMarketplaceCatalog, loadResolvedPackages } from "@/lib/marketplace/catalog";
 import { launchPackageBlueprints } from "@/lib/packages";
 
-export const dynamic = "force-dynamic";
+export const revalidate = 60;
 
 export default async function HomePage() {
-  const [catalog, packageStates] = await Promise.all([
-    loadMarketplaceCatalog({ limit: 8 }),
-    Promise.all(
-      launchPackageBlueprints.map(async (blueprint) => ({
-        blueprint,
-        state: await loadResolvedPackage(blueprint),
-      })),
-    ),
+  const [catalog, resolvedPackages] = await Promise.all([
+    loadMarketplaceCatalog({ limit: 8, includeFacets: false }),
+    loadResolvedPackages(launchPackageBlueprints),
   ]);
+  const packageStates = launchPackageBlueprints.map((blueprint, index) => ({
+    blueprint,
+    state: resolvedPackages[index]!,
+  }));
   const publishedPackages = packageStates
     .filter(({ state }) => state.binding !== null)
     .map(({ blueprint }) => blueprint);
@@ -91,7 +90,7 @@ export default async function HomePage() {
                 <div className="directory-sidebar__group">
                   <span>Categories</span>
                   {catalogCategories.slice(0, 10).map((category) => (
-                    <Link href={`/categories/${category.slug}`} key={category.slug}>
+                    <Link href={`/categories/${category.slug}`} key={category.slug} prefetch={false}>
                       <CategoryIcon size={14} token={category.iconToken} />
                       {category.shortName}
                     </Link>

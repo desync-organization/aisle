@@ -21,10 +21,14 @@ export const metadata: Metadata = createPageMetadata({
   path: "/categories",
 });
 
-export const dynamic = "force-dynamic";
+export const revalidate = 60;
 
 export default async function CategoriesPage() {
-  const catalog = await loadMarketplaceCatalog({ limit: 1 });
+  const catalog = await loadMarketplaceCatalog({
+    limit: 1,
+    includeSkills: false,
+    includeCoverage: false,
+  });
   const liveCounts = new Map(catalog.categories.map((facet) => [facet.key, facet.count]));
 
   return (
@@ -68,13 +72,13 @@ export default async function CategoriesPage() {
                       <span>{String(index + 1).padStart(2, "0")}</span>
                       <span className="category-card__icon"><CategoryIcon token={category.iconToken} /></span>
                     </div>
-                    <h2><Link href={`/categories/${category.slug}`}>{category.name}</Link></h2>
+                    <h2><Link href={`/categories/${category.slug}`} prefetch={false}>{category.name}</Link></h2>
                     <p>{category.description}</p>
                     <dl>
                       <div><dt>Skills</dt><dd>{liveCount ?? "—"}</dd></div>
                       <div><dt>Package skills</dt><dd>{curatedReferences || "—"}</dd></div>
                     </dl>
-                    <Link className="category-card__link" href={`/categories/${category.slug}`}>
+                    <Link className="category-card__link" href={`/categories/${category.slug}`} prefetch={false}>
                       View category <ArrowUpRight aria-hidden="true" size={15} />
                     </Link>
                   </article>

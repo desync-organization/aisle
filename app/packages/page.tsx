@@ -7,7 +7,7 @@ import { PackageGrid } from "@/components/marketplace/package-grid";
 import { SiteFooter } from "@/components/site-footer";
 import { SiteHeader } from "@/components/site-header";
 import { Badge } from "@/components/ui/badge";
-import { loadResolvedPackage } from "@/lib/marketplace/catalog";
+import { loadResolvedPackages } from "@/lib/marketplace/catalog";
 import { launchPackageBlueprints } from "@/lib/packages";
 import { createPageMetadata } from "@/lib/seo";
 
@@ -17,15 +17,14 @@ export const metadata: Metadata = createPageMetadata({
   path: "/packages",
 });
 
-export const dynamic = "force-dynamic";
+export const revalidate = 300;
 
 export default async function PackagesPage() {
-  const packageStates = await Promise.all(
-    launchPackageBlueprints.map(async (blueprint) => ({
-      blueprint,
-      state: await loadResolvedPackage(blueprint),
-    })),
-  );
+  const resolvedPackages = await loadResolvedPackages(launchPackageBlueprints);
+  const packageStates = launchPackageBlueprints.map((blueprint, index) => ({
+    blueprint,
+    state: resolvedPackages[index]!,
+  }));
   const publishedPackages = packageStates
     .filter(({ state }) => state.binding !== null)
     .map(({ blueprint }) => blueprint);

@@ -1,6 +1,7 @@
 import { MAX_SELECTED_SKILLS } from "@/lib/selection/contracts";
 
 export const COLLECTION_OWNERS_STORAGE_KEY = "aisle.collection-owners.v1";
+const ownershipListeners = new Set<() => void>();
 
 export type OwnedCollection = Readonly<{
   id: string;
@@ -56,6 +57,26 @@ export function readOwnedCollections(): OwnedCollection[] {
   return decodeOwnedCollections(window.localStorage.getItem(COLLECTION_OWNERS_STORAGE_KEY));
 }
 
+export function readOwnedCollectionsSnapshot(): string | null {
+  try {
+    return window.localStorage.getItem(COLLECTION_OWNERS_STORAGE_KEY);
+  } catch {
+    return null;
+  }
+}
+
+export function subscribeOwnedCollections(listener: () => void): () => void {
+  ownershipListeners.add(listener);
+  const handleStorage = (event: StorageEvent) => {
+    if (event.key === COLLECTION_OWNERS_STORAGE_KEY) listener();
+  };
+  window.addEventListener("storage", handleStorage);
+  return () => {
+    ownershipListeners.delete(listener);
+    window.removeEventListener("storage", handleStorage);
+  };
+}
+
 export function findOwnedCollection(id: string, sharePath: string): OwnedCollection | null {
   return readOwnedCollections().find(
     (collection) => collection.id === id && collection.sharePath === sharePath,
@@ -66,5 +87,6 @@ export function saveOwnedCollection(collection: OwnedCollection): OwnedCollectio
   const current = readOwnedCollections();
   const next = [collection, ...current.filter((item) => item.id !== collection.id)];
   window.localStorage.setItem(COLLECTION_OWNERS_STORAGE_KEY, JSON.stringify(next));
+  ownershipListeners.forEach((listener) => listener());
   return next;
 }

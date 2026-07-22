@@ -17,7 +17,7 @@ export const metadata: Metadata = createPageMetadata({
   path: "/skills",
 });
 
-export const dynamic = "force-dynamic";
+export const revalidate = 60;
 
 type SkillsPageProps = Readonly<{
   searchParams: Promise<Record<string, string | string[] | undefined>>;
@@ -77,7 +77,7 @@ export default async function SkillsPage({ searchParams }: SkillsPageProps) {
           </div>
 
           <nav aria-label="Filter skills by category" className="category-filter-rail">
-            <Link aria-current={!category ? "page" : undefined} href="/skills">All skills</Link>
+            <Link aria-current={!category ? "page" : undefined} href="/skills" prefetch={false}>All skills</Link>
             {catalogCategories.map((item) => {
               const count = facetCounts.get(item.slug);
               return (
@@ -85,6 +85,7 @@ export default async function SkillsPage({ searchParams }: SkillsPageProps) {
                   aria-current={category?.slug === item.slug ? "page" : undefined}
                   href={`/skills?category=${item.slug}`}
                   key={item.slug}
+                  prefetch={false}
                 >
                   {item.shortName}{count === undefined ? null : <span>{count}</span>}
                 </Link>

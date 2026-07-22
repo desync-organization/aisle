@@ -64,6 +64,10 @@ export type EligiblePackageMember = Readonly<{
   trustState: "pass" | "warn";
 }>;
 
+export type PackageMemberEligibilityResult =
+  | Readonly<{ ok: true; member: EligiblePackageMember }>
+  | Readonly<{ ok: false; error: PackageMemberEligibilityError }>;
+
 type PersistedLicenseEvidence = Readonly<{
   path: string;
   sha256: string;
@@ -180,41 +184,62 @@ function licenseEvidenceMatches(
   );
 }
 
-export async function resolveEligiblePackageMember(
+export async function resolveEligiblePackageMembers(
   transaction: CatalogTransaction,
-  input: PackageMemberEligibilityBinding,
-): Promise<EligiblePackageMember> {
-  const repositoryUrl = normalizeSourceUrl(input.repositoryUrl);
-  const repositoryCoordinates = new URL(repositoryUrl).pathname.split("/").filter(Boolean);
-  if (repositoryCoordinates.length !== 2 || new URL(repositoryUrl).hostname !== "github.com") {
-    fail("PROVENANCE_MISMATCH", "Package repository evidence is not one canonical public GitHub origin.");
-  }
-  const [expectedOwner, expectedRepository] = repositoryCoordinates as [string, string];
-  const skillPath = normalizeSkillPath(input.skillPath);
-  if (
-    !/^[a-f0-9]{40}$/.test(input.observedHead) ||
-    !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(input.upstreamSkillName) ||
-    !packageAdmissibleLicenses.has(input.observedLicense)
-  ) {
-    fail("REVISION_MISMATCH", "Package member identity or observed head is malformed.");
+  inputs: readonly PackageMemberEligibilityBinding[],
+): Promise<PackageMemberEligibilityResult[]> {
+  const prepared = inputs.map((input) => {
+    try {
+      const repositoryUrl = normalizeSourceUrl(input.repositoryUrl);
+      const url = new URL(repositoryUrl);
+      const repositoryCoordinates = url.pathname.split("/").filter(Boolean);
+      if (repositoryCoordinates.length !== 2 || url.hostname !== "github.com") {
+        fail("PROVENANCE_MISMATCH", "Package repository evidence is not one canonical public GitHub origin.");
+      }
+      const [expectedOwner, expectedRepository] = repositoryCoordinates as [string, string];
+      const skillPath = normalizeSkillPath(input.skillPath);
+      if (
+        !/^[a-f0-9]{40}$/.test(input.observedHead) ||
+        !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(input.upstreamSkillName) ||
+        !packageAdmissibleLicenses.has(input.observedLicense)
+      ) {
+        fail("REVISION_MISMATCH", "Package member identity or observed head is malformed.");
+      }
+      return {
+        ok: true as const,
+        input,
+        repositoryUrl,
+        skillPath,
+        expectedOwner,
+        expectedRepository,
+      };
+    } catch (error) {
+      return {
+        ok: false as const,
+        error: error instanceof PackageMemberEligibilityError
+          ? error
+          : new PackageMemberEligibilityError(
+              "PROVENANCE_MISMATCH",
+              "Package repository evidence is not one canonical public GitHub origin.",
+            ),
+      };
+    }
+  });
+  const valid = prepared.filter((entry): entry is Extract<typeof entry, { ok: true }> => entry.ok);
+  if (valid.length === 0) {
+    return prepared.map((entry) => ({
+      ok: false as const,
+      error: entry.ok
+        ? new PackageMemberEligibilityError("MEMBER_NOT_FOUND", "The package member did not resolve.")
+        : entry.error,
+    }));
   }
 
-  const identityConditions = [
-    eq(repositories.provider, "github"),
-    eq(repositories.normalizedUrl, repositoryUrl),
-    eq(repositories.visibility, "public"),
-    eq(skills.provider, "github"),
-    eq(skills.sourceUrl, repositoryUrl),
-    eq(skills.skillPath, skillPath),
-    eq(skills.upstreamName, input.upstreamSkillName),
-    eq(skillRevisions.isCurrent, true),
-  ];
-  if (input.skillId) identityConditions.push(eq(skills.id, input.skillId));
-  if (input.revisionId) identityConditions.push(eq(skillRevisions.id, input.revisionId));
   const candidates = await transaction
     .select({
       repositoryOwner: repositories.owner,
       repositoryName: repositories.name,
+      repositoryUrl: repositories.normalizedUrl,
       repositoryVisibility: repositories.visibility,
       repositoryDefaultBranch: repositories.defaultBranch,
       skillId: skills.id,
@@ -238,158 +263,209 @@ export async function resolveEligiblePackageMember(
     .from(repositories)
     .innerJoin(skills, eq(skills.repositoryId, repositories.id))
     .innerJoin(skillRevisions, eq(skillRevisions.skillId, skills.id))
-    .where(and(...identityConditions))
-    .limit(2);
-  if (candidates.length !== 1) {
-    fail(
-      "MEMBER_NOT_FOUND",
-      "The exact public repository, SKILL.md path, name, skill, and revision did not resolve uniquely.",
+    .where(
+      and(
+        eq(repositories.provider, "github"),
+        eq(repositories.visibility, "public"),
+        inArray(repositories.normalizedUrl, [...new Set(valid.map((entry) => entry.repositoryUrl))]),
+        eq(skills.provider, "github"),
+        inArray(skills.sourceUrl, [...new Set(valid.map((entry) => entry.repositoryUrl))]),
+        inArray(skills.skillPath, [...new Set(valid.map((entry) => entry.skillPath))]),
+        inArray(skills.upstreamName, [...new Set(valid.map((entry) => entry.input.upstreamSkillName))]),
+        eq(skillRevisions.isCurrent, true),
+      ),
     );
-  }
-  const candidate = candidates[0]!;
-  if (
-    candidate.repositoryOwner?.toLowerCase() !== expectedOwner ||
-    candidate.repositoryName?.toLowerCase() !== expectedRepository ||
-    candidate.repositoryVisibility !== "public" ||
-    candidate.public !== true ||
-    candidate.internal !== false ||
-    candidate.lifecycle !== "current" ||
-    candidate.isCurrent !== true
-  ) {
-    fail(
-      "PROVENANCE_MISMATCH",
-      "The catalog member no longer has the required public current repository provenance.",
-    );
-  }
-  if (
-    candidate.immutableRef !== input.observedHead ||
-    candidate.upstreamHash !== input.observedHead ||
-    !/^[a-f0-9]{64}$/.test(candidate.contentHash) ||
-    !hasCompleteInventory(candidate.metadata, candidate.contentHash)
-  ) {
-    fail(
-      "REVISION_MISMATCH",
-      "The current revision is not bound to the expected head and complete artifact inventory.",
-    );
-  }
-  const installSpec = installSpecSchema.safeParse(candidate.installSpec);
-  if (
-    !installSpec.success ||
-    installSpec.data.kind !== "source" ||
-    normalizeSourceUrl(installSpec.data.sourceUrl) !== repositoryUrl ||
-    normalizeSkillPath(installSpec.data.skillPath) !== skillPath ||
-    installSpec.data.immutableRef !== input.observedHead
-  ) {
-    fail(
-      "REVISION_MISMATCH",
-      "Immutable install evidence does not match the repository, path, and observed head.",
-    );
-  }
 
-  const activeListings = await transaction
-    .select({ id: sourceListings.id })
+  const candidateSkillIds = [...new Set(candidates.map((candidate) => candidate.skillId))];
+  const candidateRevisionIds = [...new Set(candidates.map((candidate) => candidate.revisionId))];
+  const activeListings = candidateSkillIds.length === 0 ? [] : await transaction
+    .select({ skillId: sourceListings.skillId, sourceHash: sourceListings.sourceHash })
     .from(sourceListings)
     .innerJoin(catalogSources, eq(catalogSources.id, sourceListings.sourceId))
     .where(
       and(
-        eq(sourceListings.skillId, candidate.skillId),
+        inArray(sourceListings.skillId, candidateSkillIds),
         inArray(sourceListings.status, ["current", "stale"]),
-        eq(sourceListings.sourceHash, input.observedHead),
         eq(catalogSources.enabled, true),
         eq(catalogSources.coverageState, packageAdmissibleCoverageStates[0]),
         hasCertifiedSourceObservation(),
       ),
-    )
-    .limit(1);
-  if (activeListings.length !== 1) {
-    fail(
-      "PROVENANCE_MISMATCH",
-      "No current enabled admissible source observation remains bound to the revision.",
     );
-  }
 
-  const assessments = await transaction
+  const assessments = candidateRevisionIds.length === 0 ? [] : await transaction
     .select({
+      revisionId: trustAssessments.revisionId,
       state: trustAssessments.state,
       immutableRef: trustAssessments.immutableRef,
       contentHash: trustAssessments.contentHash,
     })
     .from(trustAssessments)
-    .where(eq(trustAssessments.revisionId, candidate.revisionId));
-  const boundAssessments = assessments.filter(
-    (assessment) =>
-      assessment.immutableRef === candidate.immutableRef &&
-      assessment.contentHash === candidate.contentHash,
-  );
-  if (
-    !boundAssessments.some((assessment) => ["pass", "warn"].includes(assessment.state)) ||
-    boundAssessments.some((assessment) => ["fail", "quarantined"].includes(assessment.state))
-  ) {
-    fail("TRUST_NOT_ELIGIBLE", "The exact revision lacks selectable revision-bound trust evidence.");
-  }
-  const observations = await transaction
+    .where(inArray(trustAssessments.revisionId, candidateRevisionIds));
+  const observations = candidateSkillIds.length === 0 ? [] : await transaction
     .select({
       id: auditRecords.id,
+      skillId: sourceListings.skillId,
       provider: auditRecords.provider,
       providerSlug: auditRecords.providerSlug,
       status: auditRecords.status,
+      upstreamContentHash: auditRecords.upstreamContentHash,
       observedAt: auditRecords.observedAt,
     })
     .from(auditRecords)
     .innerJoin(sourceListings, eq(sourceListings.id, auditRecords.sourceListingId))
     .where(
       and(
-        eq(sourceListings.skillId, candidate.skillId),
+        inArray(sourceListings.skillId, candidateSkillIds),
         eq(auditRecords.scope, "observation"),
-        eq(auditRecords.upstreamContentHash, input.observedHead),
       ),
     )
     .orderBy(desc(auditRecords.observedAt), desc(auditRecords.id));
-  const latestKeys = new Set<string>();
-  for (const observation of observations) {
-    const key = `${observation.provider}\0${observation.providerSlug ?? ""}`;
-    if (latestKeys.has(key)) continue;
-    latestKeys.add(key);
-    if (observation.status === "fail") {
-      fail("TRUST_NOT_ELIGIBLE", "The latest upstream observation for the exact revision failed.");
-    }
-  }
 
-  const evidence = readLicenseEvidence(candidate.metadata);
-  if (
-    candidate.license !== input.observedLicense ||
-    !evidence ||
-    !licenseEvidenceMatches(input, evidence, repositoryUrl, skillPath)
-  ) {
-    fail(
-      "LICENSE_EVIDENCE_MISMATCH",
-      "Verified revision-bound license evidence no longer matches the package binding.",
+  return prepared.map((entry): PackageMemberEligibilityResult => {
+    if (!entry.ok) return entry;
+    const { input, repositoryUrl, skillPath, expectedOwner, expectedRepository } = entry;
+    try {
+      const matchingCandidates = candidates.filter((candidate) =>
+        candidate.repositoryUrl === repositoryUrl &&
+        candidate.sourceUrl === repositoryUrl &&
+        candidate.skillPath === skillPath &&
+        candidate.name === input.upstreamSkillName &&
+        (!input.skillId || candidate.skillId === input.skillId) &&
+        (!input.revisionId || candidate.revisionId === input.revisionId));
+      if (matchingCandidates.length !== 1) {
+        fail(
+          "MEMBER_NOT_FOUND",
+          "The exact public repository, SKILL.md path, name, skill, and revision did not resolve uniquely.",
+        );
+      }
+      const candidate = matchingCandidates[0]!;
+      if (
+        candidate.repositoryOwner?.toLowerCase() !== expectedOwner ||
+        candidate.repositoryName?.toLowerCase() !== expectedRepository ||
+        candidate.repositoryVisibility !== "public" ||
+        candidate.public !== true ||
+        candidate.internal !== false ||
+        candidate.lifecycle !== "current" ||
+        candidate.isCurrent !== true
+      ) {
+        fail(
+          "PROVENANCE_MISMATCH",
+          "The catalog member no longer has the required public current repository provenance.",
+        );
+      }
+      if (
+        candidate.immutableRef !== input.observedHead ||
+        candidate.upstreamHash !== input.observedHead ||
+        !/^[a-f0-9]{64}$/.test(candidate.contentHash) ||
+        !hasCompleteInventory(candidate.metadata, candidate.contentHash)
+      ) {
+        fail(
+          "REVISION_MISMATCH",
+          "The current revision is not bound to the expected head and complete artifact inventory.",
+        );
+      }
+      const installSpec = installSpecSchema.safeParse(candidate.installSpec);
+      if (
+        !installSpec.success ||
+        installSpec.data.kind !== "source" ||
+        normalizeSourceUrl(installSpec.data.sourceUrl) !== repositoryUrl ||
+        normalizeSkillPath(installSpec.data.skillPath) !== skillPath ||
+        installSpec.data.immutableRef !== input.observedHead
+      ) {
+        fail(
+          "REVISION_MISMATCH",
+          "Immutable install evidence does not match the repository, path, and observed head.",
+        );
+      }
+      if (!activeListings.some((listing) =>
+        listing.skillId === candidate.skillId && listing.sourceHash === input.observedHead)) {
+        fail(
+          "PROVENANCE_MISMATCH",
+          "No current enabled admissible source observation remains bound to the revision.",
+        );
+      }
+      const boundAssessments = assessments.filter(
+        (assessment) =>
+          assessment.revisionId === candidate.revisionId &&
+          assessment.immutableRef === candidate.immutableRef &&
+          assessment.contentHash === candidate.contentHash,
+      );
+      if (
+        !boundAssessments.some((assessment) => ["pass", "warn"].includes(assessment.state)) ||
+        boundAssessments.some((assessment) => ["fail", "quarantined"].includes(assessment.state))
+      ) {
+        fail("TRUST_NOT_ELIGIBLE", "The exact revision lacks selectable revision-bound trust evidence.");
+      }
+      const latestKeys = new Set<string>();
+      for (const observation of observations) {
+        if (
+          observation.skillId !== candidate.skillId ||
+          observation.upstreamContentHash !== input.observedHead
+        ) continue;
+        const key = `${observation.provider}\0${observation.providerSlug ?? ""}`;
+        if (latestKeys.has(key)) continue;
+        latestKeys.add(key);
+        if (observation.status === "fail") {
+          fail("TRUST_NOT_ELIGIBLE", "The latest upstream observation for the exact revision failed.");
+        }
+      }
+      const evidence = readLicenseEvidence(candidate.metadata);
+      if (
+        candidate.license !== input.observedLicense ||
+        !evidence ||
+        !licenseEvidenceMatches(input, evidence, repositoryUrl, skillPath)
+      ) {
+        fail(
+          "LICENSE_EVIDENCE_MISMATCH",
+          "Verified revision-bound license evidence no longer matches the package binding.",
+        );
+      }
+      if (input.publisherClass === "official" && candidate.officialProvenance !== true) {
+        fail(
+          "PROVENANCE_MISMATCH",
+          "An official package member requires catalog-verified publisher provenance.",
+        );
+      }
+      return {
+        ok: true,
+        member: {
+          skillId: candidate.skillId,
+          revisionId: candidate.revisionId,
+          name: candidate.name,
+          description: candidate.description,
+          sourceUrl: candidate.sourceUrl,
+          skillPath: candidate.skillPath,
+          immutableRef: candidate.immutableRef,
+          contentHash: candidate.contentHash,
+          installSpec: installSpec.data,
+          license: candidate.license,
+          revisionMetadata: candidate.metadata,
+          officialProvenance: candidate.officialProvenance,
+          repositoryOwner: candidate.repositoryOwner!,
+          repositoryName: candidate.repositoryName!,
+          repositoryDefaultBranch: candidate.repositoryDefaultBranch,
+          trustState: boundAssessments.some((assessment) => assessment.state === "warn")
+            ? "warn"
+            : "pass",
+        },
+      };
+    } catch (error) {
+      if (error instanceof PackageMemberEligibilityError) return { ok: false, error };
+      throw error;
+    }
+  });
+}
+
+export async function resolveEligiblePackageMember(
+  transaction: CatalogTransaction,
+  input: PackageMemberEligibilityBinding,
+): Promise<EligiblePackageMember> {
+  const [result] = await resolveEligiblePackageMembers(transaction, [input]);
+  if (!result || !result.ok) {
+    throw result?.error ?? new PackageMemberEligibilityError(
+      "MEMBER_NOT_FOUND",
+      "The package member did not resolve.",
     );
   }
-  if (input.publisherClass === "official" && candidate.officialProvenance !== true) {
-    fail(
-      "PROVENANCE_MISMATCH",
-      "An official package member requires catalog-verified publisher provenance.",
-    );
-  }
-  return {
-    skillId: candidate.skillId,
-    revisionId: candidate.revisionId,
-    name: candidate.name,
-    description: candidate.description,
-    sourceUrl: candidate.sourceUrl,
-    skillPath: candidate.skillPath,
-    immutableRef: candidate.immutableRef,
-    contentHash: candidate.contentHash,
-    installSpec: installSpec.data,
-    license: candidate.license,
-    revisionMetadata: candidate.metadata,
-    officialProvenance: candidate.officialProvenance,
-    repositoryOwner: candidate.repositoryOwner!,
-    repositoryName: candidate.repositoryName!,
-    repositoryDefaultBranch: candidate.repositoryDefaultBranch,
-    trustState: boundAssessments.some((assessment) => assessment.state === "warn")
-      ? "warn"
-      : "pass",
-  };
+  return result.member;
 }

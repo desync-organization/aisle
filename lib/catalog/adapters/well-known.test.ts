@@ -96,7 +96,7 @@ describe("WellKnownSkillsAdapter", () => {
         validateRecord: createAgentSkillValidator(),
       }).syncConnector(adapter);
       expect(result.status).toBe("current");
-      expect(await repository.search()).toEqual([
+      expect(await repository.search({ includeUnselectable: true })).toEqual([
         expect.objectContaining({ name: "fixture-safe", trustState: "pass" }),
       ]);
     } finally {
