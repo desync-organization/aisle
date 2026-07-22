@@ -482,10 +482,61 @@ export const packageMemberQuarantines = sqliteTable(
   (table) => [index("package_member_quarantines_version_idx").on(table.packageVersionId)],
 );
 
+export const collectionOwnerKinds = ["anonymous", "account"] as const;
+
+/**
+ * User-curated skill collections are intentionally separate from editorial
+ * packages. Anonymous ownership uses a hashed bearer token today; account
+ * ownership can replace that token without changing public collection URLs.
+ */
+export const collections = sqliteTable(
+  "collections",
+  {
+    id: text("id").primaryKey(),
+    slug: text("slug").notNull(),
+    name: text("name").notNull(),
+    ownerKind: text("owner_kind", { enum: collectionOwnerKinds })
+      .notNull()
+      .default("anonymous"),
+    ownerAccountId: text("owner_account_id"),
+    ownerTokenHash: text("owner_token_hash"),
+    public: integer("public", { mode: "boolean" }).notNull().default(true),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex("collections_slug_uidx").on(table.slug),
+    index("collections_public_updated_idx").on(table.public, table.updatedAt),
+    index("collections_owner_account_idx").on(table.ownerAccountId),
+  ],
+);
+
+export const collectionMembers = sqliteTable(
+  "collection_members",
+  {
+    collectionId: text("collection_id")
+      .notNull()
+      .references(() => collections.id, { onDelete: "cascade" }),
+    skillId: text("skill_id")
+      .notNull()
+      .references(() => skills.id, { onDelete: "restrict" }),
+    position: integer("position").notNull(),
+    addedAt: integer("added_at", { mode: "timestamp_ms" })
+      .notNull()
+      .$defaultFn(() => new Date()),
+  },
+  (table) => [
+    primaryKey({ columns: [table.collectionId, table.skillId] }),
+    uniqueIndex("collection_members_position_uidx").on(table.collectionId, table.position),
+    index("collection_members_skill_idx").on(table.skillId),
+  ],
+);
+
 export const schema = {
   auditRecords,
   catalogSources,
   categories,
+  collectionMembers,
+  collections,
   packageMembers,
   packageMemberQuarantines,
   packages,
