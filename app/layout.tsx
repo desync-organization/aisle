@@ -6,6 +6,7 @@ import "@fontsource-variable/jetbrains-mono";
 import "./globals.css";
 import "./marketplace.css";
 import "./monochrome.css";
+import "./visibility.css";
 
 import { SelectionProvider } from "@/lib/selection/react";
 import { siteDescription, siteOrigin, siteSocialImage } from "@/lib/seo";
