@@ -18,7 +18,7 @@ import { createPageMetadata } from "@/lib/seo";
 
 export const metadata: Metadata = createPageMetadata({
   title: "Privacy and data use",
-  description: "What Aisle handles in the browser, from public sources, and through external tools.",
+  description: "What Aisle stores in your browser, in shared collections, and through external services.",
   path: "/privacy",
 });
 
@@ -57,10 +57,10 @@ export default function PrivacyPage() {
       <main className="editorial-page shell">
         <header className="editorial-hero">
           <div className="editorial-hero__copy">
-            <Badge tone="iris">Privacy · Plain language</Badge>
-            <h1>Public discovery without a profile attached.</h1>
+            <Badge tone="iris">Privacy</Badge>
+            <h1>What Aisle stores.</h1>
             <p>
-              Aisle is designed so browsing public skills does not require an account. This notice separates data handled by the site, public source metadata, local browser state, and third-party tools.
+              You can browse without an account. Here’s what stays in your browser, what is saved when you share a collection, and what other services may receive.
             </p>
             <div className="editorial-hero__actions">
               <ButtonLink href="#current-state">
@@ -73,9 +73,9 @@ export default function PrivacyPage() {
           </div>
           <aside className="editorial-hero__note" aria-label="Current privacy summary">
             <span>CURRENT APP</span>
-            <strong>No accounts, ads, or payment collection.</strong>
+            <strong>No sign-in, ads, or payments.</strong>
             <p>
-              The application code in this release does not include ad tracking, account registration, profile forms, or payment flows.
+              The Profile page is local to this browser. This release has no account registration, ad tracking, or payment flow.
             </p>
           </aside>
         </header>
@@ -83,10 +83,10 @@ export default function PrivacyPage() {
         <section className="privacy-current" id="current-state">
           <ShieldCheck aria-hidden="true" size={23} />
           <div>
-            <span className="eyebrow">Current transparency release</span>
+            <span className="eyebrow">Current behavior</span>
             <h2>Selections stay local unless you explicitly publish a collection.</h2>
             <p>
-              A configured deployment can serve synchronized public catalog metadata. Preflight and command requests send selected opaque catalog IDs, install-target choices, and revision-bound warning acknowledgements for current eligibility checks. Creating a collection stores its public name and skill references in Aisle’s database; anonymous ownership remains on the creator’s device. This release does not save install history and includes no account, analytics, advertising, or payment flow.
+              Building a command sends the selected skill IDs and install choices to Aisle for a final check. Creating a collection saves its name and skill list in Aisle’s database, while ownership stays in this browser. Aisle does not save install history, and this release has no accounts, analytics, ads, or payments.
             </p>
           </div>
           <time dateTime="2026-07-22">Reviewed 22 Jul 2026</time>
@@ -96,7 +96,7 @@ export default function PrivacyPage() {
           <div className="docs-section__heading">
             <span>01 / DATA MAP</span>
             <div>
-              <h2>Five boundaries worth keeping distinct.</h2>
+              <h2>Data Aisle uses.</h2>
               <p>
                 “Public data” describes where catalog material came from; it does not describe every request needed to deliver a website or every third-party tool a user may choose to run.
               </p>
@@ -141,7 +141,7 @@ export default function PrivacyPage() {
           <div className="docs-section__heading">
             <span>03 / THIRD PARTIES</span>
             <div>
-              <h2>Aisle cannot rewrite another service’s policy.</h2>
+              <h2>Other services have their own policies.</h2>
               <p>
                 For example, Vercel’s public <code>skills</code> CLI documentation describes anonymous telemetry and an opt-out environment variable. That tool’s collection is separate from Aisle’s website.
               </p>
@@ -152,15 +152,15 @@ export default function PrivacyPage() {
               Vercel skills CLI privacy note <ExternalLink aria-hidden="true" size={15} />
               <span className="sr-only"> (opens in a new tab)</span>
             </a>
-            <a href="https://github.com/Krishang-Zinzuwadia/aisle/issues" rel="noreferrer" target="_blank">
+            <a href="https://github.com/desync-organization/aisle/issues" rel="noreferrer" target="_blank">
               Request a correction or removal <ExternalLink aria-hidden="true" size={15} />
               <span className="sr-only"> (opens in a new tab)</span>
             </a>
           </div>
           <aside className="privacy-change-note">
-            <strong>Material changes should be visible before collection begins.</strong>
+            <strong>We’ll update this page before adding new data collection.</strong>
             <p>
-              If Aisle adds analytics, accounts, cloud-saved stacks, newsletters, or payments, this notice should name the provider, purpose, retention, controls, and effective date before activation.
+              If Aisle adds accounts, analytics, email, or payments, this page will explain what changes before those features go live.
             </p>
           </aside>
           <ButtonLink href="/safety" variant="secondary">

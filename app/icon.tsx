@@ -15,14 +15,14 @@ export default function Icon() {
           justifyContent: "center",
           gap: 6,
           padding: 13,
-          border: "2px solid #5b38da",
+          border: "2px solid #484848",
           borderRadius: 18,
-          background: "linear-gradient(145deg, #1b1530, #09080e)",
+          background: "linear-gradient(145deg, #181818, #080808)",
         }}
       >
-        <span style={{ width: 7, height: 22, borderRadius: 8, background: "#8b69ff" }} />
-        <span style={{ width: 7, height: 38, borderRadius: 8, background: "#b7a4ff" }} />
-        <span style={{ width: 7, height: 27, borderRadius: 8, background: "#8b69ff" }} />
+        <span style={{ width: 7, height: 22, borderRadius: 8, background: "#c9c8c2" }} />
+        <span style={{ width: 7, height: 38, borderRadius: 8, background: "#eeede7" }} />
+        <span style={{ width: 7, height: 27, borderRadius: 8, background: "#c9c8c2" }} />
       </div>
     ),
     size,

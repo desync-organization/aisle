@@ -7,13 +7,14 @@ export function SiteFooter() {
       <div className="shell site-footer__inner">
         <div>
           <Link className="site-footer__brand" href="/">
-            Aisle<span>®</span>
+            Aisle
           </Link>
-          <p>Public skills. Clear provenance. One composed stack.</p>
+          <p>Find public agent skills and install them together.</p>
         </div>
         <div className="site-footer__links">
           <Link href="/skills">Skills</Link>
           <Link href="/packages">Packages</Link>
+          <Link href="/profile">Profile</Link>
           <Link href="/docs">Documentation</Link>
           <Link href="/safety">Safety</Link>
           <Link href="/coverage">Coverage</Link>
@@ -27,7 +28,7 @@ export function SiteFooter() {
           </a>
         </div>
         <p className="site-footer__note">
-          Aisle indexes public upstream work; it does not author or guarantee third-party skills.
+          Aisle links to third-party skills. Review each source before installing.
         </p>
       </div>
     </footer>

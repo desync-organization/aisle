@@ -1,6 +1,6 @@
-# User collections
+# Profile collections
 
-Collections are user-curated, public sets of existing catalog skills. They are separate from Aisle editorial packages and never copy or modify upstream skill content.
+Collections are user-curated, public sets of existing catalog skills. The device-local index lives at `/profile`; public share pages remain at `/collections/[slug]`. The `/collections` index redirects to `/profile` for now.
 
 ## Anonymous ownership today
 
@@ -8,7 +8,7 @@ Collections are user-curated, public sets of existing catalog skills. They are s
 - The server verifies that every referenced skill is still public and present before writing anything.
 - A random public slug identifies the share page. It is safe to disclose.
 - A separate random owner token is returned once to the creating browser. Only its SHA-256 hash is stored in the database.
-- The browser keeps the owner token and a small local index of created collections. The database remains the authoritative collection store.
+- The browser keeps the owner token and a local index of every collection created on that device. The database remains the authoritative collection store.
 
 The first release creates immutable public collections. Keeping the owner credential now prevents a future rename, visibility, or deletion endpoint from needing insecure URL-based ownership.
 

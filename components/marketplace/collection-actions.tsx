@@ -43,7 +43,7 @@ export function CollectionActions({
         {state === "copied" ? <Check aria-hidden="true" size={15} /> : <Copy aria-hidden="true" size={15} />}
         {state === "copied" ? "Link copied" : "Copy share link"}
       </Button>
-      {state === "error" ? <p className="collection-actions__error">This action could not be completed. Your stack may already be at its 64-skill limit.</p> : null}
+      {state === "error" ? <p className="collection-actions__error">Couldn’t add these skills. Your stack may already have 64 skills.</p> : null}
       <span aria-live="polite" className="sr-only">
         {state === "added" ? `${collectionName} was added to your stack.` : state === "copied" ? "Collection link copied." : state === "error" ? "The action could not be completed." : ""}
       </span>

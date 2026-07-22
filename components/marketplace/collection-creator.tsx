@@ -9,7 +9,6 @@ import { COLLECTION_NAME_MAX_LENGTH } from "@/lib/collections/contracts";
 import { useSelection } from "@/lib/selection/react";
 
 const COLLECTION_OWNERS_STORAGE_KEY = "aisle.collection-owners.v1";
-const MAX_DEVICE_COLLECTIONS = 24;
 
 type OwnedCollection = Readonly<{
   id: string;
@@ -57,7 +56,7 @@ function decodeOwnedCollections(raw: string | null): OwnedCollection[] {
         ownerToken: candidate.ownerToken,
         createdAt: candidate.createdAt,
       }];
-    }).slice(0, MAX_DEVICE_COLLECTIONS);
+    });
   } catch {
     return [];
   }
@@ -65,8 +64,7 @@ function decodeOwnedCollections(raw: string | null): OwnedCollection[] {
 
 function saveOwnedCollection(collection: OwnedCollection): OwnedCollection[] {
   const current = decodeOwnedCollections(window.localStorage.getItem(COLLECTION_OWNERS_STORAGE_KEY));
-  const next = [collection, ...current.filter((item) => item.id !== collection.id)]
-    .slice(0, MAX_DEVICE_COLLECTIONS);
+  const next = [collection, ...current.filter((item) => item.id !== collection.id)];
   window.localStorage.setItem(COLLECTION_OWNERS_STORAGE_KEY, JSON.stringify(next));
   return next;
 }
@@ -92,7 +90,7 @@ export function CollectionCreator({ compact = false }: { compact?: boolean }) {
   }, []);
 
   const visibleOwnedCollections = useMemo(
-    () => ownedCollections.slice(0, compact ? 3 : 8),
+    () => compact ? ownedCollections.slice(0, 3) : ownedCollections,
     [compact, ownedCollections],
   );
 
@@ -137,7 +135,7 @@ export function CollectionCreator({ compact = false }: { compact?: boolean }) {
         !data.sharePath.startsWith("/collections/") ||
         typeof ownerToken !== "string"
       ) {
-        throw new Error("Aisle returned an incomplete collection receipt.");
+        throw new Error("Aisle couldn’t finish creating this collection.");
       }
 
       const owned: OwnedCollection = {
@@ -182,8 +180,8 @@ export function CollectionCreator({ compact = false }: { compact?: boolean }) {
     <section className={`collection-creator${compact ? " collection-creator--compact" : ""}`}>
       <div className="collection-creator__intro">
         <span><FolderPlus aria-hidden="true" size={18} /> Save and share</span>
-        <h2>Name this collection.</h2>
-        <p>Create a permanent public page for the skills selected on this device. Accounts can take over ownership later without changing the shared link.</p>
+        <h2>Create a collection.</h2>
+        <p>Name your current stack and get a public link to share.</p>
       </div>
 
       <form className="collection-creator__form" onSubmit={submit}>
@@ -206,7 +204,7 @@ export function CollectionCreator({ compact = false }: { compact?: boolean }) {
           {createState.status === "loading"
             ? <LoaderCircle aria-hidden="true" className="stack-spinner" size={16} />
             : <Link2 aria-hidden="true" size={16} />}
-          {createState.status === "loading" ? "Creating collection…" : "Create share link"}
+          {createState.status === "loading" ? "Creating collection…" : "Create collection"}
         </Button>
         {state.hydrated && state.count === 0 ? (
           <p className="collection-creator__empty">Select skills first. <Link href="/skills">Browse the catalog <ArrowRight aria-hidden="true" size={13} /></Link></p>
@@ -216,7 +214,7 @@ export function CollectionCreator({ compact = false }: { compact?: boolean }) {
 
       {createState.status === "success" ? (
         <div className="collection-receipt" aria-live="polite">
-          <span><Check aria-hidden="true" size={16} /> Collection ready</span>
+          <span><Check aria-hidden="true" size={16} /> Ready to share</span>
           <strong>{createState.collection.name}</strong>
           <code>{shareUrl(createState.collection.sharePath)}</code>
           <div>
@@ -231,7 +229,7 @@ export function CollectionCreator({ compact = false }: { compact?: boolean }) {
 
       {visibleOwnedCollections.length > 0 ? (
         <div className="device-collections">
-          <span>Created on this device</span>
+          <span>Your collections</span>
           <ul>
             {visibleOwnedCollections.map((collection) => (
               <li key={collection.id}>
@@ -245,6 +243,11 @@ export function CollectionCreator({ compact = false }: { compact?: boolean }) {
               </li>
             ))}
           </ul>
+        </div>
+      ) : !compact ? (
+        <div className="device-collections device-collections--empty">
+          <span>Your collections</span>
+          <p>No collections yet. Select a few skills, then save them here.</p>
         </div>
       ) : null}
     </section>
