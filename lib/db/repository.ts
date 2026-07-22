@@ -279,14 +279,6 @@ function hasRevisionBoundInstallSpecSql() {
       and json_type(${skillRevisions.installSpecJson}, '$.skillPath') = 'text'
       and length(trim(json_extract(${skillRevisions.installSpecJson}, '$.skillPath'))) > 0
       and json_extract(${skillRevisions.installSpecJson}, '$.skillPath') = ${skills.skillPath}
-    when json_extract(${skillRevisions.installSpecJson}, '$.kind') = 'registry' then
-      json_type(${skillRevisions.installSpecJson}, '$.registry') = 'text'
-      and length(trim(json_extract(${skillRevisions.installSpecJson}, '$.registry'))) > 0
-      and json_type(${skillRevisions.installSpecJson}, '$.identifier') = 'text'
-      and length(trim(json_extract(${skillRevisions.installSpecJson}, '$.identifier'))) > 0
-      and json_type(${skillRevisions.installSpecJson}, '$.version') = 'text'
-      and length(trim(json_extract(${skillRevisions.installSpecJson}, '$.version'))) > 0
-      and json_extract(${skillRevisions.installSpecJson}, '$.version') = ${skillRevisions.immutableRef}
     else 0
   end`;
 }
@@ -312,15 +304,12 @@ function hasRevisionBoundInstallSpec(
   }>,
 ): boolean {
   const parsed = installSpecSchema.safeParse(value);
-  if (!parsed.success || !identity.immutableRef) return false;
-  if (parsed.data.kind === "source") {
-    return (
-      parsed.data.sourceUrl === identity.sourceUrl &&
-      parsed.data.skillPath === identity.skillPath &&
-      parsed.data.immutableRef === identity.immutableRef
-    );
-  }
-  return parsed.data.version === identity.immutableRef;
+  if (!parsed.success || !identity.immutableRef || parsed.data.kind !== "source") return false;
+  return (
+    parsed.data.sourceUrl === identity.sourceUrl &&
+    parsed.data.skillPath === identity.skillPath &&
+    parsed.data.immutableRef === identity.immutableRef
+  );
 }
 
 function hasValidLicenseEvidence(value: unknown): boolean {

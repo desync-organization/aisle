@@ -33,6 +33,10 @@ const gitCommitSchema = z.object({
   tree: z.object({ sha: z.string().min(7).max(64) }),
 });
 
+const branchHeadSchema = z.object({
+  sha: z.string().regex(/^[a-f0-9]{40}$/i),
+});
+
 const treeEntrySchema = z.object({
   path: z.string().min(1).max(4_096),
   mode: z.string().min(1).max(16),
@@ -48,6 +52,8 @@ const treeSchema = z.object({
 });
 
 type TreeEntry = z.infer<typeof treeEntrySchema>;
+
+const MAX_REPOSITORY_LICENSE_BYTES = 262_144;
 
 interface SkillMdCatalogClient {
   listSkills(options: { limit: number; offset: number }): ReturnType<SkillMdClient["listSkills"]>;
@@ -73,6 +79,11 @@ interface GitHubCoordinates {
 interface GitHubSnapshot {
   repository: z.infer<typeof repositorySchema>;
   tree: z.infer<typeof treeSchema>;
+  observedBranchHead: {
+    branch: string;
+    headSha: string;
+  };
+  repositoryLicenseEvidence: DiscoveredSkillRecord["repositoryLicenseEvidence"];
 }
 
 function boundedProviderText(value: string, maximumLength: number): string {
@@ -444,7 +455,9 @@ export class SkillMdAdapter implements CatalogSourceConnector {
         name: snapshot.repository.name,
         visibility: "public",
         defaultBranch: snapshot.repository.default_branch,
+        observedBranchHead: snapshot.observedBranchHead,
       },
+      repositoryLicenseEvidence: snapshot.repositoryLicenseEvidence,
       artifact: manifest
         ? {
             type: "skill-md",
@@ -535,6 +548,15 @@ export class SkillMdAdapter implements CatalogSourceConnector {
     ) {
       throw new Error("GitHub repository identity did not match SkillMD provenance");
     }
+    const branchHead = branchHeadSchema.parse(
+      await this.githubJson(
+        `/repos/${coordinates.owner}/${coordinates.repository}/commits/${encodeURIComponent(repository.default_branch)}`,
+      ),
+    );
+    const observedHeadSha = branchHead.sha.toLowerCase();
+    if (observedHeadSha !== commit.toLowerCase()) {
+      throw new Error("SkillMD nominated commit is not the current public default-branch head");
+    }
     const gitCommit = gitCommitSchema.parse(
       await this.githubJson(
         `/repos/${coordinates.owner}/${coordinates.repository}/git/commits/${commit}`,
@@ -549,24 +571,95 @@ export class SkillMdAdapter implements CatalogSourceConnector {
       ),
     );
     if (tree.truncated) throw new Error("GitHub source tree was truncated");
-    return { repository, tree };
+    const repositoryLicenseEvidence = await this.loadRepositoryLicenseEvidence(
+      tree.tree,
+      observedHeadSha,
+      coordinates.sourceUrl,
+      coordinates,
+    );
+    return {
+      repository,
+      tree,
+      observedBranchHead: {
+        branch: repository.default_branch,
+        headSha: observedHeadSha,
+      },
+      repositoryLicenseEvidence,
+    };
+  }
+
+  private async loadRepositoryLicenseEvidence(
+    entries: readonly TreeEntry[],
+    immutableRef: string,
+    sourceUrl: string,
+    coordinates: GitHubCoordinates,
+  ): Promise<DiscoveredSkillRecord["repositoryLicenseEvidence"]> {
+    const candidates = entries.filter(
+      (entry) =>
+        !entry.path.includes("/") &&
+        /^(?:license|licence|copying)(?:\.[a-z0-9]+)?$/i.test(entry.path),
+    );
+    if (candidates.length !== 1) return null;
+    const [entry] = candidates;
+    if (
+      !entry ||
+      entry.type !== "blob" ||
+      entry.mode === "120000" ||
+      entry.size === undefined ||
+      entry.size > MAX_REPOSITORY_LICENSE_BYTES
+    ) {
+      return null;
+    }
+    try {
+      const path = entry.path.split("/").map(encodeURIComponent).join("/");
+      const response = await this.githubFetch(
+        `/repos/${coordinates.owner}/${coordinates.repository}/contents/${path}?ref=${encodeURIComponent(immutableRef)}`,
+        "application/vnd.github.raw+json",
+      );
+      if (!response.ok) {
+        cancelBestEffort(response.body, "SkillMD GitHub license response discarded");
+        return null;
+      }
+      const bytes = await readBoundedResponse(response, MAX_REPOSITORY_LICENSE_BYTES);
+      if (
+        bytes.byteLength !== entry.size ||
+        !/^[a-f0-9]{40}$/i.test(entry.sha) ||
+        gitBlobSha(bytes) !== entry.sha.toLowerCase()
+      ) {
+        return null;
+      }
+      const contents = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+      return {
+        path: entry.path,
+        contents,
+        sha256: createHash("sha256").update(bytes).digest("hex"),
+        sourceUrl,
+        immutableRef,
+      };
+    } catch {
+      return null;
+    }
   }
 
   private async githubJson(path: string): Promise<unknown> {
-    const response = await this.fetchImplementation(`https://api.github.com${path}`, {
-      headers: {
-        accept: "application/vnd.github+json",
-        "x-github-api-version": "2022-11-28",
-        ...(this.githubToken ? { authorization: `Bearer ${this.githubToken}` } : {}),
-      },
-      redirect: "manual",
-      signal: requestTimeout(),
-    });
+    const response = await this.githubFetch(path, "application/vnd.github+json");
     if (!response.ok) {
       cancelBestEffort(response.body, "SkillMD GitHub metadata response discarded");
       throw new Error(`GitHub public source request returned HTTP ${response.status}`);
     }
     const bytes = await readBoundedResponse(response, 4_194_304);
     return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+  }
+
+  private async githubFetch(path: string, accept: string): Promise<Response> {
+    return this.fetchImplementation(`https://api.github.com${path}`, {
+      headers: {
+        accept,
+        "x-github-api-version": "2022-11-28",
+        ...(this.githubToken ? { authorization: `Bearer ${this.githubToken}` } : {}),
+      },
+      redirect: "manual",
+      signal: requestTimeout(),
+    });
   }
 }
